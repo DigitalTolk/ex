@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"image"
@@ -101,6 +102,9 @@ type UnfurlService struct {
 	client     *http.Client
 	imgStore   UnfurlImageStore
 	mediaCache MediaURLCache
+	// youTubeOEmbed is the oEmbed endpoint YouTube video links are read
+	// through (youTubeOEmbedEndpoint; tests point it at a local server).
+	youTubeOEmbed string
 	// skipURLValidation, when true, bypasses validateURL for the image
 	// proxy path. Production wiring (NewUnfurlService) leaves this false
 	// so the SSRF guard runs on every upstream image URL; tests that
@@ -111,20 +115,31 @@ type UnfurlService struct {
 }
 
 const (
-	unfurlCacheTTL    = 7 * 24 * time.Hour
-	unfurlBodyMax     = 256 * 1024
-	unfurlTimeout     = 5 * time.Second
-	unfurlMaxRedirect = 3
+	// unfurlCacheKeyPrefix keys a URL's cached preview. v2: YouTube videos
+	// are read through oEmbed; a v1 entry may hold what the watch page gave.
+	unfurlCacheKeyPrefix = "unfurl:v2:"
+	unfurlCacheTTL       = 7 * 24 * time.Hour
+	unfurlBodyMax        = 256 * 1024
+	unfurlTimeout        = 5 * time.Second
+	unfurlMaxRedirect    = 3
 	// unfurlUserAgent names the fetcher to the sites it reads, in the usual
 	// crawler form (name/version, then a URL to learn about it), so a site's
-	// operator can see what is asking and where it comes from.
-	unfurlUserAgent = "ex-chat/1 (+https://github.com/DigitalTolk/ex)"
+	// operator can see what is asking and where it comes from. The name says
+	// bot, as link-preview fetchers do (Mattermost-Bot, Slackbot): some sites
+	// (Instagram) give a fetcher that doesn't a sign-in page, not the post.
+	unfurlUserAgent = "ex-bot/1 (+https://github.com/DigitalTolk/ex)"
 	// unfurlImageMax caps the size of an upstream preview image. 2 MiB
 	// is comfortably above any legitimate OG image (typical: 50–500 KiB)
 	// and well below anything that would burn S3 storage cost.
 	unfurlImageMax     = 2 * 1024 * 1024
 	unfurlImagePrefix  = "unfurl/"
 	unfurlImageExpires = 7 * 24 * time.Hour
+	// youTubeOEmbedEndpoint is YouTube's own way to describe a video to
+	// another site (oEmbed): its title, channel and thumbnail, as JSON. The
+	// watch page is not read for these.
+	youTubeOEmbedEndpoint = "https://www.youtube.com/oembed"
+	// oEmbedBodyMax caps an oEmbed answer, a few hundred bytes of JSON.
+	oEmbedBodyMax = 64 * 1024
 )
 
 // NewUnfurlService builds an UnfurlService backed by the supplied cache.
@@ -138,6 +153,7 @@ func NewUnfurlService(cache UnfurlCache) *UnfurlService {
 			MaxRedirects:      unfurlMaxRedirect,
 			DisableKeepAlives: true,
 		}),
+		youTubeOEmbed: youTubeOEmbedEndpoint,
 	}
 }
 
@@ -179,7 +195,7 @@ func (s *UnfurlService) Unfurl(ctx context.Context, rawURL string) (*UnfurlPrevi
 // httptest server (which binds to 127.0.0.1) through it without the
 // SSRF guard that legitimately blocks loopback in production.
 func (s *UnfurlService) fetchAndScrape(ctx context.Context, urlStr string) (*UnfurlPreview, error) {
-	cacheKey := "unfurl:" + urlStr
+	cacheKey := unfurlCacheKeyPrefix + urlStr
 	if s.cache != nil {
 		var cached UnfurlPreview
 		if err := s.cache.Get(ctx, cacheKey, &cached); err == nil && cached.URL != "" {
@@ -202,6 +218,25 @@ func (s *UnfurlService) fetchAndScrape(ctx context.Context, urlStr string) (*Unf
 		}
 	}
 
+	preview := s.youTubePreview(ctx, urlStr)
+	if preview == nil {
+		var err error
+		if preview, err = s.scrapePage(ctx, urlStr); err != nil {
+			return nil, err
+		}
+	}
+	// Proxy the preview image through S3 (folder `unfurl/`) when an
+	// image store is configured. Failures clear preview.Image so the
+	// frontend renders a placeholder rather than chasing a dead URL.
+	s.proxyImage(ctx, preview)
+	if s.cache != nil {
+		_ = s.cache.Set(ctx, cacheKey, preview, unfurlCacheTTL)
+	}
+	return preview, nil
+}
+
+// scrapePage fetches urlStr and reads its preview from the page's metadata.
+func (s *UnfurlService) scrapePage(ctx context.Context, urlStr string) (*UnfurlPreview, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlStr, nil)
 	if err != nil {
 		return nil, fmt.Errorf("unfurl: build request: %w", err)
@@ -228,16 +263,81 @@ func (s *UnfurlService) fetchAndScrape(ctx context.Context, urlStr string) (*Unf
 	if err != nil {
 		return nil, fmt.Errorf("unfurl: read body: %w", err)
 	}
+	return scrapePreview(string(body), urlStr), nil
+}
 
-	preview := scrapePreview(string(body), urlStr)
-	// Proxy the preview image through S3 (folder `unfurl/`) when an
-	// image store is configured. Failures clear preview.Image so the
-	// frontend renders a placeholder rather than chasing a dead URL.
-	s.proxyImage(ctx, preview)
-	if s.cache != nil {
-		_ = s.cache.Set(ctx, cacheKey, preview, unfurlCacheTTL)
+// youTubePreview describes a YouTube video from YouTube's oEmbed answer:
+// its title, the channel as the description, and its thumbnail. It returns
+// nil when urlStr is no video link or no usable answer comes, and the page
+// is then read like any other.
+func (s *UnfurlService) youTubePreview(ctx context.Context, urlStr string) *UnfurlPreview {
+	target := youTubeOEmbedTarget(urlStr)
+	if target == "" {
+		return nil
 	}
-	return preview, nil
+	endpoint := s.youTubeOEmbed + "?" + url.Values{"url": {target}, "format": {"json"}}.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil
+	}
+	req.Header.Set("User-Agent", unfurlUserAgent)
+	req.Header.Set("Accept", "application/json")
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+	var answer struct {
+		Title        string `json:"title"`
+		AuthorName   string `json:"author_name"`
+		ProviderName string `json:"provider_name"`
+		ThumbnailURL string `json:"thumbnail_url"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, oEmbedBodyMax)).Decode(&answer); err != nil || answer.Title == "" {
+		return nil
+	}
+	return &UnfurlPreview{
+		URL:         urlStr,
+		Title:       answer.Title,
+		Description: answer.AuthorName,
+		Image:       answer.ThumbnailURL,
+		SiteName:    answer.ProviderName,
+	}
+}
+
+// youTubeOEmbedTarget returns the link to ask YouTube's oEmbed about for
+// raw, or "" when raw is no YouTube video or playlist: a watch page, a short,
+// a live stream, an embed, a playlist, or a youtu.be link (the links
+// Mattermost reads through the same endpoint). oEmbed answers an embed or
+// /v/ link with 404, so those are asked about as the video's watch page.
+func youTubeOEmbedTarget(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	host := strings.ToLower(u.Hostname())
+	if host == "youtu.be" {
+		if len(u.Path) > 1 {
+			return raw
+		}
+		return ""
+	}
+	if host != "youtube.com" && !strings.HasSuffix(host, ".youtube.com") {
+		return ""
+	}
+	if u.Path == "/watch" || (u.Path == "/playlist" && u.Query().Get("list") != "") ||
+		strings.HasPrefix(u.Path, "/shorts/") || strings.HasPrefix(u.Path, "/live/") {
+		return raw
+	}
+	for _, prefix := range []string{"/embed/", "/v/"} {
+		if id, ok := strings.CutPrefix(u.Path, prefix); ok && id != "" {
+			return "https://www.youtube.com/watch?v=" + url.QueryEscape(id)
+		}
+	}
+	return ""
 }
 
 // proxyImage rewrites preview.Image to a presigned URL on an S3 object

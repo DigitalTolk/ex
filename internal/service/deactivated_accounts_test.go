@@ -138,6 +138,8 @@ func TestApplyStatusMovesTheAudience(t *testing.T) {
 
 func TestChannelService_ListMembersLeavesOutDeactivated(t *testing.T) {
 	svc, _, memberships, users, _, _ := setupChannelServiceWithUsers()
+	// Production answers this from the user service's shared roster.
+	svc.SetDeactivatedAccounts(NewUserService(users, newMockCache(), nil, nil))
 	ctx := context.Background()
 	users.users["u1"] = &model.User{ID: "u1", Status: "active"}
 	users.users["u-gone"] = &model.User{ID: "u-gone", Status: "deactivated"}

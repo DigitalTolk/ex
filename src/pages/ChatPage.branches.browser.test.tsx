@@ -18,7 +18,6 @@ vi.mock('@/components/layout/AppLayout', () => ({
   ),
 }));
 
-const mockMarkThreadNotificationUnread = vi.fn();
 const mockUnhideConversation = vi.fn();
 const {
   bumpChannelUnread: mockBumpChannelUnread,
@@ -47,9 +46,7 @@ const isActiveThreadMock = vi.fn(() => false);
 
 vi.mock('@/context/UnreadContext', () => ({
   useUnread: () => ({
-    unreadThreadNotifications: new Set(),
     hiddenConversations: new Set(),
-    markThreadNotificationUnread: mockMarkThreadNotificationUnread,
     hideConversation: vi.fn(),
     unhideConversation: mockUnhideConversation,
     setActiveChannel: vi.fn(),
@@ -197,7 +194,6 @@ describe('ChatPage WS router — divergent-mock branch arms (browser)', () => {
     mockUnhideConversation.mockClear();
     mockClearConversationUnreadInCache.mockClear();
     mockDispatchNotification.mockClear();
-    mockMarkThreadNotificationUnread.mockClear();
     mockMarkThreadSeen.mockClear();
     mockAppendReplyToThreadCache.mockClear();
     mockAppendReplyToThreadCache.mockReturnValue(false);

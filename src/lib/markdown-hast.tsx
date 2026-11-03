@@ -450,7 +450,8 @@ const HAST_COMPONENTS_MAP: Record<string, AnyComponent> = {
 
   'ex-bare-url': ((props: CustomTagProps) => {
     const href = props['data-href'] ?? '';
-    const visible = href.startsWith('https://') ? href.slice('https://'.length) : href;
+    // An email address shows as itself, a web address without its https://.
+    const visible = href.replace(/^(https:\/\/|mailto:)/, '');
     const custom = useRenderOpts()?.renderLink?.(href, visible);
     // Guard the scheme here too — same defense-in-depth as the `a` component
     // above. The server only emits this tag for matched http(s) bare URLs, but

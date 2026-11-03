@@ -1,13 +1,11 @@
 package handler
 
 import (
-	"context"
 	"net/http"
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/model"
-	"github.com/DigitalTolk/ex/internal/paginate"
 	"github.com/DigitalTolk/ex/internal/service"
 	"github.com/DigitalTolk/ex/internal/storage"
 	"github.com/DigitalTolk/ex/internal/store"
@@ -213,11 +211,11 @@ func (h *UserHandler) BatchGetUsers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, publicUserList(r, users))
 }
 
-// listAllMaxRounds caps the inner pagination loop served by
-// ListUsers's `?all=true` mode so a misbehaving backend (or a wildly
-// large workspace) can't pin the request indefinitely. 200 rounds *
-// 500 users = up to 100k users — well above any realistic team size,
-// short enough to fail fast if something is wrong.
+// listAllMaxRounds caps the inner pagination loop of a whole-list read
+// (the public channel directory) so a misbehaving backend (or a wildly
+// large workspace) can't pin the request indefinitely. 200 rounds * 500
+// rows = up to 100k — well above any realistic team size, short enough to
+// fail fast if something is wrong.
 const listAllMaxRounds = 200
 const listAllPageSize = 500
 
@@ -312,9 +310,7 @@ func (h *UserHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	users, err := paginate.All(r.Context(), func(ctx context.Context, cursor string) ([]*model.User, string, error) {
-		return h.userSvc.List(ctx, listAllPageSize, cursor)
-	}, listAllMaxRounds)
+	users, err := h.userSvc.ListAll(r.Context())
 	if err != nil {
 		writeServiceError(w, r, err)
 		return

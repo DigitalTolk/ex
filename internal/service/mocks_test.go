@@ -28,16 +28,19 @@ import (
 // --- Mock UserStore ---
 
 type mockUserStore struct {
-	users       map[string]*model.User
-	emailIndex  map[string]*model.User
-	createErr   error
-	hasUsersVal bool
-	hasUsersErr error
-	getUserErr  error
-	getEmailErr error
-	updateErr   error
-	listErr     error
-	notifErr    error
+	users     map[string]*model.User
+	listCalls int
+	// deactivatedReads records the IDs of every DeactivatedAmong read.
+	deactivatedReads [][]string
+	emailIndex       map[string]*model.User
+	createErr        error
+	hasUsersVal      bool
+	hasUsersErr      error
+	getUserErr       error
+	getEmailErr      error
+	updateErr        error
+	listErr          error
+	notifErr         error
 	// deactivatedErr fails DeactivatedAmong.
 	deactivatedErr error
 }
@@ -151,6 +154,7 @@ func applyUserPatchForTest(u *model.User, p store.UserPatch) error {
 }
 
 func (m *mockUserStore) ListUsers(_ context.Context, _ int, _ string) ([]*model.User, string, error) {
+	m.listCalls++
 	if m.listErr != nil {
 		return nil, "", m.listErr
 	}
@@ -188,6 +192,7 @@ func (m *mockUserStore) NotificationAccountsFor(_ context.Context, userIDs []str
 }
 
 func (m *mockUserStore) DeactivatedAmong(_ context.Context, userIDs []string) (map[string]bool, error) {
+	m.deactivatedReads = append(m.deactivatedReads, userIDs)
 	if m.deactivatedErr != nil {
 		return nil, m.deactivatedErr
 	}
@@ -1051,7 +1056,7 @@ type mockMessageStore struct {
 	listCalls      atomic.Int64 // ListMessages invocations (thread-index tests assert the fast path skips scans)
 	listHasMore    bool         // when true, ListMessages always reports more pages
 	threadReplyErr error        // when set, ListThreadReplies returns this error
-	noThreadIndex  bool         // when true, ListThreadReplies returns nothing (simulates an un-backfilled thread → scan fallback)
+	noThreadIndex  bool         // when true, ListThreadReplies returns nothing
 	// Read counters for the cost tests (atomic: the notify path reads from
 	// detached goroutines).
 	getMessageCalls  atomic.Int64
@@ -1166,6 +1171,29 @@ func (m *mockMessageStore) ListThreadReplies(_ context.Context, threadRootID str
 	// back map order.
 	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
 	return result, nil
+}
+
+// ListTopLevelMessages and ListTopLevelMessagesAfter mirror the top-level
+// index: the parent's messages that aren't thread replies, through the same
+// listing (so listErr, listAfterErr and listHasMore apply).
+func (m *mockMessageStore) ListTopLevelMessages(ctx context.Context, parentID, before string, limit int) ([]*model.Message, bool, error) {
+	msgs, hasMore, err := m.ListMessages(ctx, parentID, before, limit)
+	return topLevelOnly(msgs), hasMore, err
+}
+
+func (m *mockMessageStore) ListTopLevelMessagesAfter(ctx context.Context, parentID, after string, limit int) ([]*model.Message, bool, error) {
+	msgs, hasMore, err := m.ListMessagesAfter(ctx, parentID, after, limit)
+	return topLevelOnly(msgs), hasMore, err
+}
+
+func topLevelOnly(msgs []*model.Message) []*model.Message {
+	out := make([]*model.Message, 0, len(msgs))
+	for _, msg := range msgs {
+		if msg.ParentMessageID == "" {
+			out = append(out, msg)
+		}
+	}
+	return out
 }
 
 func (m *mockMessageStore) ListMessagesAfter(ctx context.Context, parentID, _ string, limit int) ([]*model.Message, bool, error) {

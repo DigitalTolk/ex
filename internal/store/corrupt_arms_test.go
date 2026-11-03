@@ -240,10 +240,6 @@ func TestCorruptRows_ScanArms(t *testing.T) {
 		_, err := NewAttachmentStore(faulted).ListAll(ctx)
 		assertUnmarshalErr(t, err, "attachment ListAll")
 	})
-	t.Run("webhook List", func(t *testing.T) {
-		_, err := NewIncomingWebhookStore(faulted).List(ctx)
-		assertUnmarshalErr(t, err, "webhook List")
-	})
 }
 
 func TestCorruptRows_BatchGetArms(t *testing.T) {

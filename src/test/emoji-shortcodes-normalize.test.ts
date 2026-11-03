@@ -3,6 +3,7 @@ import {
   COMMON_EMOJI_SHORTCODES,
   EMOJI_SKIN_TONES,
   applyEmojiSkinTone,
+  emoticonEmoji,
   normalizeEmojiInBody,
   shortcodeToUnicode,
   shortcodeWithSkinTone,
@@ -177,5 +178,13 @@ describe('normalizeEmojiInBody', () => {
     expect(normalizeEmojiInBody('path/to/file')).toBe('path/to/file');
     expect(normalizeEmojiInBody('abc:)')).toBe('abc:)');
     expect(normalizeEmojiInBody('indexD')).toBe('indexD');
+  });
+});
+
+describe('emoticonEmoji', () => {
+  it('gives the standard emoji an emoticon stands for, and nothing for other text', () => {
+    expect(emoticonEmoji(':P')).toBe('😛');
+    expect(emoticonEmoji('<3')).toBe('❤️');
+    expect(emoticonEmoji(':Po')).toBeUndefined();
   });
 });

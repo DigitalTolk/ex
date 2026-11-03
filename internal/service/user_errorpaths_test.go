@@ -95,7 +95,7 @@ func TestUser_Search_ListError(t *testing.T) {
 func TestUser_ClearExpiredStatuses_ListError(t *testing.T) {
 	svc, users := newUserSvc()
 	users.listErr = errors.New("boom")
-	if _, err := svc.ClearExpiredStatuses(context.Background(), time.Now(), 10); err == nil {
+	if _, err := svc.ClearExpiredStatuses(context.Background(), time.Now()); err == nil {
 		t.Fatal("expected clear-expired list error")
 	}
 }
@@ -194,7 +194,7 @@ func TestUser_ClearExpiredStatuses_Paginates(t *testing.T) {
 		},
 	}
 	svc := NewUserService(store, newMockCache(), nil, nil)
-	if _, err := svc.ClearExpiredStatuses(context.Background(), time.Now(), 10); err != nil {
+	if _, err := svc.ClearExpiredStatuses(context.Background(), time.Now()); err != nil {
 		t.Fatalf("ClearExpiredStatuses: %v", err)
 	}
 	if store.call != 2 {

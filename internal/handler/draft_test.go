@@ -189,6 +189,12 @@ func (handlerMessageStore) ListThreadRepliesNewest(context.Context, string, int)
 func (handlerMessageStore) ListThreadReplies(context.Context, string) ([]*model.Message, error) {
 	return nil, nil
 }
+func (handlerMessageStore) ListTopLevelMessages(context.Context, string, string, int) ([]*model.Message, bool, error) {
+	return nil, false, nil
+}
+func (handlerMessageStore) ListTopLevelMessagesAfter(context.Context, string, string, int) ([]*model.Message, bool, error) {
+	return nil, false, nil
+}
 func (handlerMessageStore) ListMessagesAfter(context.Context, string, string, int) ([]*model.Message, bool, error) {
 	return nil, false, nil
 }

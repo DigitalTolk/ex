@@ -330,7 +330,7 @@ func (c *RedisTurnCoordinator) wakeOwner(ctx context.Context, ownerID string) {
 
 func (c *RedisTurnCoordinator) typingTurn(ctx context.Context, runID string) bool {
 	n, err := redisx.RunScript(ctx, c.rdb, typingTurnScript, []string{turnTypingKey(runID)},
-		c.instance, (2 * typingTickInterval).Milliseconds()).Int()
+		c.instance, (time.Duration(typingLeaseTicks) * typingTickInterval).Milliseconds()).Int()
 	if err != nil {
 		return true // a duplicate typing frame beats a missing one
 	}

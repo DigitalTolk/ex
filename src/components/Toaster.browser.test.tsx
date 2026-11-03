@@ -44,8 +44,14 @@ async function show(onActivate = vi.fn()) {
   const screen = await render(<Toaster />);
   showToast('Can you look at this?', 'success', { title: 'Alice in ~general', kind: 'notification', group: 'ch-1:', onActivate });
   await expect.poll(() => banner()).not.toBeNull();
+  // A banner keeps its own time, and on a loaded machine dropping in can take
+  // most of it. A finger on it stops that clock and lifting starts the full
+  // time again, so each test has all of it, however long this took.
+  const id = pointerId++;
+  banner()!.dispatchEvent(pointer('pointerdown', 0, 0, id));
   // Where it rests, once it has dropped in.
   await expect.poll(() => slot().dataset.mounted === 'true' && slot().getAnimations().length === 0).toBe(true);
+  window.dispatchEvent(pointer('pointerup', 0, 0, id));
   return { screen, onActivate };
 }
 

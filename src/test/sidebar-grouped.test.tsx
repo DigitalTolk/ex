@@ -29,7 +29,6 @@ const mockCategories: SidebarCategory[] = [
 
 const mockConversations: UserConversation[] = [];
 let mockUserState: { threadNotifications?: string[]; threadSeen?: Record<string, string>; hiddenConversations?: string[] } = {};
-let mockUnreadThreadNotifications = new Set<string>();
 
 const createCategoryMutate = vi.fn();
 const deleteCategoryMutate = vi.fn();
@@ -52,7 +51,6 @@ vi.mock('@/context/UnreadContext', () => ({
     unreadChannels: new Set(),
     unreadChannelNotifications: new Set(),
     unreadConversations: new Set(),
-    unreadThreadNotifications: mockUnreadThreadNotifications,
     hiddenConversations: new Set(),
     channelUnreadCounts: new Map(),
     conversationUnreadCounts: new Map(),
@@ -170,7 +168,6 @@ describe('Sidebar grouped rendering', () => {
     createCategoryMutate.mockReset();
     deleteCategoryMutate.mockReset();
     mockUserState = {};
-    mockUnreadThreadNotifications = new Set();
     localStorage.clear();
     resetSeenCache();
   });

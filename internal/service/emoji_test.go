@@ -20,6 +20,7 @@ type mockEmojiStore struct {
 	getErr    error
 	listErr   error
 	deleteErr error
+	listCalls int
 }
 
 func newMockEmojiStore() *mockEmojiStore {
@@ -46,6 +47,7 @@ func (m *mockEmojiStore) GetByName(_ context.Context, name string) (*model.Custo
 	return e, nil
 }
 func (m *mockEmojiStore) List(_ context.Context) ([]*model.CustomEmoji, error) {
+	m.listCalls++
 	if m.listErr != nil {
 		return nil, m.listErr
 	}

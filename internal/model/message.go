@@ -13,10 +13,16 @@ type Message struct {
 	// admin reindex) — for machine-posted ephemera like /mstmeetings join
 	// links, where a stale meeting URL surfacing in search is noise. Internal
 	// only, never serialized to clients.
-	NoIndex         bool       `json:"-" dynamodbav:"noIndex,omitempty"`
-	ParentMessageID string     `json:"parentMessageID,omitempty" dynamodbav:"parentMessageID,omitempty"` // root message of the thread
-	ReplyCount      int        `json:"replyCount,omitempty" dynamodbav:"replyCount,omitempty"`           // count of replies (only set on root messages)
-	LastReplyAt     *time.Time `json:"lastReplyAt,omitempty" dynamodbav:"lastReplyAt,omitempty"`         // timestamp of the latest reply (only set on root messages)
+	NoIndex         bool   `json:"-" dynamodbav:"noIndex,omitempty"`
+	ParentMessageID string `json:"parentMessageID,omitempty" dynamodbav:"parentMessageID,omitempty"` // root message of the thread
+	// ParticipantsIndexed marks a thread root older than the write-time
+	// participation index whose participants all have follow rows (written by
+	// the thread-participants migration or the history importer). Its replies
+	// then find their audience in the follow rows, like a newer thread's.
+	// Internal only, never serialized to clients.
+	ParticipantsIndexed bool       `json:"-" dynamodbav:"participantsIndexed,omitempty"`
+	ReplyCount          int        `json:"replyCount,omitempty" dynamodbav:"replyCount,omitempty"`   // count of replies (only set on root messages)
+	LastReplyAt         *time.Time `json:"lastReplyAt,omitempty" dynamodbav:"lastReplyAt,omitempty"` // timestamp of the latest reply (only set on root messages)
 	// RecentReplyAuthorIDs holds up to 3 most-recent distinct author IDs
 	// for the thread, newest first. Used by the client to render an
 	// avatar stack on the thread-action bar without re-fetching the full

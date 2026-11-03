@@ -3,9 +3,11 @@ package app
 import (
 	"context"
 
+	"github.com/DigitalTolk/ex/internal/cache"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/paginate"
 	"github.com/DigitalTolk/ex/internal/search"
+	"github.com/DigitalTolk/ex/internal/service"
 )
 
 // attachmentGetter is the attachment store read the search indexer needs.
@@ -145,4 +147,30 @@ func hitIDs(hits []search.SearchHit) []string {
 		out[i] = h.ID
 	}
 	return out
+}
+
+// channelGenerations reads one channel's audience generation for the durable
+// inbox's recipient cache.
+type channelGenerations struct{ gens service.AudienceGenerations }
+
+func (g channelGenerations) ChannelGeneration(ctx context.Context, channelID string) (string, error) {
+	gens, err := g.gens.Generations(ctx, []string{cache.ChannelAudienceKey(channelID)})
+	if err != nil {
+		return "", err
+	}
+	return gens[0], nil
+}
+
+// cachedUserReader serves the agent orchestrator's user reads from the user
+// service's Redis cache: it resolves the author and every @-mention of every
+// message, which read user rows from DynamoDB each time. Profile writes drop
+// the cached entries (a deactivated invoker shows at once).
+type cachedUserReader struct{ users *service.UserService }
+
+func (r cachedUserReader) GetUser(ctx context.Context, id string) (*model.User, error) {
+	return r.users.GetByID(ctx, id)
+}
+
+func (r cachedUserReader) GetUsersByIDs(ctx context.Context, ids []string) ([]*model.User, error) {
+	return r.users.GetBatch(ctx, ids)
 }

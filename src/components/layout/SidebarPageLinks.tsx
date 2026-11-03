@@ -1,10 +1,8 @@
 import { Link, NavLink, useLocation } from 'react-router-dom';
 import { BookUser, Bot, FilePenLine, MessagesSquare } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
-import { useUnread } from '@/context/UnreadContext';
 import { useDrafts } from '@/hooks/useDrafts';
 import { useIsMobile } from '@/hooks/useIsMobile';
-import { unreadThreadIDs } from '@/hooks/useThreads';
 import { useUserState } from '@/hooks/useUserState';
 import { AI_HUB_HOME, isAiHubPath } from '@/lib/ai-hub';
 
@@ -20,12 +18,12 @@ function pageLinkClass(active: boolean): string {
 
 // Thread replies live in Threads (bold when any thread you follow has unread
 // replies) and in Activity; a channel or DM row never marks itself for them,
-// the way Slack keeps threads out of the channel list. One lookup: the unread
-// markers in the user state, which this keeps loaded.
+// the way Slack keeps threads out of the channel list. One lookup: the
+// server's unread markers in the user state, which this keeps loaded (see
+// useUnreadThreadIDs).
 function useHasThreadUpdates(): boolean {
-  const { unreadThreadNotifications } = useUnread();
   const { data: userState } = useUserState();
-  return unreadThreadIDs(userState?.threadNotifications, unreadThreadNotifications).size > 0;
+  return (userState?.threadNotifications?.length ?? 0) > 0;
 }
 
 // The sidebar's top-level pages, above the channel/DM list. Activity has its

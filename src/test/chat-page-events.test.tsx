@@ -43,7 +43,6 @@ vi.mock('@/context/AuthContext', () => ({
   }),
 }));
 
-const markThreadNotificationUnread = vi.fn();
 const isActiveChannel = vi.fn(() => false);
 const isActiveConversation = vi.fn(() => false);
 const isActiveThread = vi.fn(() => false);
@@ -69,9 +68,7 @@ vi.mock('@/lib/unread-cache', async (importOriginal) => ({
 
 vi.mock('@/context/UnreadContext', () => ({
   useUnread: () => ({
-    markThreadNotificationUnread,
     unhideConversation,
-    unreadThreadNotifications: new Set(),
     hiddenConversations: new Set(),
     hideConversation: vi.fn(),
     setActiveChannel: vi.fn(),
@@ -150,6 +147,15 @@ function CurrentLocation() {
   return <div data-testid="loc">{location.pathname}</div>;
 }
 
+// A thread reply's alert leaves the thread's unread state to the server: the
+// marker is written before the alert is sent, and the alert reloads the user
+// state that carries it. This reports whether it did.
+function watchUserStateReload(qc: QueryClient): () => boolean {
+  const spy = vi.spyOn(qc, 'invalidateQueries');
+  return () =>
+    spy.mock.calls.some(([filters]) => JSON.stringify(filters?.queryKey) === JSON.stringify(queryKeys.userState()));
+}
+
 function renderAt(path: string, qcSeed?: (qc: QueryClient) => void) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   qcSeed?.(qc);
@@ -195,7 +201,6 @@ describe('ChatPage WebSocket handlers', () => {
     bumpConversationUnread.mockReset();
     clearChannelUnreadInCache.mockReset();
     clearConversationUnreadInCache.mockReset();
-    markThreadNotificationUnread.mockReset();
     isActiveChannel.mockReset();
     isActiveChannel.mockReturnValue(false);
     isActiveConversation.mockReset();
@@ -324,14 +329,15 @@ describe('ChatPage WebSocket handlers', () => {
     expect(seen).toHaveBeenCalled();
   });
 
-  it('onNotification for the ACTIVE thread while NOT attentive marks it unread instead of seen', () => {
+  it('onNotification for the ACTIVE thread while NOT attentive leaves it unread instead of reading it', () => {
     isActiveThread.mockReturnValue(true);
     forceAwayUntilInput();
-    renderAt('/');
+    const { qc } = renderAt('/');
+    const reloaded = watchUserStateReload(qc);
     act(() => (capturedOptions.onNotification as (d: unknown) => void)({
       kind: 'thread_reply', parentID: 'ch-1', parentType: 'channel', parentMessageID: 'msg-root', createdAt: '2026-05-01T10:00:01Z',
     }));
-    expect(markThreadNotificationUnread).toHaveBeenCalledWith('msg-root');
+    expect(reloaded()).toBe(true);
     expect(apiFetch).not.toHaveBeenCalledWith('/api/v1/user-state/threads/channels/ch-1/msg-root/seen', { method: 'PUT' });
   });
 
@@ -610,13 +616,17 @@ describe('ChatPage WebSocket handlers', () => {
     });
 
     const calls = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
-    expect(markThreadNotificationUnread).toHaveBeenCalledWith('msg-root');
     expect(calls).toContainEqual(['userState']);
     expect(dispatchNotification).toHaveBeenCalled();
   });
 
-  it('onNotification for the active thread does not mark the thread unread', async () => {
-    renderAt('/channel/general?thread=msg-root');
+  // Reading it is this tab's own write: a user-state reload alongside could
+  // be answered before the server applied the read, and bring the marker
+  // back — with the server's change echo ignored as this tab's own, the
+  // Threads entry then stayed bold over a thread already read.
+  it('onNotification for the active thread reads it, without reloading the user state', async () => {
+    const { qc } = renderAt('/channel/general?thread=msg-root');
+    const reloaded = watchUserStateReload(qc);
 
     await act(async () => {
       (capturedOptions.onNotification as (d: unknown) => void)({
@@ -631,8 +641,8 @@ describe('ChatPage WebSocket handlers', () => {
       await Promise.resolve();
     });
 
-    expect(markThreadNotificationUnread).not.toHaveBeenCalled();
     expect(apiFetch).toHaveBeenCalledWith('/api/v1/user-state/threads/channels/ch-1/msg-root/seen', { method: 'PUT' });
+    expect(reloaded()).toBe(false);
     expect(dispatchNotification).toHaveBeenCalled();
   });
 
@@ -657,7 +667,6 @@ describe('ChatPage WebSocket handlers', () => {
       await Promise.resolve();
     });
 
-    expect(markThreadNotificationUnread).not.toHaveBeenCalled();
     expect(apiFetch).toHaveBeenCalledWith('/api/v1/user-state/threads/channels/ch-1/msg-root/seen', { method: 'PUT' });
   });
 
@@ -1321,7 +1330,8 @@ describe('ChatPage WebSocket handlers', () => {
   });
 
   it('onNotification counts thread replies separately from their DM parent', () => {
-    renderAt('/');
+    const { qc } = renderAt('/');
+    const reloaded = watchUserStateReload(qc);
 
     (capturedOptions.onNotification as (d: unknown) => void)({
       kind: 'thread_reply',
@@ -1334,12 +1344,14 @@ describe('ChatPage WebSocket handlers', () => {
       createdAt: new Date().toISOString(),
     });
 
-    expect(markThreadNotificationUnread).toHaveBeenCalledWith('root-1');
+    expect(reloaded()).toBe(true);
+    expect(bumpConversationUnread).not.toHaveBeenCalled();
     expect(dispatchNotification).toHaveBeenCalledTimes(1);
   });
 
   it('onNotification counts channel thread mentions as thread unread only', () => {
-    renderAt('/');
+    const { qc } = renderAt('/');
+    const reloaded = watchUserStateReload(qc);
 
     (capturedOptions.onNotification as (d: unknown) => void)({
       kind: 'mention',
@@ -1352,7 +1364,7 @@ describe('ChatPage WebSocket handlers', () => {
       createdAt: new Date().toISOString(),
     });
 
-    expect(markThreadNotificationUnread).toHaveBeenCalledWith('root-1');
+    expect(reloaded()).toBe(true);
     expect(bumpChannelUnread).not.toHaveBeenCalled();
   });
 
@@ -1594,23 +1606,26 @@ describe('ChatPage WebSocket handlers', () => {
 
       it('a reply alert while scrolled up keeps it unread', () => {
         setAtBottom(threadReadKey('msg-root'), false);
-        renderAt('/', seedSeen);
+        const { qc } = renderAt('/', seedSeen);
+        const reloaded = watchUserStateReload(qc);
         act(() => (capturedOptions.onNotification as (d: unknown) => void)({
           kind: 'thread_reply', parentID: 'ch-1', parentType: 'channel', parentMessageID: 'msg-root', createdAt: '2026-05-01T10:00:01Z',
         }));
-        expect(markThreadNotificationUnread).toHaveBeenCalledWith('msg-root');
+        expect(reloaded()).toBe(true);
         expect(apiFetch).not.toHaveBeenCalledWith(...seenPut);
       });
     });
 
     it('a reply alert for a thread held unread keeps it unread', () => {
       isActiveThread.mockReturnValue(true);
-      renderAt('/', seed(0));
+      const { qc } = renderAt('/', seed(0));
+      const reloaded = watchUserStateReload(qc);
       holdRead(threadReadKey('msg-root'));
       act(() => (capturedOptions.onNotification as (d: unknown) => void)({
         kind: 'thread_reply', parentID: 'ch-1', parentType: 'channel', parentMessageID: 'msg-root', createdAt: '2026-05-01T10:00:01Z',
       }));
-      expect(markThreadNotificationUnread).toHaveBeenCalledWith('msg-root');
+      expect(reloaded()).toBe(true);
+      expect(apiFetch).not.toHaveBeenCalledWith('/api/v1/user-state/threads/channels/ch-1/msg-root/seen', { method: 'PUT' });
     });
 
     it('marked unread on another device: the row is refetched, not cleared', () => {

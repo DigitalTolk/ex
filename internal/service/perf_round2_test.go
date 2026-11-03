@@ -733,7 +733,7 @@ func TestClearExpiredStatuses_ConditionalClearPath(t *testing.T) {
 	t.Run("cleared: one conditional write, no read, no full update", func(t *testing.T) {
 		users := seed()
 		svc := NewUserService(users, newMockCache(), nil, newMockPublisher())
-		cleared, err := svc.ClearExpiredStatuses(ctx, time.Now(), 100)
+		cleared, err := svc.ClearExpiredStatuses(ctx, time.Now())
 		if err != nil || cleared != 1 {
 			t.Fatalf("cleared = %d (err=%v), want 1", cleared, err)
 		}
@@ -747,7 +747,7 @@ func TestClearExpiredStatuses_ConditionalClearPath(t *testing.T) {
 		users.clearResult = false
 		pub := newMockPublisher()
 		svc := NewUserService(users, nil, nil, pub)
-		cleared, err := svc.ClearExpiredStatuses(ctx, time.Now(), 100)
+		cleared, err := svc.ClearExpiredStatuses(ctx, time.Now())
 		if err != nil || cleared != 0 {
 			t.Fatalf("cleared = %d (err=%v), want 0", cleared, err)
 		}
@@ -760,7 +760,7 @@ func TestClearExpiredStatuses_ConditionalClearPath(t *testing.T) {
 		users := seed()
 		users.clearErr = errors.New("dynamo down")
 		svc := NewUserService(users, nil, nil, nil)
-		if _, err := svc.ClearExpiredStatuses(ctx, time.Now(), 100); err == nil {
+		if _, err := svc.ClearExpiredStatuses(ctx, time.Now()); err == nil {
 			t.Fatal("expected conditional clear failure to surface")
 		}
 	})

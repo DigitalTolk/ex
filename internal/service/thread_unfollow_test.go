@@ -182,7 +182,6 @@ func TestActivityFor_UnfollowedDMThread(t *testing.T) {
 func TestListThreadsPage_SaysWhichThreadsAreFollowed(t *testing.T) {
 	svc, messages, memberships, conversations, follows := threadIndexService()
 	ctx := context.Background()
-	follows.seeded = true
 	seedMembership(memberships, "ch-1", "u-1")
 	conversations.conversations["dm-1"] = &model.Conversation{ID: "dm-1", Type: model.ConversationTypeDM, ParticipantIDs: []string{"u-1", "u-2"}}
 	conversations.userConvs["u-1"] = []*model.UserConversation{{UserID: "u-1", ConversationID: "dm-1"}}
@@ -235,33 +234,6 @@ func TestListThreadsPage_SaysWhichThreadsAreFollowed(t *testing.T) {
 		if following[root] != f {
 			t.Errorf("%s following = %v, want %v", root, following[root], f)
 		}
-	}
-
-	// The legacy scan (before the index is seeded) agrees, and seeds only the
-	// threads followed: an alert alone never becomes a standing follow.
-	follows.seeded = false
-	parents := []threadParent{{id: "ch-1", typ: ParentChannel}, {id: "dm-1", typ: ParentConversation}}
-	overrides := map[string]bool{"ch-1#followed": true, "dm-1#dm-out": false}
-	pulled := map[string]bool{"ch-1#pulled": true, "dm-1#dm": true, "dm-1#dm-out": true}
-	scanned, complete := svc.scanUserThreads(ctx, "u-1", parents, overrides, pulled)
-	if !complete {
-		t.Fatal("scan incomplete")
-	}
-	for _, s := range scanned {
-		if s.Following != want[s.ThreadRootID] {
-			t.Errorf("legacy %s following = %v, want %v", s.ThreadRootID, s.Following, want[s.ThreadRootID])
-		}
-	}
-	seeds := seedFinished(svc)
-	if _, err := svc.ListThreadsPage(ctx, "u-1", "", 0); err != nil {
-		t.Fatal(err)
-	}
-	waitThreadSeed(t, seeds)
-	if f, ok := follows.follows[threadFollowMockKey("u-1", "ch-1", "pulled")]; ok {
-		t.Errorf("seeded a follow for a thread an alert pulled in: %+v", f)
-	}
-	if f := follows.follows[threadFollowMockKey("u-1", "dm-1", "dm")]; f == nil || !f.Following {
-		t.Error("the followed DM thread was not seeded")
 	}
 }
 

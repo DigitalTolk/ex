@@ -21,7 +21,7 @@ func threadListService(t *testing.T) (*MessageService, *batchMockMessageStore, *
 	publisher := newMockPublisher()
 	svc := NewMessageService(messages, memberships, conversations, publisher, newMockBroker())
 	svc.SetParentIndex(newMockParentIndex())
-	follows := &indexedThreadFollowStore{mockThreadFollowStore: newMockThreadFollowStore(), seeded: true}
+	follows := &indexedThreadFollowStore{mockThreadFollowStore: newMockThreadFollowStore()}
 	svc.SetThreadFollowStore(follows)
 	state := newMockUserStateStore()
 	svc.SetUserStateStore(state)
@@ -72,6 +72,11 @@ func TestListThreadsPage_UnreadThenFollowed(t *testing.T) {
 	}
 	addMarker(state, "u-1", "ch-1", ParentChannel, "unread-old", base.Add(time.Minute))
 	addMarker(state, "u-1", "ch-1", ParentChannel, "unread-new", base.Add(2*time.Minute))
+	// The rest of the user's state (seen threads, hidden conversations) lists
+	// nothing.
+	state.rows[state.key("u-1", model.UserStateThreadSeen, "read-old")] = &model.UserStateItem{
+		UserID: "u-1", Kind: model.UserStateThreadSeen, TargetID: "read-old", ParentID: "ch-1", ThreadRootID: "read-old", UpdatedAt: base,
+	}
 	for i, id := range []string{"unread-new", "read-old", "read-new"} {
 		at := base.Add(time.Duration(i+1) * time.Minute)
 		follows.follows[threadFollowMockKey("u-1", "ch-1", id)] = &model.ThreadFollow{UserID: "u-1", ParentID: "ch-1", ParentType: ParentChannel, ThreadRootID: id, Following: true, LastActivityAt: &at}

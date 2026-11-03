@@ -80,6 +80,7 @@ func (a *App) buildChat(ctx context.Context) error {
 
 	// ------------------------------------------------------------- Channels + conversations
 	c.channels = service.NewChannelService(in.channels, in.memberships, in.users, in.messages, in.cache, broker, in.pubsub)
+	c.channels.SetDeactivatedAccounts(c.users)
 	c.auth.SetChannelJoiner(c.channels)
 	c.conversations = service.NewConversationService(in.conversations, in.users, in.cache, broker, in.pubsub)
 	c.conversations.SetMediaURLCache(in.cache)
@@ -112,9 +113,7 @@ func (a *App) buildChat(ctx context.Context) error {
 	// the text the poster typed beside it (one cached batch read per render).
 	c.mentions = service.NewMentionDirectory(c.users, in.channels)
 	c.messages.SetMentionResolver(c.mentions)
-	// Post-index sign-ups skip the one-time /threads seed scan.
-	c.messages.SetThreadSeedUsers(in.users)
-	c.messages.SetDeactivatedAccounts(in.users)
+	c.messages.SetDeactivatedAccounts(c.users)
 
 	c.userState = service.NewUserStateService(in.userState, in.pubsub)
 
@@ -125,6 +124,7 @@ func (a *App) buildChat(ctx context.Context) error {
 	}
 	c.emoji.SetMediaURLCache(in.cache)
 	c.emoji.SetFrequencyStore(in.cache)
+	c.emoji.SetCatalogCache(in.cache)
 
 	// ------------------------------------------------------------- Presence
 	c.presence = service.NewPresenceService(in.cache, in.pubsub)
@@ -232,7 +232,7 @@ func (a *App) buildChat(ctx context.Context) error {
 	// Alert text — popups, pushes, Activity rows, reminders — names each
 	// mention by its ID's current name, as the rendered message does.
 	c.activity.SetMentionResolver(c.mentions)
-	c.activity.SetDeactivatedAccounts(in.users)
+	c.activity.SetDeactivatedAccounts(c.users)
 	c.reminders.SetMentionResolver(c.mentions)
 	// Scheduled messages: composed now, posted at their time through the
 	// normal send path (notifications included).

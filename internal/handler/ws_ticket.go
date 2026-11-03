@@ -76,7 +76,9 @@ func (h *WSHandler) MintTicket(w http.ResponseWriter, r *http.Request) {
 		writeServiceError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, JSON{"ticket": ticket})
+	// expiresIn is how long the socket this ticket opens will live (Connect
+	// adds the grace), so the client can renew it over the socket in time.
+	writeJSON(w, http.StatusOK, JSON{"ticket": ticket, "expiresIn": time.Until(deadline.Add(wsSessionGrace)).Milliseconds()})
 }
 
 // UpgradeAuth authenticates the WebSocket upgrade: the ?ticket= query is

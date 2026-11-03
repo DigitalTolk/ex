@@ -7,10 +7,14 @@ import {
   WidgetType,
 } from '@codemirror/view';
 import { type Range } from '@codemirror/state';
+import { syntaxTree } from '@codemirror/language';
+import type { SyntaxNode } from '@lezer/common';
 import {
   shortcodeToUnicode,
   applySkinToneSuffix,
+  emoticonEmoji,
   EMOJI_SHORTCODE_RE_GLOBAL,
+  EMOTICON_RE_GLOBAL,
 } from '@/lib/emoji-shortcodes';
 
 // Live-preview for `:shortcode:` emoji: the document keeps the raw shortcode
@@ -19,6 +23,11 @@ import {
 // token so it stays editable. Grammar matches the message renderer
 // (lib/markdown.tsx): an optional `::skin-tone-N` suffix on a `:name:`. Custom
 // emoji are resolved to their image via the injected name→URL lookup.
+//
+// An emoticon on its own (`:P`, `<3`) shows the same way, as its standard
+// emoji — never a custom one: as soon as the space after it is typed, and as
+// its text again when the caret comes back to it. These are the emoticons
+// sending turns into emoji (normalizeEmojiInBody), and like it, none in code.
 
 // name → image URL for custom (workspace) emoji.
 type CustomEmojiResolver = (name: string) => string | undefined;
@@ -78,6 +87,15 @@ function caretInside(view: EditorView, from: number, to: number): boolean {
   return false;
 }
 
+const CODE = new Set(['InlineCode', 'FencedCode', 'CodeBlock']);
+
+function inCode(view: EditorView, pos: number): boolean {
+  for (let node: SyntaxNode | null = syntaxTree(view.state).resolveInner(pos, 1); node; node = node.parent) {
+    if (CODE.has(node.name)) return true;
+  }
+  return false;
+}
+
 function buildDecorations(view: EditorView, resolveCustom: CustomEmojiResolver): DecorationSet {
   const widgets: Range<Decoration>[] = [];
   for (const { from, to } of view.visibleRanges) {
@@ -98,6 +116,13 @@ function buildDecorations(view: EditorView, resolveCustom: CustomEmojiResolver):
       const start = from + matchStart(m);
       const end = start + m[0].length;
       if (caretInside(view, start, end)) continue; // reveal raw shortcode for editing
+      widgets.push(Decoration.replace({ widget, inclusive: false }).range(start, end));
+    }
+    for (const m of text.matchAll(EMOTICON_RE_GLOBAL)) {
+      const start = from + matchStart(m);
+      const end = start + m[0].length;
+      if (caretInside(view, start, end) || inCode(view, start)) continue;
+      const widget = new EmojiWidget(m[0], emoticonEmoji(m[0]));
       widgets.push(Decoration.replace({ widget, inclusive: false }).range(start, end));
     }
   }

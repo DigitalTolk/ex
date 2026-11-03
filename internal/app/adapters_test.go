@@ -6,8 +6,10 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/DigitalTolk/ex/internal/cache"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/search"
+	"github.com/DigitalTolk/ex/internal/service"
 )
 
 type fakeAttachments map[string]*model.Attachment
@@ -156,5 +158,72 @@ func TestIDSearcher(t *testing.T) {
 	none := newIDSearcher(&fakeSearcher{})
 	if got, err := none.Users(ctx, "al", 5); got != nil || err != nil {
 		t.Fatalf("no result Users = %v, %v", got, err)
+	}
+}
+
+type fakeAudienceGenerations struct {
+	gens map[string]string
+	err  error
+}
+
+func (f fakeAudienceGenerations) Generations(_ context.Context, keys []string) ([]string, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	out := make([]string, len(keys))
+	for i, k := range keys {
+		out[i] = f.gens[k]
+	}
+	return out, nil
+}
+
+func (fakeAudienceGenerations) Bump(context.Context, ...string) error { return nil }
+
+func TestChannelGenerationsReadsTheChannelKey(t *testing.T) {
+	g := channelGenerations{fakeAudienceGenerations{gens: map[string]string{cache.ChannelAudienceKey("c1"): "42"}}}
+	if gen, err := g.ChannelGeneration(context.Background(), "c1"); err != nil || gen != "42" {
+		t.Fatalf("generation = %q (err %v), want 42", gen, err)
+	}
+	down := channelGenerations{fakeAudienceGenerations{err: errors.New("redis down")}}
+	if _, err := down.ChannelGeneration(context.Background(), "c1"); err == nil {
+		t.Fatal("want the read error")
+	}
+}
+
+// rowUsers is the slice of the user store the cached reader's misses reach.
+type rowUsers struct {
+	service.UserStore
+	rows map[string]*model.User
+}
+
+func (u rowUsers) GetUser(_ context.Context, id string) (*model.User, error) {
+	if r, ok := u.rows[id]; ok {
+		return r, nil
+	}
+	return nil, errors.New("not found")
+}
+
+func (u rowUsers) GetUsersByIDs(_ context.Context, ids []string) ([]*model.User, error) {
+	out := make([]*model.User, 0, len(ids))
+	for _, id := range ids {
+		if r, ok := u.rows[id]; ok {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
+func TestCachedUserReaderGoesThroughTheUserService(t *testing.T) {
+	users := service.NewUserService(rowUsers{rows: map[string]*model.User{"u1": {ID: "u1", DisplayName: "Ann"}}}, nil, nil, nil)
+	r := cachedUserReader{users}
+	if u, err := r.GetUser(context.Background(), "u1"); err != nil || u.DisplayName != "Ann" {
+		t.Fatalf("GetUser = %+v (err %v)", u, err)
+	}
+	if _, err := r.GetUser(context.Background(), "ghost"); err == nil {
+		t.Fatal("want an error for a missing user")
+	}
+	got, err := r.GetUsersByIDs(context.Background(), []string{"u1", "ghost"})
+	if err != nil || len(got) != 1 || got[0].ID != "u1" {
+		t.Fatalf("GetUsersByIDs = %+v (err %v), want u1", got, err)
 	}
 }

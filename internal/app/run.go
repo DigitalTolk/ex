@@ -51,7 +51,7 @@ func (a *App) startBackground() {
 	a.stopBackground = stop
 	c, ag := &a.chat, &a.agents
 
-	safe.Go(a.track(func() { c.users.RunExpiredStatusSweeper(ctx, time.Minute, 0) }))
+	safe.Go(a.track(func() { c.users.RunExpiredStatusSweeper(ctx, time.Minute) }))
 	// Seed the gg/qib templates AND their shared agent users (idempotent;
 	// never overwrites admin edits), then start the run reconciler: boot
 	// recovery of active runs + the deadline/lease sweep that turns a closed

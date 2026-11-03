@@ -63,7 +63,6 @@ func (s *MessageService) ListThreadsPage(ctx context.Context, userID, cursor str
 	}
 	switch {
 	case cursor == "":
-		s.maybeSeedThreadIndex(ctx, userID)
 		return s.unreadThreadsPage(ctx, userID, markers, "", limit)
 	case strings.HasPrefix(cursor, threadCursorUnread):
 		return s.unreadThreadsPage(ctx, userID, markers, strings.TrimPrefix(cursor, threadCursorUnread), limit)

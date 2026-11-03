@@ -14,6 +14,7 @@ import (
 
 	"github.com/DigitalTolk/ex/internal/auth"
 	"github.com/DigitalTolk/ex/internal/eventlog"
+	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/pubsub"
@@ -758,6 +759,77 @@ func TestWSHandler_Connect_SessionDeadlineClosesSocket(t *testing.T) {
 		}
 		if time.Since(start) > 8*time.Second {
 			t.Fatal("socket outlived its session deadline — expired auth must close the connection")
+		}
+	}
+}
+
+// A session renewed over the socket outlives its first deadline: the client
+// sends a freshly minted ticket and the server moves the deadline out instead
+// of closing the socket, so a healthy client no longer reconnects (and
+// refetches its lists) every token lifetime.
+func TestWSHandler_Connect_SessionRenewKeepsTheSocketOpen(t *testing.T) {
+	ps, err := pubsub.NewRedisPubSub("redis://" + redisAddrForTest(t))
+	if err != nil {
+		t.Fatalf("pubsub: %v", err)
+	}
+	broker := pubsub.NewBroker(ps)
+	t.Cleanup(func() { _ = broker.Close() })
+	bAdapter := NewBrokerAdapter(broker)
+	users := newDataUserStoreForConv()
+	chanSvc := service.NewChannelService(newDataChannelStore(), newDataMembershipStore(), users, nil, nil, bAdapter, nil)
+	convSvc := service.NewConversationService(newDataConversationStore(), users, nil, bAdapter, nil)
+	h := NewWSHandler(broker, chanSvc, convSvc, service.NewPresenceService(nil, nil))
+	tickets := newFakeTicketStore()
+	h.SetTicketStore(tickets)
+	origGrace, origKeepAlive := wsSessionGrace, wsKeepAliveInterval
+	// Zero grace so the first deadline is exact; fast pings so the socket
+	// keeps producing frames while the test watches it outlive that deadline.
+	wsSessionGrace, wsKeepAliveInterval = 0, 50*time.Millisecond
+	t.Cleanup(func() { wsSessionGrace, wsKeepAliveInterval = origGrace, origKeepAlive })
+	firstDeadline := time.Now().Add(2 * time.Second)
+	if err := tickets.MintWSTicket(context.Background(), "tick-start", "u-renew", firstDeadline); err != nil {
+		t.Fatalf("mint: %v", err)
+	}
+
+	srv := httptest.NewServer(h.UpgradeAuth(http.HandlerFunc(h.Connect)))
+	defer srv.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	conn, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(srv.URL, "http")+"/?ticket=tick-start", nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = conn.Close(websocket.StatusNormalClosure, "") }()
+
+	if err := tickets.MintWSTicket(context.Background(), "tick-renew", "u-renew", time.Now().Add(time.Minute)); err != nil {
+		t.Fatalf("mint renew: %v", err)
+	}
+	if err := conn.Write(ctx, websocket.MessageText, []byte(`{"type":"session.renew","ticket":"tick-renew"}`)); err != nil {
+		t.Fatalf("send renew: %v", err)
+	}
+
+	renewed := false
+	for {
+		_, data, err := conn.Read(ctx)
+		if err != nil {
+			t.Fatalf("socket closed %v after its first deadline (renewed=%v): %v", time.Since(firstDeadline), renewed, err)
+		}
+		var evt struct {
+			Type string `json:"type"`
+			Data struct {
+				ExpiresIn int64 `json:"expiresIn"`
+			} `json:"data"`
+		}
+		_ = json.Unmarshal(data, &evt)
+		if evt.Type == events.EventSessionRenewed {
+			if evt.Data.ExpiresIn < (30 * time.Second).Milliseconds() {
+				t.Fatalf("renewed expiresIn = %d ms, want the new ticket's ~60s", evt.Data.ExpiresIn)
+			}
+			renewed = true
+		}
+		// Still reading pings well past the first deadline: the renewal held.
+		if renewed && time.Now().After(firstDeadline.Add(time.Second)) {
+			return
 		}
 	}
 }

@@ -54,19 +54,8 @@ func TestTokenStore_Delete_DeleteItemError(t *testing.T) {
 	}
 }
 
-// DeleteAllForUser's Scan paginator surfaces a scan error.
-func TestTokenStore_DeleteAllForUser_ScanError(t *testing.T) {
-	db := setupDynamoDB(t)
-	ctx := context.Background()
-	s := NewTokenStore(withFault(db, func(f *faultClient) { f.failScan = true }))
-	err := s.DeleteAllRefreshTokensForUser(ctx, "u-te")
-	if !errors.Is(err, errInjected) {
-		t.Fatalf("DeleteAllForUser scan: want errInjected, got %v", err)
-	}
-}
-
-// DeleteAllForUser's BatchWriteItem error path: seed a token so the scan finds
-// rows to delete, then fault only the batch delete.
+// DeleteAllForUser's BatchWriteItem error path: seed a token so the index
+// read finds rows to delete, then fault only the batch delete.
 func TestTokenStore_DeleteAllForUser_BatchWriteItemError(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()

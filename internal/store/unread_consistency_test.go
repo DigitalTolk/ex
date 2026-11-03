@@ -51,7 +51,10 @@ func TestUnreadCountReadsAreConsistent(t *testing.T) {
 			return err
 		}},
 		{"user channels", func() error { _, err := NewMembershipStore(db).ListUserChannels(ctx, "u-1"); return err }},
-		{"channel seqs", func() error { _, err := NewChannelStore(db).GetChannelsByIDs(ctx, []string{"ch-1"}); return err }},
+		{"channel seqs", func() error {
+			_, err := NewChannelStore(db).GetChannelsByIDsConsistent(ctx, []string{"ch-1"})
+			return err
+		}},
 	}
 	for _, read := range reads {
 		t.Run(read.name, func(t *testing.T) {

@@ -9,7 +9,8 @@ import (
 // Custom inline syntax extractor — Go port of the frontend's
 // markdown-custom-syntax. Walks a text fragment and slices out
 // domain tokens (mentions, hashtags, emoji shortcodes, giphy refs,
-// bare URLs, image-literal markdown) into hast `ex-*` element nodes.
+// bare URLs, email addresses, image-literal markdown) into hast `ex-*`
+// element nodes.
 //
 // The frontend renders ex-mention-user / ex-hashtag / ex-giphy /
 // ex-bare-url / ex-emoji-shortcode / ex-media-literal directly
@@ -34,6 +35,10 @@ var (
 	imageRE = regexp.MustCompile(`!\[([^\]]*)\]\(([^)\s]+?)(?:\s+=(\d+)x(\d+))?\)`)
 	// BARE_URL_RE — http(s) only.
 	bareURLRE = regexp.MustCompile(`https?://[^\s<>"]+`)
+	// EMAIL_RE — an email address, by the rule the composer highlights it
+	// with (the GFM autolink of @lezer/markdown): no word character right
+	// before it, up to 100 of [\w.+-], "@", a domain with at least one dot.
+	emailRE = regexp.MustCompile(`(^|[^\w])([\w.+-]{1,100}@[\w-]+(?:\.[\w.-]+)+)`)
 	// Emoji shortcodes — toned variant first to avoid the bare form
 	// eating part of the toned form.
 	emojiTonedRE = regexp.MustCompile(`(?i):([a-z0-9_+-]+)::(skin-tone-[1-5]):`)
@@ -131,6 +136,27 @@ func extractCustomTokens(input string) []*HastNode {
 		})}
 	})
 
+	// Email addresses — after bare URLs, which may carry one
+	// (`https://user@host/`). A mailto link, shown as the address.
+	pieces = splitTokens(pieces, emailRE, func(m []string, _ int) []*HastNode {
+		out := []*HastNode{}
+		if m[1] != "" {
+			out = append(out, textNode(m[1]))
+		}
+		addr, after := emailAddress(m[2])
+		if addr == "" {
+			return append(out, textNode(m[2]))
+		}
+		out = append(out, exElement("ex-bare-url", map[string]interface{}{
+			"data-href":  "mailto:" + addr,
+			"data-value": addr,
+		}))
+		if after != "" {
+			out = append(out, textNode(after))
+		}
+		return out
+	})
+
 	// Emoji shortcodes — toned first.
 	pieces = splitTokens(pieces, emojiTonedRE, func(m []string, _ int) []*HastNode {
 		return []*HastNode{exElement("ex-emoji-shortcode", map[string]interface{}{
@@ -147,6 +173,19 @@ func extractCustomTokens(input string) []*HastNode {
 	})
 
 	return pieces
+}
+
+// emailAddress trims an emailRE match the way the composer does: a
+// sentence's closing period isn't part of the address, and one ending in
+// "_" or "-" is no address at all (addr ""). after is the text trimmed off.
+func emailAddress(match string) (addr, after string) {
+	switch match[len(match)-1] {
+	case '_', '-':
+		return "", ""
+	case '.':
+		return match[:len(match)-1], "."
+	}
+	return match, ""
 }
 
 // splitTokens runs `re` across every text node in `pieces` and

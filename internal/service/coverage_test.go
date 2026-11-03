@@ -1377,7 +1377,7 @@ func TestUserService_List_Error(t *testing.T) {
 	users := newMockUserStore()
 	users.listErr = errors.New("list boom")
 	svc := NewUserService(users, nil, nil, nil)
-	if _, _, err := svc.List(context.Background(), 50, ""); err == nil {
+	if _, err := svc.ListAll(context.Background()); err == nil {
 		t.Fatal("expected error")
 	}
 }
@@ -1388,7 +1388,7 @@ func TestUserService_List_ResolvesAvatars(t *testing.T) {
 	users.users["a"] = &model.User{ID: "a", AvatarKey: "avatars/a/x"}
 	users.users["b"] = &model.User{ID: "b", AvatarKey: "avatars/b/y"}
 	svc := NewUserService(users, nil, fakeAvatarSigner{}, nil)
-	got, _, err := svc.List(context.Background(), 50, "")
+	got, err := svc.ListAll(context.Background())
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
