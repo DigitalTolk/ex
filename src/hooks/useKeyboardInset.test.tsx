@@ -27,11 +27,14 @@ describe('useKeyboardInset', () => {
     scrollTo.mockReset();
     Object.defineProperty(window, 'scrollY', { configurable: true, get: () => scrollY });
     vi.spyOn(window, 'scrollTo').mockImplementation(scrollTo);
+    // The layout viewport the visualViewport is measured against.
+    Object.defineProperty(document.documentElement, 'clientHeight', { configurable: true, value: 800 });
   });
 
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+    delete (document.documentElement as { clientHeight?: number }).clientHeight;
   });
 
   const appHeight = () => document.documentElement.style.getPropertyValue('--ex-app-height');
@@ -291,6 +294,44 @@ describe('useKeyboardInset', () => {
       vi.advanceTimersByTime(300);
     });
     expect(scrollIntoView).not.toHaveBeenCalled();
+  });
+
+  // Regression: the iOS app's WKWebView (and iOS Safari) shrink innerHeight
+  // along with the visual viewport, a moment after it. Measured against
+  // innerHeight, the keyboard was the whole keyboard or nothing depending on
+  // which the event saw first: every few taps into the composer the root went
+  // unsized and iOS panned the header off the screen. The layout viewport
+  // (the root element's box) is what the keyboard leaves alone.
+  it('sizes the root for the keyboard even once innerHeight has shrunk with the visual viewport', () => {
+    const vv = Object.assign(new EventTarget(), { height: 874, scale: 1 });
+    Object.defineProperty(window, 'visualViewport', { configurable: true, value: vv });
+    Object.defineProperty(document.documentElement, 'clientHeight', { configurable: true, value: 874 });
+    const inner = vi.spyOn(window, 'innerHeight', 'get').mockReturnValue(874);
+    try {
+      const { unmount } = render(<Probe />);
+      vv.height = 539;
+      inner.mockReturnValue(539);
+      act(() => {
+        vv.dispatchEvent(new Event('resize'));
+      });
+      expect(appHeight()).toBe('539px');
+      expect(screen.getByTestId('inset')).toHaveTextContent('335');
+      // The window's own resize, for the same keyboard, keeps it.
+      act(() => {
+        window.dispatchEvent(new Event('resize'));
+      });
+      expect(appHeight()).toBe('539px');
+      // The keyboard goes down.
+      vv.height = 874;
+      inner.mockReturnValue(874);
+      act(() => {
+        vv.dispatchEvent(new Event('resize'));
+      });
+      expect(appHeight()).toBe('');
+      unmount();
+    } finally {
+      Object.defineProperty(window, 'visualViewport', { configurable: true, value: undefined });
+    }
   });
 
   it('uses the visual viewport in a mobile browser, but not when pinch-zoomed', () => {

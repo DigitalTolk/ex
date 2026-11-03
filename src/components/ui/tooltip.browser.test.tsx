@@ -119,6 +119,26 @@ describe('Tooltip primitive defaults', () => {
       await expect.poll(content).toBeNull();
     });
 
+    // Regression: WebKit finishes the move that armed the tooltip after the
+    // swap, and with its element gone sends the rest of it to the parent —
+    // a pointermove there, though the pointer is still on the trigger. Read
+    // as "elsewhere", it closed the tooltip that hover had just opened.
+    it('keeps the tooltip open when the rest of the arming move reaches the parent', async () => {
+      const { screen, trigger, hoverTrigger } = await renderPass();
+      hoverTrigger();
+      await expect.element(screen.getByText('Pass body').first()).toBeVisible();
+      const leaves: Event[] = [];
+      trigger().addEventListener('mouseleave', (e) => leaves.push(e));
+      const r = trigger().getBoundingClientRect();
+      const at = { clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 };
+      const parent = trigger().parentElement as HTMLElement;
+      parent.dispatchEvent(new PointerEvent('pointerenter', { pointerType: 'mouse', ...at }));
+      parent.dispatchEvent(new MouseEvent('mouseenter', at));
+      parent.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerType: 'mouse', ...at }));
+      expect(leaves).toEqual([]);
+      await expect.element(screen.getByText('Pass body').first()).toBeVisible();
+    });
+
     it('opens as before when the pointer moved within the new trigger before the replay', async () => {
       const { screen, trigger, hoverTrigger } = await renderPass();
       hoverTrigger();

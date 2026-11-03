@@ -155,7 +155,12 @@ function TooltipTrigger({ render, className, children, ...props }: TooltipPrimit
         return
       }
       const { watch } = handoff
-      const elsewhere = (e: MouseEvent) => e.type === "mouseout" || !el.contains(e.target as Node)
+      // The target says where the browser put the pointer, except for the
+      // rest of the move that armed us: its element is gone, so WebKit sends
+      // that move on to the parent. Where the pointer is still says it.
+      const on = (e: MouseEvent) =>
+        el.contains(e.target as Node) || el.contains(document.elementFromPoint(e.clientX, e.clientY))
+      const elsewhere = (e: MouseEvent) => e.type === "mouseout" || !on(e)
       // Placed since arming: gone already, so nothing to open; or on the new
       // trigger, which the browser then reports leaving itself.
       if (watch.last) {
