@@ -130,7 +130,18 @@ func (h *WebhookHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// Execute is a classic webhook's URL, /hooks/{id}. It answers exactly as it
+// always has; a rich webhook posts to ExecuteRich instead.
 func (h *WebhookHandler) Execute(w http.ResponseWriter, r *http.Request) {
+	h.execute(w, r, false)
+}
+
+// ExecuteRich is a rich webhook's URL, /hooks/v2/{id}.
+func (h *WebhookHandler) ExecuteRich(w http.ResponseWriter, r *http.Request) {
+	h.execute(w, r, true)
+}
+
+func (h *WebhookHandler) execute(w http.ResponseWriter, r *http.Request, rich bool) {
 	id := pathParam(r, "id")
 	payload, err := readWebhookPayload(r)
 	if err != nil {
@@ -138,7 +149,11 @@ func (h *WebhookHandler) Execute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	payload.BotToken = bearerToken(r)
-	msg, rich, err := h.svc.ExecuteKind(r.Context(), id, payload)
+	run := h.svc.ExecuteClassic
+	if rich {
+		run = h.svc.ExecuteRich
+	}
+	msg, err := run(r.Context(), id, payload)
 	if err != nil {
 		// This is an UNAUTHENTICATED ingress: internal error text never goes
 		// to the caller — the table answers with fixed or user-facing texts

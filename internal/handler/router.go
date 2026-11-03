@@ -328,6 +328,9 @@ func NewRouter(d *Deps) http.Handler {
 		// spam amplification (a touch higher than the auth limit since busy
 		// integrations legitimately post more often).
 		mux.Handle("POST /hooks/{id}", middleware.WrapFunc(webhookH.Execute, middleware.RateLimit(d.RateLimiter, middleware.PerMinute("webhook", 60, 60))))
+		// Rich webhooks have their own URL, so the classic one above never
+		// runs anything but the classic path.
+		mux.Handle("POST /hooks/v2/{id}", middleware.WrapFunc(webhookH.ExecuteRich, middleware.RateLimit(d.RateLimiter, middleware.PerMinute("webhook", 60, 60))))
 	}
 	if ixH := d.Interaction; ixH != nil {
 		// App interactivity, set up by whoever manages the webhook.

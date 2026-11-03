@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DigitalTolk/ex/internal/auth"
 	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/service"
@@ -757,14 +758,18 @@ func newHandlerWebhookThreadFixtureKind(kind string) (*WebhookHandler, *handlerW
 }
 
 func executeWebhook(h *WebhookHandler, body, accept string) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(http.MethodPost, "/hooks/wh", strings.NewReader(body))
+	return executeWebhookAt(h.Execute, "/hooks/wh", body, accept)
+}
+
+func executeWebhookAt(handle http.HandlerFunc, path, body, accept string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	if accept != "" {
 		req.Header.Set("Accept", accept)
 	}
 	req.SetPathValue("id", "wh")
 	res := httptest.NewRecorder()
-	h.Execute(res, req)
+	handle(res, req)
 	return res
 }
 
@@ -862,7 +867,7 @@ func TestWebhookHandlerTemplates(t *testing.T) {
 	}
 
 	res := call(http.MethodPut, "rich", "deploy", `{"payload": {"text": "Deployed {{version}}"}}`)
-	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"key":"deploy"`) || !strings.Contains(res.Body.String(), `"url":"https://chat.example/hooks/rich"`) {
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"key":"deploy"`) || !strings.Contains(res.Body.String(), `"url":"https://chat.example/hooks/v2/rich"`) {
 		t.Fatalf("save = %d %s", res.Code, res.Body.String())
 	}
 	if res := call(http.MethodPut, "rich", "deploy", `{`); res.Code != http.StatusBadRequest {
@@ -883,7 +888,7 @@ func TestWebhookHandlerTemplates(t *testing.T) {
 // update the post later (messages.update).
 func TestWebhookHandlerExecute_RichJSONResponseNamesTheChannel(t *testing.T) {
 	h, _ := newHandlerWebhookThreadFixtureKind(model.WebhookKindRich)
-	res := executeWebhook(h, `{"text":"service api is failing"}`, "application/json")
+	res := executeWebhookAt(h.ExecuteRich, "/hooks/v2/wh", `{"text":"service api is failing"}`, "application/json")
 	var got map[string]string
 	if err := json.Unmarshal(res.Body.Bytes(), &got); err != nil || got["id"] == "" || got["channel_id"] != "ch-general" {
 		t.Fatalf("rich response = %d %s, want id and channel_id", res.Code, res.Body.String())
@@ -900,5 +905,53 @@ func TestWebhookHandler_PreviewRefusesBrokenJSON(t *testing.T) {
 	h.Preview(res, req)
 	if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), `"invalid_payload"`) {
 		t.Fatalf("broken preview = %d %s", res.Code, res.Body.String())
+	}
+}
+
+// Each kind of webhook has its own URL: classic /hooks/{id}, rich
+// /hooks/v2/{id}. Through the real router, each posts at its own URL and is
+// refused at the other's, so the classic URL never runs the rich path.
+func TestWebhookURLs_EachKindPostsOnlyAtItsOwn(t *testing.T) {
+	general := &model.Channel{ID: "ch-general", Name: "General", Slug: "general"}
+	channels := handlerWebhookChannels{
+		byID:   map[string]*model.Channel{general.ID: general},
+		bySlug: map[string]*model.Channel{general.Slug: general},
+	}
+	webhooks := &handlerWebhookStore{items: map[string]*model.IncomingWebhook{
+		"classic": {ID: "classic", ChannelID: general.ID, ChannelSlug: general.Slug},
+		"rich":    {ID: "rich", ChannelID: general.ID, ChannelSlug: general.Slug, Kind: model.WebhookKindRich},
+	}}
+	messages := &handlerWebhookMessageStore{messages: map[string]*model.Message{}}
+	svc := service.NewIncomingWebhookService(webhooks, channels, service.NewMessageService(messages, nil, nil, nil, nil), nil, "https://chat.example")
+	router := NewRouter(&Deps{
+		Auth: &AuthHandler{}, User: &UserHandler{}, Channel: &ChannelHandler{},
+		Conversation: &ConversationHandler{}, WS: &WSHandler{}, Webhook: NewWebhookHandler(svc),
+		JWT: auth.NewJWTManager("test-secret", 15*time.Minute, 24*time.Hour), AppVersion: "test", AllowOrigins: []string{"*"},
+	})
+	post := func(path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"text":"deployed"}`))
+		req.Header.Set("Content-Type", "application/json")
+		res := httptest.NewRecorder()
+		router.ServeHTTP(res, req)
+		return res
+	}
+	for path, want := range map[string]string{
+		"/hooks/classic":    "ok",
+		"/hooks/v2/rich":    "ok",
+		"/hooks/rich":       `{"error":{"code":"wrong_webhook_url","message":"this is a rich webhook: post to its /hooks/v2/ URL"}}`,
+		"/hooks/v2/classic": `{"error":{"code":"wrong_webhook_url","message":"this is a classic webhook: post to its /hooks/ URL"}}`,
+	} {
+		res := post(path)
+		if got := strings.TrimSpace(res.Body.String()); got != want {
+			t.Errorf("POST %s = %d %s, want %s", path, res.Code, got, want)
+		}
+	}
+	if len(messages.messages) != 2 {
+		t.Fatalf("posted %d messages, want 2 (one per right URL)", len(messages.messages))
+	}
+	for _, wh := range []*model.IncomingWebhook{webhooks.items["classic"], webhooks.items["rich"]} {
+		if got, want := svc.URL(wh), map[string]string{"classic": "https://chat.example/hooks/classic", "rich": "https://chat.example/hooks/v2/rich"}[wh.ID]; got != want {
+			t.Errorf("URL(%s) = %s, want %s", wh.ID, got, want)
+		}
 	}
 }

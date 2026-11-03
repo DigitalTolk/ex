@@ -428,6 +428,9 @@ func (s *IncomingWebhookService) URL(wh *model.IncomingWebhook) string {
 	if wh == nil || s.baseURL == "" {
 		return ""
 	}
+	if wh.IsRich() {
+		return s.baseURL + "/hooks/v2/" + wh.ID
+	}
 	return s.baseURL + "/hooks/" + wh.ID
 }
 
@@ -454,20 +457,40 @@ func (s *IncomingWebhookService) Execute(ctx context.Context, id string, payload
 // ExecuteMessage delivers a webhook payload and returns the stored message,
 // so callers can thread follow-ups under it via RootID.
 func (s *IncomingWebhookService) ExecuteMessage(ctx context.Context, id string, payload IncomingWebhookPayload) (*model.Message, error) {
-	msg, _, err := s.ExecuteKind(ctx, id, payload)
-	return msg, err
-}
-
-// ExecuteKind is ExecuteMessage that also says whether the webhook is rich,
-// so the HTTP answer can stay exactly what a classic webhook always answered.
-func (s *IncomingWebhookService) ExecuteKind(ctx context.Context, id string, payload IncomingWebhookPayload) (*model.Message, bool, error) {
 	wh, err := s.store.Get(ctx, id)
 	if err != nil {
-		return nil, false, fmt.Errorf("webhook: get: %w", err)
+		return nil, fmt.Errorf("webhook: get: %w", err)
 	}
-	rich := wh.IsRich()
-	msg, err := s.execute(ctx, wh, rich, payload)
-	return msg, rich, err
+	return s.execute(ctx, wh, wh.IsRich(), payload)
+}
+
+// ErrWrongWebhookURL: each kind of webhook has its own URL — classic
+// /hooks/{id}, rich /hooks/v2/{id} — and a payload sent to the other one is
+// refused, so the classic URL only ever runs the classic path.
+var ErrWrongWebhookURL = errors.New("webhook: wrong URL for this webhook")
+
+// ExecuteClassic delivers a payload sent to the classic URL, /hooks/{id}.
+func (s *IncomingWebhookService) ExecuteClassic(ctx context.Context, id string, payload IncomingWebhookPayload) (*model.Message, error) {
+	return s.executeAt(ctx, id, false, payload)
+}
+
+// ExecuteRich delivers a payload sent to the rich URL, /hooks/v2/{id}.
+func (s *IncomingWebhookService) ExecuteRich(ctx context.Context, id string, payload IncomingWebhookPayload) (*model.Message, error) {
+	return s.executeAt(ctx, id, true, payload)
+}
+
+func (s *IncomingWebhookService) executeAt(ctx context.Context, id string, rich bool, payload IncomingWebhookPayload) (*model.Message, error) {
+	wh, err := s.store.Get(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("webhook: get: %w", err)
+	}
+	if wh.IsRich() != rich {
+		if rich {
+			return nil, apperr.Reject(ErrWrongWebhookURL, "this is a classic webhook: post to its /hooks/ URL")
+		}
+		return nil, apperr.Reject(ErrWrongWebhookURL, "this is a rich webhook: post to its /hooks/v2/ URL")
+	}
+	return s.execute(ctx, wh, rich, payload)
 }
 
 func (s *IncomingWebhookService) execute(ctx context.Context, wh *model.IncomingWebhook, rich bool, payload IncomingWebhookPayload) (*model.Message, error) {

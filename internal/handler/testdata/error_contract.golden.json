@@ -482,6 +482,16 @@
     }
   },
   {
+    "case": "row: webhook: wrong URL for this webhook",
+    "status": 404,
+    "body": {
+      "error": {
+        "code": "wrong_webhook_url",
+        "message": "webhook: wrong URL for this webhook"
+      }
+    }
+  },
+  {
     "case": "row: version conflict",
     "status": 409,
     "body": {
