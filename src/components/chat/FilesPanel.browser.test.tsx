@@ -162,6 +162,24 @@ describe('FilesPanel browser behaviour', () => {
     expect(requested()).toEqual(['/api/v1/channels/ch-1/files', '/api/v1/channels/ch-1/files?cursor=c2']);
   });
 
+  // While the first page loads the list is empty, so its end is on screen.
+  // When a full page lands and pushes it out of view, that must not count as
+  // having reached the end.
+  it('loads no second page when a slow first page fills the panel', async () => {
+    const first = Array.from({ length: 30 }, (_, i) => file(`f${String(i).padStart(2, '0')}`));
+    apiFetchMock.mockReset();
+    apiFetchMock.mockImplementation((url: string) =>
+      url.includes('cursor=')
+        ? Promise.resolve({ files: [file('older')] })
+        : new Promise((resolve) => setTimeout(() => resolve({ files: first, nextCursor: 'c2' }), 300)),
+    );
+    const screen = await renderPanel();
+    await expect.element(screen.getByText('f00.pdf')).toBeVisible();
+    // Long enough for an observer to report the end, were it still watched.
+    await new Promise((r) => setTimeout(r, 300));
+    expect(requested()).toEqual(['/api/v1/channels/ch-1/files']);
+  });
+
   it('keeps loading while a short page leaves the end of the list in view', async () => {
     setupRoutes({
       '': { files: [file('a')], nextCursor: 'c2' },
