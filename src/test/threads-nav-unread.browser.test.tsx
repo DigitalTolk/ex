@@ -9,8 +9,8 @@ import { NotificationProvider } from '@/context/NotificationContext';
 import { TypingProvider } from '@/context/TypingContext';
 import { eventCallbacks, type CapturedWSOptions } from '@/test/ws-frames';
 
-// The Threads entry is bold exactly while the server holds an unread marker
-// for one of the user's threads. A thread reply's notification adds nothing
+// The Threads entry is bold, and counts the threads, exactly while the server
+// holds unread markers for the user's threads (one marker per thread). A thread reply's notification adds nothing
 // of its own: the server writes the marker before sending it, and the app
 // reloads the user state on it. A notification once lit the entry by itself,
 // and when the thread had been read elsewhere in the meantime (on the phone),
@@ -86,6 +86,7 @@ async function renderHome() {
 }
 
 const bold = () => document.querySelector('[data-testid="threads-nav-label"]')!.classList.contains('font-bold');
+const count = () => document.querySelector('[data-testid="threads-unread-badge"]')?.textContent ?? null;
 
 function threadReply() {
   eventCallbacks(ws.options!).onNotification!({
@@ -116,14 +117,21 @@ describe('the Threads entry', () => {
     threadReply();
     await expect.poll(dmRow).toBeNull();
     expect(bold()).toBe(false);
+    expect(count()).toBeNull();
   });
 
-  it('turns bold once the user state brings the reply’s marker', async () => {
+  it('turns bold and counts the thread once the user state brings the reply’s marker', async () => {
     server.markers = [];
     server.hidden = [];
     await renderHome();
     server.markers = ['msg-root'];
     threadReply();
     await expect.poll(bold).toBe(true);
+    expect(count()).toBe('1');
+
+    // A reply in a second thread counts threads, not replies.
+    server.markers = ['msg-root', 'msg-other'];
+    threadReply();
+    await expect.poll(count).toBe('2');
   });
 });
