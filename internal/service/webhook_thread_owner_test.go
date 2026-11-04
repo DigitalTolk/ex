@@ -88,3 +88,47 @@ func TestCheckWebhookThreadRoot_RecentLegacySentinelRoots(t *testing.T) {
 		t.Fatalf("another webhook's stamped root: err = %v, want ErrInvalidThreadRoot", err)
 	}
 }
+
+// The reminder bot is the server's own poster, not an unauthenticated URL: it
+// replies inside a person's thread — which a webhook may never do — as long as
+// the root is still a live top-level message.
+func TestMessageService_SendReminderRepliesInAnyLiveThread(t *testing.T) {
+	ctx := context.Background()
+	messages := newMockMessageStore()
+	svc := NewMessageService(messages, nil, nil, newMockPublisher(), nil)
+	messages.messages["ch-1#human"] = &model.Message{ID: "human", ParentID: "ch-1", AuthorID: "u-1"}
+	in := WebhookMessageInput{ParentID: "ch-1", ParentType: ParentChannel, Body: "⏰ Reminder for @[u-1|Alice]", Username: "Reminder", IconEmoji: "alarm_clock", ParentMessageID: "human"}
+
+	if _, err := svc.SendWebhook(ctx, in); !errors.Is(err, ErrInvalidThreadRoot) {
+		t.Fatalf("webhook into a person's thread: err = %v, want ErrInvalidThreadRoot", err)
+	}
+	msg, err := svc.SendReminder(ctx, in)
+	if err != nil {
+		t.Fatalf("SendReminder: %v", err)
+	}
+	if msg.ParentMessageID != "human" || msg.AuthorID != WebhookAuthorID || msg.WebhookUsername != "Reminder" || msg.WebhookIconEmoji != "alarm_clock" {
+		t.Fatalf("reply = %+v", msg)
+	}
+}
+
+func TestCheckLiveThreadRoot(t *testing.T) {
+	ctx := context.Background()
+	messages := newMockMessageStore()
+	svc := NewMessageService(messages, nil, nil, newMockPublisher(), nil)
+	messages.messages["ch-1#gone"] = &model.Message{ID: "gone", ParentID: "ch-1", Deleted: true}
+	messages.messages["ch-1#reply"] = &model.Message{ID: "reply", ParentID: "ch-1", ParentMessageID: "root"}
+
+	if err := svc.checkLiveThreadRoot(ctx, "ch-1", "missing"); !errors.Is(err, ErrInvalidThreadRoot) {
+		t.Fatalf("missing root: %v", err)
+	}
+	if err := svc.checkLiveThreadRoot(ctx, "ch-1", "gone"); !errors.Is(err, ErrThreadDeleted) {
+		t.Fatalf("deleted root: %v", err)
+	}
+	if err := svc.checkLiveThreadRoot(ctx, "ch-1", "reply"); !errors.Is(err, ErrInvalidThreadRoot) {
+		t.Fatalf("reply as root: %v", err)
+	}
+	messages.getErr = errors.New("dynamo timeout")
+	if err := svc.checkLiveThreadRoot(ctx, "ch-1", "reply"); err == nil || errors.Is(err, ErrInvalidThreadRoot) {
+		t.Fatalf("lookup failure: %v, want a plain error to retry", err)
+	}
+}

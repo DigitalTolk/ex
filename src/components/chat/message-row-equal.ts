@@ -1,4 +1,4 @@
-import type { Message } from '@/types';
+import type { Message, Reminder } from '@/types';
 import type { ThreadMeta } from '@/lib/message-users';
 import type { UserMapEntry } from './MessageList';
 
@@ -19,6 +19,9 @@ export type MessageRowProps = {
   quickReactions?: string[];
   readOnly?: boolean;
   threadHasNew?: boolean;
+  // Compared by identity like the rest: the pending list keeps an unchanged
+  // reminder's object across refetches, so only its own row re-renders.
+  reminder?: Reminder;
 };
 
 // buildMessageListRows makes a fresh row object for every message on every
