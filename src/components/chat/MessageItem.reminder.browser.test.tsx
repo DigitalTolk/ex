@@ -169,7 +169,7 @@ describe('MessageItem "Remind me"', () => {
     await userEvent.click(screen.getByTestId('remind-me-trigger'));
     await userEvent.click(screen.getByTestId('remind-custom'));
         await pickTomorrow();
-    await userEvent.fill(document.querySelector('[data-testid="reminder-time"]') as HTMLInputElement, '09:00');
+    await dialMorning(9);
     await userEvent.click(screen.getByTestId('reminder-confirm'));
     await vi.waitFor(() => expect(createReminderMutateAsync).toHaveBeenCalledTimes(1));
     expect(new Date(createReminderMutateAsync.mock.calls[0][0].remindAt as string).getDate()).toBe(tomorrow().getDate());
@@ -254,7 +254,7 @@ describe('MessageItem "Remind me" — self-DM parity', () => {
         await userEvent.click(screen.getByTestId('remind-me-trigger'));
         await userEvent.click(screen.getByTestId('remind-custom'));
         await pickTomorrow();
-        await userEvent.fill(screen.getByTestId('reminder-time'), '09:00');
+        await dialMorning(9);
         await userEvent.click(screen.getByTestId('reminder-confirm'));
         await vi.waitFor(() => expect(createReminderMutateAsync).toHaveBeenCalledTimes(1));
         expect(createReminderMutateAsync.mock.calls[0][0]).toMatchObject(target);

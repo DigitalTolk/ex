@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Calendar, CalendarDayButton } from '@/components/ui/calendar';
 import { ClockDial } from '@/components/ui/clock-dial';
 import { useIsMobile } from '@/hooks/useIsMobile';
-import { combineDateAndClock, describeDelay, formatClockTime, hourCycleOf, parseClockTime, splitDateTimeSeed, stepClockTime, type ClockTime } from '@/lib/clock-time';
+import { combineDateAndClock, describeDelay, formatClockTime, hourCycleOf, parseClockTime, splitDateTimeSeed, type ClockTime } from '@/lib/clock-time';
 import { REMINDER_PRESETS, computeReminderTime } from '@/lib/reminder-times';
 import { formatScheduleTime } from '@/lib/schedule-times';
 import { inputValueForDate } from '@/lib/datetime-input';
@@ -84,15 +84,12 @@ const HOUR_CYCLE = hourCycleOf(new Date(2024, 0, 1, 13).toLocaleTimeString(undef
 // The calendar's day for a `YYYY-MM-DD` field (local midnight), if any.
 const dateOf = (date: string): Date | undefined => combineDateAndClock(date, { hour: 0, minute: 0 }) ?? undefined;
 
-// ReminderDialog is the "Custom…" picker for reminders and scheduled sends.
-// The native datetime-local control it replaced was fiddly: a cramped
-// calendar, hour and minute wheels, no typing. Now the date is a proper
-// calendar, the time is three tappable columns with a field above them that
-// takes whatever is typed ("9", "930", "2pm"), a row of quick picks fills
-// both in one tap, and a preview line reads the result back ("Sends
-// Tomorrow at 9:00 AM · in 21 h"). Validated to a strictly-future instant
-// before the caller schedules it. Mount it fresh per open so the seed
-// re-applies.
+// ReminderDialog is the "Custom…" picker for reminders and scheduled sends:
+// a calendar for the day, a clock dial for the time (tap or drag it, or type
+// into the time above it), a row of quick picks that fill both in one tap,
+// and a preview line that reads the result back ("Sends Tomorrow at 9:00 AM ·
+// in 21 h"). Validated to a strictly-future instant before the caller
+// schedules it. Mount it fresh per open so the seed re-applies.
 export function ReminderDialog({
   open,
   onOpenChange,
@@ -139,7 +136,7 @@ export function ReminderDialog({
   const confirm = async () => {
     const when = chosen();
     if (!when) {
-      setError(clock ? 'Pick a date.' : 'Enter a time, like 9:30 or 2pm.');
+      setError(clock ? 'Pick a date.' : 'Pick a time.');
       return;
     }
     if (when.getTime() <= Date.now()) {
@@ -207,33 +204,7 @@ export function ReminderDialog({
               }}
             />
             <div className="flex min-w-0 flex-1 flex-col items-center gap-3">
-              {/* Desktop keeps a field to type into ("930", "2pm"); a phone
-                  picks on the dial alone, with no keyboard to cover the sheet. */}
-              {!isMobile && (
-                <input
-                  type="text"
-                  autoComplete="off"
-                  aria-label="Time"
-                  data-testid="reminder-time"
-                  placeholder={formatClockTime({ hour: 9, minute: 0 })}
-                  className="w-full rounded-md border border-border bg-background px-3 py-2 text-base md:text-sm mobile:h-11"
-                  value={fields.time}
-                  onChange={(e) => update({ ...fields, time: e.target.value })}
-                  onBlur={() => {
-                    // Tidy what was typed into the clock format ("930" → "9:30 AM").
-                    if (clock) setFields({ ...fields, time: formatClockTime(clock) });
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') void confirm();
-                    // Arrow keys nudge the time a quarter hour.
-                    if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && clock) {
-                      e.preventDefault();
-                      setTime(stepClockTime(clock, e.key === 'ArrowUp' ? -15 : 15));
-                    }
-                  }}
-                />
-              )}
-              <ClockDial value={clock} onChange={setTime} hourCycle={HOUR_CYCLE} testIdPrefix="reminder" />
+              <ClockDial value={clock} onChange={setTime} onEnter={() => void confirm()} hourCycle={HOUR_CYCLE} testIdPrefix="reminder" />
             </div>
           </div>
           {people && (

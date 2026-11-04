@@ -28,7 +28,10 @@ describe('ScheduleSendMenu', () => {
       expect(screen.getByTestId('reminder-preview')).toHaveTextContent(/^Sends /);
     }
     // Tomorrow morning is now set; type a different time for it.
-    fireEvent.change(screen.getByTestId('reminder-time'), { target: { value: '8:30' } });
+    fireEvent.focus(screen.getByTestId('reminder-dial-hour-input'));
+    fireEvent.change(screen.getByTestId('reminder-dial-hour-input'), { target: { value: '8' } });
+    fireEvent.focus(screen.getByTestId('reminder-dial-minute-input'));
+    fireEvent.change(screen.getByTestId('reminder-dial-minute-input'), { target: { value: '30' } });
     expect(screen.getByTestId('reminder-preview')).toHaveTextContent(/^Sends Tomorrow at 8:30/);
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Schedule' }));

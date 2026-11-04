@@ -139,7 +139,9 @@ describe('Drafts page — Reminders tab', () => {
     // Someone whose account is gone reads as "Someone", to remove too.
     fireEvent.click(within(dialog).getByLabelText('Remove Someone'));
 
-    fireEvent.change(within(dialog).getByTestId('reminder-time'), { target: { value: '9:30 AM' } });
+    fireEvent.keyDown(within(dialog).getByTestId('reminder-dial-hour-input'), { key: 'a' });
+    fireEvent.change(within(dialog).getByTestId('reminder-dial-hour-input'), { target: { value: '9' } });
+    fireEvent.change(within(dialog).getByTestId('reminder-dial-minute-input'), { target: { value: '30' } });
     await act(async () => {
       fireEvent.click(within(dialog).getByTestId('reminder-confirm'));
     });

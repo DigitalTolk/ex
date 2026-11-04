@@ -113,21 +113,22 @@ describe('dragging the clock hand', () => {
     await render(<ReminderDialog open initialValue="2099-10-21T21:00" onConfirm={onConfirm} onOpenChange={vi.fn()} />);
     await vi.waitFor(() => expect(document.querySelector('[data-testid="reminder-dial-face"]')).not.toBeNull());
     await dragOnFace([0, 60, 90]); // 3 o'clock, staying PM
-    await vi.waitFor(() => expect(document.querySelector('[data-testid="reminder-dial-mode-minute"]')?.getAttribute('aria-pressed')).toBe('true'));
+    // Let go of the hour: the face turns to the minutes.
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="reminder-dial-minute-0"]')).not.toBeNull());
     await dragOnFace([200, 246]); // :41
-    expect(document.querySelector('[data-testid="reminder-dial-mode-minute"]')?.getAttribute('aria-pressed')).toBe('true');
-    expect(document.querySelector('[data-testid="reminder-dial-mode-hour"]')?.textContent).toBe('3');
-    expect(document.querySelector('[data-testid="reminder-dial-mode-minute"]')?.textContent).toBe('41');
+    expect(document.querySelector('[data-testid="reminder-dial-minute-0"]')).not.toBeNull();
+    expect((document.querySelector('[data-testid="reminder-dial-hour-input"]') as HTMLInputElement).value).toBe('3');
+    expect((document.querySelector('[data-testid="reminder-dial-minute-input"]') as HTMLInputElement).value).toBe('41');
     expect(document.querySelector('[data-testid="reminder-dial-pm"]')?.getAttribute('aria-pressed')).toBe('true');
   });
 
   it('reads the inner ring as 13–00 on a 24-hour clock', async () => {
     const onChange = vi.fn();
-    await render(<ClockDial value={{ hour: 9, minute: 0 }} onChange={onChange} hourCycle={24} testIdPrefix="reminder" />);
+    const { container } = await render(<ClockDial value={{ hour: 9, minute: 0 }} onChange={onChange} hourCycle={24} testIdPrefix="reminder" />);
     // Each pick turns the dial to the minutes; back to the hours for the next.
     const hours = async () => {
-      (document.querySelector('[data-testid="reminder-dial-mode-hour"]') as HTMLButtonElement).click();
-      await vi.waitFor(() => expect(document.querySelector('[data-testid="reminder-dial-hour-0"]')).not.toBeNull());
+      await userEvent.click(container.querySelector('[data-testid="reminder-dial-hour-input"]') as HTMLInputElement);
+      await vi.waitFor(() => expect(container.querySelector('[data-testid="reminder-dial-hour-0"]')).not.toBeNull());
     };
     await dragOnFace([90], 0.26);
     expect(onChange).toHaveBeenLastCalledWith({ hour: 15, minute: 0 });
@@ -140,5 +141,26 @@ describe('dragging the clock hand', () => {
     await hours();
     await dragOnFace([90]);
     expect(onChange).toHaveBeenLastCalledWith({ hour: 3, minute: 0 });
+  });
+});
+
+// The hand glides to a new time, the short way round: from 11 to 1 it passes
+// 12 rather than sweeping back through every hour. During a drag it doesn't
+// glide at all, so it stays under the finger.
+describe('the clock hand', () => {
+  const hand = () => document.querySelector<HTMLElement>('[data-testid="reminder-dial-hand"]')!;
+  const turn = () => Number(/rotate\((-?[\d.]+)deg\)/.exec(hand().style.transform)![1]);
+
+  it('turns the short way round, gliding unless dragged', async () => {
+    const { rerender } = await render(<ClockDial value={{ hour: 11, minute: 0 }} onChange={vi.fn()} testIdPrefix="reminder" />);
+    expect(turn()).toBe(330);
+    expect(hand().className).toContain('transition-transform');
+    await rerender(<ClockDial value={{ hour: 1, minute: 0 }} onChange={vi.fn()} testIdPrefix="reminder" />);
+    expect(turn()).toBe(390);
+    const face = document.querySelector<HTMLElement>('[data-testid="reminder-dial-face"]')!;
+    const box = face.getBoundingClientRect();
+    face.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 3, clientX: box.left + box.width / 2 + 50, clientY: box.top + box.height / 2 }));
+    await vi.waitFor(() => expect(hand().className).not.toContain('transition-transform'));
+    expect(turn()).toBe(450);
   });
 });
