@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"maps"
 	"net"
 	"net/url"
@@ -239,6 +241,9 @@ type spGraph struct {
 	deleted    []string // permission ids, with the token
 	preview    string
 	previewErr error
+	uploads    []string // "folder/…/name (bytes) as token"
+	uploadItem *msgraph.DriveItem
+	uploadErr  error
 }
 
 func newSPGraph() *spGraph {
@@ -294,6 +299,14 @@ func (g *spGraph) Preview(_ context.Context, ts oauth2.TokenSource, driveID, ite
 		return nil, g.previewErr
 	}
 	return url.Parse(g.preview + "?item=" + driveID + "/" + itemID + "&as=" + tokenOf(ts))
+}
+
+func (g *spGraph) Upload(_ context.Context, ts oauth2.TokenSource, folder []string, name string, body io.Reader, size int64) (*msgraph.DriveItem, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	b, _ := io.ReadAll(body)
+	g.uploads = append(g.uploads, fmt.Sprintf("%s/%s (%d of %d) as %s", strings.Join(folder, "/"), name, len(b), size, tokenOf(ts)))
+	return g.uploadItem, g.uploadErr
 }
 
 func (g *spGraph) invites() []string {

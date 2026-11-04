@@ -411,7 +411,11 @@ func call(ctx context.Context, client *http.Client, rawURL, token, method string
 	if payload != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	return respond(client, req, dest)
+}
 
+// respond sends req and reads Graph's answer into dest (nil to ignore it).
+func respond(client *http.Client, req *http.Request, dest any) error {
 	res, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("msgraph: request: %w", err)

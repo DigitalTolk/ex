@@ -3,6 +3,8 @@ package handler
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -23,6 +25,17 @@ type fakeSharePointSvc struct {
 	preview    string
 	previewErr error
 	calls      []string
+	upload     *service.OfficeUpload
+	uploadErr  error
+}
+
+func (f *fakeSharePointSvc) UploadOfficeFile(_ context.Context, userID, channelID, name string, body io.Reader, size int64) (*service.OfficeUpload, error) {
+	b, err := io.ReadAll(body)
+	if err != nil {
+		return nil, err
+	}
+	f.calls = append(f.calls, fmt.Sprintf("upload %s %s %s %q %d", userID, channelID, name, b, size))
+	return f.upload, f.uploadErr
 }
 
 func (f *fakeSharePointSvc) Preview(_ context.Context, viewerID, parentID, parentType, fileID string) (string, error) {
@@ -140,5 +153,45 @@ func TestSharePointHandler_Preview(t *testing.T) {
 	svc.previewErr = service.ErrForbidden
 	if rec := serveSharePoint(t, svc, preview, http.MethodGet, target(ok), ""); rec.Code != http.StatusForbidden {
 		t.Fatalf("refused: %d", rec.Code)
+	}
+}
+
+func TestSharePointHandler_UploadOfficeFile(t *testing.T) {
+	upload := func(h *SharePointHandler) http.HandlerFunc { return h.UploadOfficeFile }
+	serve := func(svc *fakeSharePointSvc, target, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		jwt := auth.NewJWTManager("sp-secret", 15*time.Minute, 24*time.Hour)
+		rec := httptest.NewRecorder()
+		req := authedReq(t, jwt, http.MethodPut, target, body)
+		req.SetPathValue("id", "ch-1")
+		middleware.Auth(jwt)(upload(NewSharePointHandler(svc))).ServeHTTP(rec, req)
+		return rec
+	}
+	target := "/api/v1/channels/ch-1/office-files?name=" + url.QueryEscape("Q3 plan.docx")
+
+	svc := &fakeSharePointSvc{upload: &service.OfficeUpload{Name: "Q3 plan.docx", WebURL: "https://contoso-my.sharepoint.com/q3.docx", Size: 5}}
+	rec := serve(svc, target, "hello")
+	if rec.Code != http.StatusCreated || !strings.Contains(rec.Body.String(), `"webURL":"https://contoso-my.sharepoint.com/q3.docx"`) {
+		t.Fatalf("upload = %d %s", rec.Code, rec.Body.String())
+	}
+	if svc.calls[0] != `upload u-1 ch-1 Q3 plan.docx "hello" 5` {
+		t.Fatalf("calls = %v", svc.calls)
+	}
+
+	// No sign-in: 409, which the client takes as "attach it instead".
+	if rec := serve(&fakeSharePointSvc{uploadErr: service.ErrMicrosoftSignInRequired}, target, "hello"); rec.Code != http.StatusConflict {
+		t.Fatalf("no sign-in = %d", rec.Code)
+	}
+	// No name, or one too long; no body, so no size.
+	for _, bad := range []string{
+		"/api/v1/channels/ch-1/office-files",
+		"/api/v1/channels/ch-1/office-files?name=" + strings.Repeat("a", maxOfficeFileName+1) + ".docx",
+	} {
+		if rec := serve(&fakeSharePointSvc{}, bad, "hello"); rec.Code != http.StatusBadRequest {
+			t.Errorf("%.60s = %d, want 400", bad, rec.Code)
+		}
+	}
+	if rec := serve(&fakeSharePointSvc{}, target, ""); rec.Code != http.StatusLengthRequired {
+		t.Fatalf("no body = %d, want 411", rec.Code)
 	}
 }

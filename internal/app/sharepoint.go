@@ -32,6 +32,8 @@ func (a *App) wireSharePoint() {
 		Users:         in.users,
 		Messages:      in.messages,
 		Access:        c.messages,
+		Channels:      c.channels,
+		Uploads:       c.settings,
 		Publisher:     in.pubsub,
 		Hosts:         cfg.SharePointHosts(),
 	})

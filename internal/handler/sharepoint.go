@@ -2,7 +2,9 @@ package handler
 
 import (
 	"context"
+	"io"
 	"net/http"
+	"time"
 
 	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/model"
@@ -14,6 +16,7 @@ type SharePointService interface {
 	Link(ctx context.Context, viewerID, parentID, parentType, rawURL string) (*model.SharePointLink, error)
 	RetryLink(ctx context.Context, userID, parentID, parentType, rawURL string) error
 	Preview(ctx context.Context, viewerID, parentID, parentType, fileID string) (string, error)
+	UploadOfficeFile(ctx context.Context, userID, channelID, name string, body io.Reader, size int64) (*service.OfficeUpload, error)
 }
 
 // maxSharePointURL caps the link a request names; real ones are far shorter.
@@ -99,4 +102,40 @@ func (h *SharePointHandler) Preview(w http.ResponseWriter, r *http.Request) {
 	// It carries the caller's access: never kept by a cache.
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, sharePointPreview{URL: u})
+}
+
+// maxOfficeFileName caps the file name a request names (OneDrive's own
+// limit is lower still).
+const maxOfficeFileName = 255
+
+// officeUploadDeadline is how long an Office file may take to come in and go
+// on to OneDrive: far past the server's own read timeout, which is sized for
+// JSON bodies, not files.
+const officeUploadDeadline = 10 * time.Minute
+
+// UploadOfficeFile puts an Office file posted in a private channel into the
+// caller's OneDrive: PUT /api/v1/channels/{id}/office-files?name=…, the file
+// as the body. 409 when they have no working Microsoft sign-in; any refusal
+// tells the client to attach it the ordinary way instead.
+func (h *SharePointHandler) UploadOfficeFile(w http.ResponseWriter, r *http.Request) {
+	name := r.URL.Query().Get("name")
+	if name == "" || len(name) > maxOfficeFileName {
+		writeError(w, http.StatusBadRequest, "invalid_name", "name is required")
+		return
+	}
+	if r.ContentLength <= 0 {
+		writeError(w, http.StatusLengthRequired, "length_required", "the file's size is required")
+		return
+	}
+	// Best effort: a writer that can't move its deadlines keeps the server's.
+	rc := http.NewResponseController(w)
+	_ = rc.SetReadDeadline(time.Now().Add(officeUploadDeadline))
+	_ = rc.SetWriteDeadline(time.Now().Add(officeUploadDeadline))
+	body := http.MaxBytesReader(w, r.Body, r.ContentLength)
+	up, err := h.svc.UploadOfficeFile(r.Context(), middleware.UserIDFromContext(r.Context()), pathParam(r, "id"), name, body, r.ContentLength)
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, up)
 }

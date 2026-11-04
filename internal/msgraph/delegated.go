@@ -220,17 +220,26 @@ var signInCodes = map[string]bool{
 }
 
 func (d *Delegated) do(ctx context.Context, ts oauth2.TokenSource, method, path string, payload, dest any) error {
+	token, err := accessToken(ts)
+	if err != nil {
+		return err
+	}
+	return call(ctx, d.client, d.baseURL+path, token, method, payload, dest)
+}
+
+// accessToken is the user's current access token, renewed when it expired.
+func accessToken(ts oauth2.TokenSource) (string, error) {
 	tok, err := ts.Token()
 	if err != nil {
 		// Like the app-only token, reduce a refusal to its status and code:
 		// the RetrieveError's own message embeds the raw response body.
 		if re, ok := errors.AsType[*oauth2.RetrieveError](err); ok {
 			if signInCodes[re.ErrorCode] {
-				return fmt.Errorf("msgraph: token refused (code %s): %w", re.ErrorCode, ErrSignInRequired)
+				return "", fmt.Errorf("msgraph: token refused (code %s): %w", re.ErrorCode, ErrSignInRequired)
 			}
-			return fmt.Errorf("msgraph: token request failed with status %d (code %s)", re.Response.StatusCode, re.ErrorCode)
+			return "", fmt.Errorf("msgraph: token request failed with status %d (code %s)", re.Response.StatusCode, re.ErrorCode)
 		}
-		return fmt.Errorf("msgraph: delegated token: %w", err)
+		return "", fmt.Errorf("msgraph: delegated token: %w", err)
 	}
-	return call(ctx, d.client, d.baseURL+path, tok.AccessToken, method, payload, dest)
+	return tok.AccessToken, nil
 }

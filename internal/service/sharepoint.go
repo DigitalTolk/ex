@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"maps"
 	"net/url"
@@ -130,6 +131,7 @@ type SharePointGraph interface {
 	Invite(ctx context.Context, ts oauth2.TokenSource, driveID, itemID, objectID string) (string, error)
 	DeletePermission(ctx context.Context, ts oauth2.TokenSource, driveID, itemID, permissionID string) error
 	Preview(ctx context.Context, ts oauth2.TokenSource, driveID, itemID string) (*url.URL, error)
+	Upload(ctx context.Context, ts oauth2.TokenSource, folder []string, name string, body io.Reader, size int64) (*msgraph.DriveItem, error)
 }
 
 // SharePointTokens keeps and hands out each user's Microsoft token
@@ -170,6 +172,18 @@ type SharePointAccess interface {
 	CheckAccess(ctx context.Context, userID, parentID, parentType string) error
 }
 
+// SharePointChannels reads the channel an Office file is uploaded in.
+type SharePointChannels interface {
+	GetByID(ctx context.Context, id string) (*model.Channel, error)
+}
+
+// SharePointUploadLimits are the workspace's upload rules (SettingsService),
+// which an Office file put in OneDrive keeps to like any attachment.
+type SharePointUploadLimits interface {
+	AllowsExtension(ctx context.Context, filename string) bool
+	AllowsSize(ctx context.Context, size int64) bool
+}
+
 // SharePointDeps are the service's collaborators.
 type SharePointDeps struct {
 	Records       SharePointRecords
@@ -182,6 +196,8 @@ type SharePointDeps struct {
 	Users         SharePointUsers
 	Messages      SharePointMessages
 	Access        SharePointAccess
+	Channels      SharePointChannels
+	Uploads       SharePointUploadLimits
 	Publisher     Publisher
 	// Hosts are the SharePoint host names whose links are shared; an entry
 	// "*.example.com" matches every subdomain of example.com.
