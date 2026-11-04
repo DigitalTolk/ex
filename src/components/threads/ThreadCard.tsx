@@ -60,6 +60,23 @@ function markSummaryThreadSeen(summary: ThreadSummary) {
   });
 }
 
+// ThreadCardEnd sits under a card's newest reply: the thread is read once it
+// is on screen while the user is looking — not when the card's top peeks in,
+// nor in the margin the card loads ahead in. It mounts only once the replies
+// are there: watched from before, it would still count as on screen in the
+// render where the replies push it below the window. A reply landing in a
+// backgrounded window stays unread until they come back to it.
+function ThreadCardEnd({ summary }: { summary: ThreadSummary }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const onScreen = useLiveInView(ref);
+  useEffect(() => {
+    if (!onScreen || !isUserAttentive(suppressionWindowMs)) return;
+    markSummaryThreadSeen(summary);
+  }, [onScreen, summary]);
+  useMarkReadOnReturn(onScreen ? summary.threadRootID : undefined, () => markSummaryThreadSeen(summary));
+  return <div ref={ref} data-testid="thread-card-end" aria-hidden className="h-px" />;
+}
+
 // Cap the number of fully-rendered messages per thread before we collapse
 // the middle. Threads with more than this many entries (root + replies)
 // show the root, a "Show N more replies" toggle, and the last 2 replies.
@@ -81,14 +98,6 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
   const { ref, inView } = useInView<HTMLElement>();
   const inputRef = useRef<MessageInputHandle>(null);
 
-  // On screen reads the thread — while the user is looking. A reply landing
-  // in a backgrounded window stays unread until they come back to it.
-  useEffect(() => {
-    if (!inView || !unread || !isUserAttentive(suppressionWindowMs)) return;
-    markSummaryThreadSeen(summary);
-  }, [inView, summary, unread]);
-  useMarkReadOnReturn(inView && unread ? summary.threadRootID : undefined, () => markSummaryThreadSeen(summary));
-
   // While this card is CURRENTLY in the viewport the user is reading the
   // thread (SPEC D-3) — register it so a live reply neither pops a
   // notification nor lights the Threads badge. liveInView (non-sticky) is
@@ -109,6 +118,7 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
     threadRootID: summary.threadRootID,
     enabled: inView,
   });
+
 
   const root = messages?.[0];
   const replies = messages?.slice(1) ?? [];
@@ -368,6 +378,7 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
                 onEditMessage={isMobile ? setEditingMessage : undefined}
               />
             ))}
+          {messages && unread && <ThreadCardEnd summary={summary} />}
         </div>
         </MessageRowDataProvider>
 
