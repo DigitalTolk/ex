@@ -31,7 +31,6 @@ vi.mock('@/context/AuthContext', () => ({
 const defaultUserState = {
   channelNotifications: [],
   threadNotifications: ['msg-root-1'],
-  threadSeen: {},
   hiddenConversations: [],
 };
 // undefined = the user-state query hasn't resolved yet.

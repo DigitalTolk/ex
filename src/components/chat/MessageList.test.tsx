@@ -581,6 +581,31 @@ describe('MessageList Virtuoso wiring (regression contract)', () => {
     expect(captured.scrollToIndexCalls).toEqual([{ index: 'LAST', align: 'end' }]);
   });
 
+  // Regression: a chat opened from a link (a notification, Activity, a
+  // ?thread= URL) kept the list on the linked message, and the user's own
+  // message then landed below the fold without a scroll — though the window
+  // reached the newest messages, where it landed.
+  it("a link-opened chat that reaches the newest messages still scrolls to the user's own message", async () => {
+    const m1 = makeMessage({ id: 'msg-anchor', authorID: 'user-2', createdAt: '2026-04-24T10:00:00Z' });
+    const { rerender } = renderWithProviders(
+      <MessageList {...defaultProps} pages={[{ items: [m1] }]} hasPreviousPage={false} anchorMsgId="msg-anchor" />,
+    );
+    await new Promise((r) => requestAnimationFrame(() => r(undefined)));
+    captured.scrollToIndexCalls.length = 0;
+
+    const m2 = makeMessage({ id: 'msg-own', authorID: 'user-1', createdAt: '2026-04-24T11:00:00Z' });
+    rerender(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <BrowserRouter>
+          <MessageList {...defaultProps} pages={[{ items: [m2, m1] }]} hasPreviousPage={false} anchorMsgId="msg-anchor" />
+        </BrowserRouter>
+      </QueryClientProvider>,
+    );
+    await new Promise((r) => requestAnimationFrame(() => r(undefined)));
+
+    expect(captured.scrollToIndexCalls).toEqual([{ index: 'LAST', align: 'end' }]);
+  });
+
   it('uses Virtuoso-native stability props instead of manual scroll correction', async () => {
     const captured = await renderAndCaptureVirtuoso(
       <MessageList {...defaultProps} pages={[{ items: [makeMessage()] }]} hasPreviousPage={false} />

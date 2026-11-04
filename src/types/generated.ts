@@ -2638,19 +2638,25 @@ export interface UserStateItem {
   rewound?: boolean;
   updatedAt: string /* RFC3339 */;
 }
+/**
+ * UserState is the user's small, always-loaded state. How far they read
+ * each thread is not part of it: that is one row per thread they ever
+ * opened, and a thread's row is read when it opens (ThreadReadState).
+ */
 export interface UserState {
   threadNotifications: string[];
-  threadSeen: { [key: string]: string};
-  /**
-   * ThreadMarkedUnread maps a thread root to WHEN the user marked it unread
-   * (its threadSeen entry was rewound to just before a reply). Clients keep
-   * the newer of their local and the server's seen time; a rewound entry is
-   * older by design, so this tells them a local seen time from before the
-   * mark must yield to it.
-   */
-  threadMarkedUnread: { [key: string]: string};
   hiddenConversations: string[];
   hiddenSkills: string[];
+}
+/**
+ * ThreadReadState is how far the user has read one thread: SeenAt is the
+ * server's seen time (absent when they never opened it). MarkedUnreadAt is
+ * when they marked a reply unread: SeenAt was rewound to just before it, so
+ * a newer seen time a client kept from before the mark must yield to it.
+ */
+export interface ThreadReadState {
+  seenAt?: string /* RFC3339 */;
+  markedUnreadAt?: string /* RFC3339 */;
 }
 /**
  * MarkUnreadResult is the outcome of marking a message unread. A top-level

@@ -29,8 +29,6 @@ export function resetUserStateSessionState() {
 
 const EMPTY_USER_STATE: UserState = {
   threadNotifications: [],
-  threadSeen: {},
-  threadMarkedUnread: {},
   hiddenConversations: [],
   hiddenSkills: [],
 };
@@ -42,8 +40,6 @@ export function useUserState(options?: { enabled?: boolean }) {
       const state = await apiFetch<UserState>('/api/v1/user-state');
       return {
         threadNotifications: state.threadNotifications ?? [],
-        threadSeen: state.threadSeen ?? {},
-        threadMarkedUnread: state.threadMarkedUnread ?? {},
         hiddenConversations: state.hiddenConversations ?? [],
         hiddenSkills: state.hiddenSkills ?? [],
       };

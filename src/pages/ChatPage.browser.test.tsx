@@ -453,14 +453,16 @@ describe('ChatPage WS router (browser)', () => {
       expect(spy).not.toHaveBeenCalled();
     });
 
-    it('userState-only events refetch only user-state', async () => {
+    // An open thread's read state may have moved with it (read or marked
+    // unread elsewhere); only an open panel's query refetches.
+    it("userState-only events refetch only user-state and the open thread's read state", async () => {
       const { resetUserStateSessionState } = await import('@/hooks/useUserState');
       resetUserStateSessionState(); // no suppression window from earlier tests
       const { qc } = await renderChatPage();
       const spy = vi.spyOn(qc, 'invalidateQueries');
       lastHandlers().onUserChannelUpdated?.({ userState: true });
       const keys = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
-      expect(keys).toEqual([['userState']]);
+      expect(keys).toEqual([['userState'], ['threadRead']]);
     });
 
     it('a thread followed or unfollowed elsewhere refetches its Follow button and its alerts', async () => {

@@ -2001,6 +2001,8 @@ func TestNotifyForMessage_ThreadUpdated_AudienceMatrix(t *testing.T) {
 	msgs.messages["ch1#old-1"] = &model.Message{ID: "old-1", ParentID: "ch1", ParentMessageID: "root", AuthorID: "replier", CreatedAt: created.Add(time.Minute)}
 	msgs.messages["ch1#old-2"] = &model.Message{ID: "old-2", ParentID: "ch1", ParentMessageID: "root", AuthorID: "unfollowed-replier", CreatedAt: created.Add(2 * time.Minute)}
 	for _, f := range []*model.ThreadFollow{
+		// Every replier has a follow row (written when they replied).
+		{UserID: "replier", ParentID: "ch1", ThreadRootID: "root", Following: true},
 		{UserID: "follower", ParentID: "ch1", ThreadRootID: "root", Following: true},
 		{UserID: "left-follower", ParentID: "ch1", ThreadRootID: "root", Following: true}, // not a member anymore
 		{UserID: "unfollowed-replier", ParentID: "ch1", ThreadRootID: "root", Following: false},

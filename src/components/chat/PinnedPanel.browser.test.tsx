@@ -45,6 +45,7 @@ vi.mock('@/hooks/useThreads', () => ({
   useThreadMeta: () => undefined,
   markThreadSeen: vi.fn(),
   noteThreadReadPosition: vi.fn(),
+  useThreadSeenAtOpen: () => ({ known: true, seenAt: undefined }),
   threadHasUnseen: () => true,
 }));
 

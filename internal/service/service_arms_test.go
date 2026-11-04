@@ -299,9 +299,10 @@ func TestPublishThreadUpdateNilPublisherIsNoop(t *testing.T) {
 }
 
 func TestResolveThreadRecipientsSkipsTheMessageItself(t *testing.T) {
-	svc, _, _, _, _, _, msgs, _ := setupNotifierWithMessagesAndFollows(t)
-	// A legacy (pre-index) root, so the thread's replies are read.
-	root := &model.Message{ID: "root1", ParentID: "ch1", AuthorID: "u-root", Body: "root", CreatedAt: threadIndexEpoch.Add(-time.Hour)}
+	svc, _, _, _, _, _, msgs, follows := setupNotifierWithMessagesAndFollows(t)
+	// The follow index can't be read, so the thread's replies are.
+	follows.listErr = errors.New("follow index down")
+	root := &model.Message{ID: "root1", ParentID: "ch1", AuthorID: "u-root", Body: "root", CreatedAt: time.Now()}
 	msgs.messages["ch1#root1"] = root
 	// The reply being notified is already visible in the thread window — its
 	// own author entry must not feed back into the recipient set.

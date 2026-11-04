@@ -250,27 +250,30 @@ describe('useEmoji', () => {
 });
 
 describe('useUserState', () => {
+  // The placeholder is the all-empty state, so each response carries one
+  // field the placeholder doesn't: the poll then waits for the fetch itself.
   it('coalesces missing fields into empty defaults', async () => {
-    apiFetchMock.mockResolvedValue({});
+    apiFetchMock.mockResolvedValue({ hiddenSkills: ['skill-1'] });
     const screen = await renderHook(() => useUserState());
-    await new Promise((r) => setTimeout(r, 200));
-    const raw = screen.getByTestId('probe').element().getAttribute('data-data') ?? '';
-    const parsed = JSON.parse(raw);
-    expect(parsed.threadNotifications).toEqual([]);
-    expect(parsed.threadSeen).toEqual({});
-    expect(parsed.hiddenConversations).toEqual([]);
+    const probe = screen.getByTestId('probe').element();
+    await expect
+      .poll(() => JSON.parse(probe.getAttribute('data-data') ?? 'null'))
+      .toEqual({ threadNotifications: [], hiddenConversations: [], hiddenSkills: ['skill-1'] });
   });
 
-  it('passes through populated fields', async () => {
+  it('passes through populated fields and keeps no thread read times', async () => {
+    // An older server still sends every thread's read time; the cache
+    // never holds them (the thread panel asks for one thread's).
     apiFetchMock.mockResolvedValue({
       threadNotifications: ['root-1'],
+      hiddenConversations: ['conv-1'],
+      hiddenSkills: ['skill-1'],
       threadSeen: { 't-1': '2026-01-01T00:00:00Z' },
     });
     const screen = await renderHook(() => useUserState());
-    await new Promise((r) => setTimeout(r, 200));
-    const raw = screen.getByTestId('probe').element().getAttribute('data-data') ?? '';
-    const parsed = JSON.parse(raw);
-    expect(parsed.threadNotifications[0]).toBe('root-1');
-    expect(parsed.threadSeen['t-1']).toBe('2026-01-01T00:00:00Z');
+    const probe = screen.getByTestId('probe').element();
+    await expect
+      .poll(() => JSON.parse(probe.getAttribute('data-data') ?? 'null'))
+      .toEqual({ threadNotifications: ['root-1'], hiddenConversations: ['conv-1'], hiddenSkills: ['skill-1'] });
   });
 });

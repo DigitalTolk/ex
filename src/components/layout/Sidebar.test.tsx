@@ -982,7 +982,7 @@ describe('Sidebar', () => {
     expect(toggle).toHaveAttribute('aria-expanded', 'true');
   });
 
-  it('marks Threads bold, with no count, when threads have unread replies', async () => {
+  it('marks Threads bold and counts its unread threads, capped at "99+"', async () => {
     const manyThreads = Array.from({ length: 120 }, (_, i) => ({
       parentID: 'ch-1',
       parentType: 'channel' as const,
@@ -1001,17 +1001,17 @@ describe('Sidebar', () => {
         return {
           channelNotifications: [],
           threadNotifications: notifications,
-          threadSeen: {},
           hiddenConversations: [],
         };
       }
       return undefined;
     });
     renderSidebar();
-    // No count on Threads: unread threads make the entry bold, nothing more.
+    // Threads counts the threads with unread replies, like Drafts counts
+    // drafts, capped at "99+".
     const label = await screen.findByTestId('threads-nav-label');
     await waitFor(() => expect(label).toHaveClass('font-bold'));
-    expect(screen.queryByTestId('threads-unread-badge')).toBeNull();
+    expect(await screen.findByTestId('threads-unread-badge')).toHaveTextContent('99+');
   });
 
   it('caps the drafts badge at "99+" when there are more than 99 drafts', async () => {

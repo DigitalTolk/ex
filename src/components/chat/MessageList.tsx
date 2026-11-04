@@ -556,7 +556,7 @@ function VirtuosoMessageList({
     detachScrollerRef.current?.();
   }, []);
 
-  useScrollToOwnSend({ anchorMsgId, rows: renderRows, currentUserId, scrollToBottom });
+  useScrollToOwnSend({ olderSlice: hasPreviousPage, rows: renderRows, currentUserId, scrollToBottom });
 
   // Declared before the empty-state early return to satisfy rules-of-hooks.
   const { Header, Footer } = useMessageListChrome({

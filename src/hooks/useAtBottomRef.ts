@@ -48,11 +48,18 @@ export function useAtBottomRef(
     };
     set(distance() < AT_BOTTOM_THRESHOLD_PX);
     let lastTop = el.scrollTop;
+    let lastHeight = el.clientHeight;
     const update = () => {
       const top = el.scrollTop;
+      // A view that grew taller since the last scroll is pulled back inside
+      // its content by as much (keepBottomEdge moves it the same way), and
+      // the event for that can come after a new reply landed: that much of a
+      // move up is not the reader's. (1px for fractional scroll offsets.)
+      const grown = Math.max(0, el.clientHeight - lastHeight);
       if (distance() < AT_BOTTOM_THRESHOLD_PX) set(true);
-      else if (top < lastTop) set(false);
+      else if (top < lastTop - grown - 1) set(false);
       lastTop = top;
+      lastHeight = el.clientHeight;
     };
     el.addEventListener('scroll', update, { passive: true });
     return () => el.removeEventListener('scroll', update);

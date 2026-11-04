@@ -509,14 +509,22 @@ func (c *Client) bulkRound(ctx context.Context, index string, entries []BulkEntr
 		failures  []error
 		reqErr    error
 	)
+	// The workers stop once their context is done, and opensearch-go starts
+	// them before it counts them: one handed a context that was already done
+	// could stop before it was counted, and the WaitGroup panicked, which
+	// takes the whole process down. They get the caller's cancellation only
+	// once the indexer is built.
+	workCtx, stopWork := context.WithCancel(context.WithoutCancel(ctx))
+	defer stopWork()
 	// One worker, so a caller's batch goes out in order as one request.
 	// NewBulkIndexer only errors when it has to build its own client.
 	bi := must(opensearchutil.NewBulkIndexer(opensearchutil.BulkIndexerConfig{
 		Client:     c.api,
-		Context:    ctx,
+		Context:    workCtx,
 		NumWorkers: 1,
 		FlushBytes: bulkFlushBytes,
 	}))
+	defer context.AfterFunc(ctx, stopWork)()
 	var addErr error
 	for _, i := range pending {
 		id := entries[i].ID

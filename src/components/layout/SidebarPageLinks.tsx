@@ -16,21 +16,21 @@ function pageLinkClass(active: boolean): string {
   }`;
 }
 
-// Thread replies live in Threads (bold when any thread you follow has unread
-// replies) and in Activity; a channel or DM row never marks itself for them,
-// the way Slack keeps threads out of the channel list. One lookup: the
-// server's unread markers in the user state, which this keeps loaded (see
-// useUnreadThreadIDs).
-function useHasThreadUpdates(): boolean {
+// Thread replies live in Threads (bold, with a count of the threads you follow
+// that have unread replies) and in Activity; a channel or DM row never marks
+// itself for them, the way Slack keeps threads out of the channel list. One
+// lookup: the server's unread markers in the user state, one per thread, which
+// this keeps loaded (see useUnreadThreadIDs).
+function useUnreadThreadCount(): number {
   const { data: userState } = useUserState();
-  return (userState?.threadNotifications?.length ?? 0) > 0;
+  return userState?.threadNotifications?.length ?? 0;
 }
 
 // The sidebar's top-level pages, above the channel/DM list. Activity has its
 // own sidebar mode (the Home / Activity switch above the sidebar).
 export function SidebarPageLinks({ onClose }: { onClose: () => void }) {
   const { pathname } = useLocation();
-  const hasThreadUpdates = useHasThreadUpdates();
+  const unreadThreads = useUnreadThreadCount();
   const { data: drafts } = useDrafts();
   const draftCount = drafts?.length ?? 0;
   const directoryActive = pathname === '/directory' || pathname.startsWith('/directory/');
@@ -44,9 +44,14 @@ export function SidebarPageLinks({ onClose }: { onClose: () => void }) {
     <>
       <NavLink to="/threads" onClick={onClose} className={({ isActive }) => pageLinkClass(isActive)}>
         <MessagesSquare className="h-4 w-4 shrink-0" aria-hidden="true" />
-        <span className={hasThreadUpdates ? 'font-bold text-white' : ''} data-testid="threads-nav-label">
+        <span className={unreadThreads > 0 ? 'font-bold text-white' : ''} data-testid="threads-nav-label">
           Threads
         </span>
+        {unreadThreads > 0 && (
+          <Badge variant="brand" className="ml-auto text-xs" data-testid="threads-unread-badge">
+            {unreadThreads > 99 ? '99+' : unreadThreads}
+          </Badge>
+        )}
       </NavLink>
 
       <NavLink to="/directory/channels" onClick={onClose} className={() => pageLinkClass(directoryActive)}>

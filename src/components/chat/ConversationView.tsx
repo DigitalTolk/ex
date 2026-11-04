@@ -1,7 +1,6 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Navigate, useLocation, useParams, useSearchParams } from 'react-router-dom';
 import { ConvertToChannelDialog } from '@/components/channels/ConvertToChannelDialog';
-import { useQueryClient } from '@tanstack/react-query';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
 import { useFrequentEmojis } from '@/hooks/useEmoji';
 import { Header } from '@/components/layout/Header';
@@ -23,7 +22,6 @@ import { useConversation, useUserConversations } from '@/hooks/useConversations'
 import { useConversationMessages } from '@/hooks/useMessages';
 import { useAuth } from '@/context/AuthContext';
 import { useUnread } from '@/context/UnreadContext';
-import { markThreadSeen, noteThreadReadPosition } from '@/hooks/useThreads';
 import { findLastOwnMessageId } from '@/lib/message-users';
 import { useMessagePageUserIDs } from '@/hooks/useMessagePageUserIDs';
 import { useSidePanels } from '@/hooks/useSidePanels';
@@ -81,7 +79,6 @@ export function ConversationView() {
   const { id } = useParams<{ id: string }>();
   const location = useLocation();
   const [convertOpen, setConvertOpen] = useState(false);
-  const queryClient = useQueryClient();
   const [searchParams] = useSearchParams();
   const { user } = useAuth();
   const { setActiveThread } = useUnread();
@@ -121,7 +118,8 @@ export function ConversationView() {
     handleSendMessage,
     handleEditMessage,
     readSession,
-  } = useParentChat({ kind: 'conversation', id, userID: user?.id });
+    jumpToLatest,
+  } = useParentChat({ kind: 'conversation', id, userID: user?.id, showingOlder: hasPreviousPage, showLatest });
 
   const [threadRootID, setThreadRootID] = useState<string | null>(null);
   const inputRef = useRef<MessageInputHandle>(null);
@@ -168,14 +166,6 @@ export function ConversationView() {
   // driven one — unless the user has dismissed it.
   const urlThreadActive = !!threadParam && threadParam !== dismissedThreadParam;
   const effectiveThreadRootID = threadRootID ?? (urlThreadActive ? threadParam : null) ?? null;
-
-  // Mark URL-driven threads as seen exactly once per change — noting first
-  // where the user had read up to, for the thread's "New messages" line.
-  useEffect(() => {
-    if (!threadParam || !id) return;
-    noteThreadReadPosition(queryClient, threadParam);
-    markThreadSeen(threadParam, new Date().toISOString(), { parentID: id, parentType: 'conversation' });
-  }, [threadParam, id, queryClient]);
 
   // Opening a thread (via URL navigation, e.g. clicking a pinned
   // thread reply) must dismiss any other side panel — the local
@@ -381,10 +371,7 @@ export function ConversationView() {
             anchorRevision={navKey}
             onAtBottomChange={readSession.onAtBottomChange}
             onMarkAllRead={readSession.markAllRead}
-            onJumpToLatest={() => {
-              readSession.prepareJumpToLatest();
-              showLatest();
-            }}
+            onJumpToLatest={jumpToLatest}
             intro={intro ?? undefined}
           />
           {activeEditingMessage && !editReady ? (

@@ -111,6 +111,32 @@ describe('keepBottomEdge', () => {
     expect(Math.round(fromEnd())).toBe(12);
   });
 
+  // Regression: the keyboard coming up on a phone. The composer drops its
+  // home-indicator padding (the view grows, and the browser pulls a view at
+  // the end up by as much; that scroll event comes in the next frame) and in
+  // that next frame, before layout, starts opening its toolbar (the view
+  // shrinks past where it was). The observer hears of the net change only,
+  // took the browser's pull for the reader scrolling up, and left the newest
+  // message under the composer.
+  it('keeps a reader at the end there when the view grows and shrinks again within a frame', async () => {
+    const { scroller, fromEnd, grow } = setup();
+    await frame();
+    // Between frames, as an input event's task would.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    grow(36);
+    // The pull lands now; its scroll event comes before the next frame's callbacks.
+    void scroller.scrollTop;
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => {
+        grow(-43);
+        resolve();
+      }),
+    );
+    await frame();
+    await frame();
+    expect(fromEnd()).toBeLessThanOrEqual(1);
+  });
+
   it('keeps the bottom edge when the view shrinks', async () => {
     const { scroller, fromEnd, grow } = setup();
     scroller.scrollTop -= 100;

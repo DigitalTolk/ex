@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"net/url"
 	"strings"
 
@@ -80,10 +81,42 @@ func (r *MarkdownRenderer) RenderToHast(body string) *HastNode {
 	src := []byte(body)
 	doc := r.md.Parser().Parse(text.NewReader(src))
 	root := &HastNode{Type: "root", Children: []*HastNode{}}
-	emitChildren(doc, src, root)
+	for block := doc.FirstChild(); block != nil; block = block.NextSibling() {
+		emitted := &HastNode{Type: "root", Children: []*HastNode{}}
+		emitNode(block, src, emitted)
+		if len(emitted.Children) == 0 {
+			continue
+		}
+		// One empty paragraph per blank line typed between this block and
+		// the one above it, which CommonMark collapses: pressing Enter twice
+		// leaves a visible gap, and each blank line stacks. Leading blank
+		// lines are no gap.
+		if len(root.Children) > 0 {
+			for range blankLinesAbove(src, block.Pos()) {
+				root.Children = append(root.Children, blankParagraph())
+			}
+		}
+		root.Children = append(root.Children, emitted.Children...)
+	}
 	walkAndExtractCustom(root)
-	insertBlankLineParagraphs(body, root)
 	return root
+}
+
+// blankLinesAbove counts the blank lines right above the line where the block
+// at pos starts. goldmark positions every block it keeps; the max only keeps
+// one without a position (-1) from slicing out of range.
+func blankLinesAbove(src []byte, pos int) int {
+	start := bytes.LastIndexByte(src[:max(pos, 0)], '\n') + 1
+	n := 0
+	for start > 0 {
+		prev := bytes.LastIndexByte(src[:start-1], '\n') + 1
+		if len(bytes.TrimSpace(src[prev:start-1])) > 0 {
+			break
+		}
+		n++
+		start = prev
+	}
+	return n
 }
 
 // emitChildren walks the goldmark AST under `node` and appends hast
@@ -489,103 +522,6 @@ func normalizeCodeLanguageGo(language string) string {
 	}
 	out := strings.Trim(b.String(), "-")
 	return out
-}
-
-// insertBlankLineParagraphs preserves the legacy renderer's behaviour
-// of stacking one empty paragraph per blank line in the source. CommonMark
-// collapses runs of blank lines, so we count runs in the raw body and
-// insert ex-blank-paragraph siblings between adjacent block elements
-// whose source positions span those gaps.
-//
-// Implementation note: rather than tracking source offsets through
-// goldmark (which is fiddly), we simply walk the line array and emit
-// one blank paragraph per blank line in the *flat top-level block
-// stream*. Inline blank-handling (rare) keeps the legacy fallback —
-// you'd need a heading-then-blank-then-paragraph pattern, which the
-// regex parser also collapsed under most conditions.
-func insertBlankLineParagraphs(body string, root *HastNode) {
-	// Number of blank lines in each source gap that separates two
-	// top-level content runs, in order. The i-th entry lines up with
-	// the gap between the i-th and (i+1)-th rendered top-level blocks
-	// for the dominant case (blocks separated by blank-line runs), so
-	// we consume it by index while walking the children.
-	gaps := gapBlankCounts(body)
-	total := 0
-	for _, g := range gaps {
-		total += g
-	}
-	if total == 0 {
-		return
-	}
-	out := make([]*HastNode, 0, len(root.Children)+total)
-	for i, child := range root.Children {
-		out = append(out, child)
-		if i >= len(root.Children)-1 {
-			continue
-		}
-		// One blank paragraph per blank line in this gap (N blank
-		// lines → N blank <p>). A gap absent from the source (two
-		// blocks adjacent with no blank line, e.g. a heading directly
-		// above a paragraph) inserts nothing.
-		n := 0
-		if i < len(gaps) {
-			n = gaps[i]
-		}
-		for k := 0; k < n; k++ {
-			out = append(out, blankParagraph())
-		}
-	}
-	root.Children = out
-}
-
-// gapBlankCounts returns, in order, the number of blank lines in each
-// run that separates two content runs at the top level. Blank lines
-// inside fenced code blocks and leading/trailing blank runs are
-// ignored (they don't sit between two blocks). Without source-position
-// tracking from goldmark this maps 1:1 onto inter-block gaps for the
-// common case where every top-level block is separated by a blank-line
-// run — which covers ordinary chat messages and the test corpus.
-func gapBlankCounts(body string) []int {
-	lines := strings.Split(body, "\n")
-	gaps := make([]int, 0, len(lines))
-	inFence := false
-	seenContent := false
-	pending := 0
-	for _, line := range lines {
-		if strings.HasPrefix(line, "```") {
-			// An opening fence starts a new top-level block, so a blank run
-			// that preceded it closes an inter-block gap (e.g. the blank
-			// lines between two adjacent fenced code blocks). Flush it before
-			// resetting — without this the gap between two code blocks was
-			// silently dropped.
-			if !inFence && seenContent && pending > 0 {
-				gaps = append(gaps, pending)
-			}
-			inFence = !inFence
-			seenContent = true
-			pending = 0
-			continue
-		}
-		if inFence {
-			seenContent = true
-			pending = 0
-			continue
-		}
-		if strings.TrimSpace(line) == "" {
-			if seenContent {
-				pending++
-			}
-			continue
-		}
-		// Non-blank content line: a blank run that preceded it closes
-		// an inter-block gap.
-		if seenContent && pending > 0 {
-			gaps = append(gaps, pending)
-		}
-		pending = 0
-		seenContent = true
-	}
-	return gaps
 }
 
 func blankParagraph() *HastNode {

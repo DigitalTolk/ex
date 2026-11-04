@@ -114,6 +114,10 @@ interface FetchPlan {
   sidebar?: unknown[];
   // Message tail page per conversation id (defaults to []).
   messagesByConv?: Record<string, unknown[]>;
+  // The window a link opens (GET …/messages?around=), per conversation id:
+  // older history far from the newest messages — its newer pages (?after=)
+  // never arrive, as the reader hasn't scrolled down through them.
+  aroundByConv?: Record<string, unknown[]>;
   pinned?: unknown[];
   files?: { attachmentID: string; messageID: string; authorID: string; createdAt: string }[];
   // Replies served for a thread root id (GET …/messages/:id/thread).
@@ -131,6 +135,9 @@ interface FetchPlan {
 
 function installFetchStub(plan: FetchPlan = {}): () => void {
   const convs = plan.convs ?? { [DM_ID]: dmConv() };
+  // Messages posted during the test, newest first: the newest page includes
+  // them from then on, as the server's does.
+  const posted: Record<string, unknown[]> = {};
   const sidebar =
     plan.sidebar ??
     Object.entries(convs).map(([id, c]) => ({
@@ -164,8 +171,10 @@ function installFetchStub(plan: FetchPlan = {}): () => void {
     if (url.includes('/api/v1/sidebar/categories')) return apiJSON([]);
     if (url.endsWith('/api/v1/drafts') && method === 'PUT') return new Response(null, { status: 204 });
     if (url.includes('/api/v1/drafts')) return apiJSON(plan.drafts ?? []);
+    // One thread's read state, asked when its panel opens.
+    if (/\/api\/v1\/user-state\/threads\/[^/]+$/.test(url) && method === 'GET') return apiJSON({});
     if (url.includes('/api/v1/user-state')) {
-      return apiJSON({ channelNotifications: [], threadNotifications: [], threadSeen: {}, hiddenConversations: [] });
+      return apiJSON({ threadNotifications: [], hiddenConversations: [], hiddenSkills: [] });
     }
     if (url.includes('/api/v1/threads')) return apiJSON([]);
     if (url.includes('/api/v1/emojis')) return apiJSON([]);
@@ -243,19 +252,29 @@ function installFetchStub(plan: FetchPlan = {}): () => void {
     if (msgMatch && method === 'POST') {
       let sent: { body?: string; attachmentIDs?: string[]; parentMessageID?: string } = {};
       try { sent = JSON.parse(String(init?.body ?? '{}')) as typeof sent; } catch { /* ignore */ }
-      return apiJSON({
+      const convID = decodeURIComponent(msgMatch[1]);
+      const message = {
         id: 'm-sent-1',
-        parentID: decodeURIComponent(msgMatch[1]),
+        parentID: convID,
         parentType: 'conversation',
         authorID: ME_ID,
         body: sent.body ?? '',
         createdAt: '2026-05-01T12:00:00Z',
         attachmentIDs: sent.attachmentIDs ?? [],
         parentMessageID: sent.parentMessageID || undefined,
-      });
+      };
+      if (!message.parentMessageID) posted[convID] = [message, ...(posted[convID] ?? [])];
+      return apiJSON(message);
     }
+    const aroundItems = plan.aroundByConv?.[decodeURIComponent(msgMatch?.[1] ?? '')];
+    if (msgMatch && aroundItems && url.includes('around=')) {
+      const firstId = (aroundItems[0] as { id?: string }).id;
+      return apiJSON({ items: aroundItems, hasMoreOlder: false, hasMoreNewer: true, oldestID: firstId, newestID: firstId });
+    }
+    if (msgMatch && aroundItems && /[?&]after=/.test(url)) return new Promise<Response>(() => undefined);
     if (msgMatch) {
-      const items = plan.messagesByConv?.[decodeURIComponent(msgMatch[1])] ?? [];
+      const convID = decodeURIComponent(msgMatch[1]);
+      const items = [...(posted[convID] ?? []), ...(plan.messagesByConv?.[convID] ?? [])];
       const firstId = (items[0] as { id?: string })?.id ?? 'm-0';
       return apiJSON({
         items,
@@ -440,6 +459,29 @@ describe('conversation route (full route, real browser)', () => {
     }, { timeout: 15000 });
   });
 
+  // Regression: sending from older history a link opened (a notification,
+  // Activity, search) left the list there, and the message landed out of
+  // sight among the newest messages, which weren't even loaded.
+  it('sending from older history a link opened goes to the newest messages, where the message lands', async () => {
+    teardown = installFetchStub({
+      messagesByConv: { [DM_ID]: [aliceMessage(DM_ID, { id: 'm-latest', body: 'the latest from alice' })] },
+      aroundByConv: { [DM_ID]: [aliceMessage(DM_ID, { id: 'm-old', body: 'an old message', createdAt: '2026-04-01T09:00:00Z' })] },
+    });
+    const screen = await renderRoute(`/conversation/${DM_ID}#msg-m-old`);
+    await expect.element(screen.getByText('an old message')).toBeVisible();
+    expect(screen.getByText('the latest from alice').query()).toBeNull();
+    const editor = screen.getByLabelText('Message input');
+    await editor.click();
+    await editor.fill('a reply from back then');
+    await screen.getByRole('button', { name: 'Send message' }).click();
+    // The newest messages load, with the sent one among them, and the link
+    // is forgotten.
+    await expect.element(screen.getByText('the latest from alice')).toBeVisible();
+    await expect.element(screen.getByText('a reply from back then')).toBeVisible();
+    expect(screen.getByText('an old message').query()).toBeNull();
+    expect(window.location.hash).toBe('');
+  });
+
   it('hydrates an existing draft and flushes keystroke edits on scope switch', async () => {
     if (window.innerWidth <= 767) return; // needs the persistent desktop sidebar
     teardown = installFetchStub({
@@ -564,14 +606,20 @@ describe('conversation route (full route, real browser)', () => {
   it('opens the thread panel from a ?thread= deep link and dismisses it without stripping the URL', async () => {
     teardown = installFetchStub({
       messagesByConv: { [DM_ID]: [aliceMessage(DM_ID)] },
+      threadReplies: { 'm-1': [aliceMessage(DM_ID)] },
     });
     const screen = await renderRoute(`/conversation/${DM_ID}?thread=m-1`);
     await expect.element(headerHeading(screen, 'Alice')).toBeVisible();
     await expect.element(screen.getByRole('heading', { name: 'Thread' })).toBeVisible();
-    // The deep-linked thread is marked seen.
+    // The deep-linked thread is marked seen once its panel has it — and,
+    // first, how far the user had read it.
     await vi.waitFor(() => {
       expect(fetchCalls().some((u) => u.includes(`/user-state/threads/conversations/${DM_ID}/m-1/seen`))).toBe(true);
     }, { timeout: 15000 });
+    const calls = fetchCalls();
+    const readAt = calls.findIndex((u) => u.endsWith('GET /api/v1/user-state/threads/m-1') || u === 'GET /api/v1/user-state/threads/m-1');
+    expect(readAt).toBeGreaterThanOrEqual(0);
+    expect(readAt).toBeLessThan(calls.findIndex((u) => u.includes('/m-1/seen')));
     await screen.getByRole('button', { name: 'Close thread' }).click();
     await vi.waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Thread' }).query()).toBeNull();
