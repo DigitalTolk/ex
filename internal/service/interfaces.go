@@ -170,7 +170,8 @@ type ThreadFollowStore interface {
 type UserStateStore interface {
 	SetUserState(ctx context.Context, item *model.UserStateItem) error
 	DeleteUserState(ctx context.Context, userID string, kind model.UserStateKind, targetID string) error
-	ListUserState(ctx context.Context, userID string) ([]*model.UserStateItem, error)
+	GetUserState(ctx context.Context, userID string, kind model.UserStateKind, targetID string) (*model.UserStateItem, error)
+	ListUserState(ctx context.Context, userID string, kind model.UserStateKind) ([]*model.UserStateItem, error)
 }
 
 // DraftStore defines persistence operations for server-side message drafts.

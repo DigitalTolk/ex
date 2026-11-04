@@ -59,6 +59,18 @@ const messages = Array.from({ length: 30 }, (_, i) => ({
   createdAt: new Date(Date.UTC(2026, 4, 1, 10, i)).toISOString(),
 }));
 
+// A thread on the newest message, with more replies than fit on screen.
+const THREAD_ROOT_ID = LAST_ID;
+const threadReplies = Array.from({ length: 25 }, (_, i) => ({
+  id: `r-${String(i).padStart(2, '0')}`,
+  parentID: DM_ID,
+  parentType: 'conversation',
+  parentMessageID: THREAD_ROOT_ID,
+  authorID: i % 2 ? ME_ID : ALICE_ID,
+  body: `Reply number ${i}`,
+  createdAt: new Date(Date.UTC(2026, 4, 1, 10, 30 + i)).toISOString(),
+}));
+
 function installFetch(): () => void {
   const original = globalThis.fetch;
   globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -77,7 +89,7 @@ function installFetch(): () => void {
     if (url.includes('/api/v1/sidebar/categories')) return json([]);
     if (url.includes('/api/v1/drafts')) return method === 'GET' ? json([]) : new Response(null, { status: 204 });
     if (url.includes('/api/v1/user-state')) {
-      return json({ channelNotifications: [], threadNotifications: [], threadSeen: {}, hiddenConversations: [] });
+      return json({ channelNotifications: [], threadNotifications: [], hiddenConversations: [] });
     }
     if (url.includes('/api/v1/threads')) return json([]);
     if (url.includes('/api/v1/emojis')) return json([]);
@@ -85,8 +97,9 @@ function installFetch(): () => void {
     if (url.includes('/api/v1/presence')) return json({ online: [ALICE_ID] });
     if (/\/conversations\/[^/?]+\/read$/.test(url)) return new Response(null, { status: 204 });
     if (/\/conversations\/[^/?]+\/(pinned|files)$/.test(url)) return json([]);
+    if (url.includes(`/messages/${THREAD_ROOT_ID}/thread`)) return json(threadReplies);
     if (/\/conversations\/[^/?]+\/messages$/.test(url) && method === 'POST') {
-      const { body } = JSON.parse(String(init?.body)) as { body: string };
+      const { body, parentMessageID } = JSON.parse(String(init?.body)) as { body: string; parentMessageID?: string };
       return json({
         id: 'm-sent',
         parentID: DM_ID,
@@ -94,6 +107,7 @@ function installFetch(): () => void {
         authorID: ME_ID,
         body,
         createdAt: new Date(Date.UTC(2026, 4, 1, 11, 0)).toISOString(),
+        ...(parentMessageID ? { parentMessageID } : {}),
       });
     }
     if (/\/conversations\/[^/?]+\/messages(\?|$)/.test(url)) {
@@ -113,7 +127,7 @@ function installFetch(): () => void {
   };
 }
 
-function renderChat() {
+function renderChat(route = `/conversation/${DM_ID}`) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0, staleTime: 0 } } });
   return render(
     <QueryClientProvider client={qc}>
@@ -122,7 +136,7 @@ function renderChat() {
           <NotificationProvider>
             <TypingProvider>
               <KeyboardInsetTracker />
-              <MemoryRouter initialEntries={[`/conversation/${DM_ID}`]}>
+              <MemoryRouter initialEntries={[route]}>
                 {/* The app root, sized as in App.tsx. */}
                 <div className="flex flex-col" style={{ height: 'var(--ex-app-height, 100dvh)' }}>
                   <div className="min-h-0 flex-1">
@@ -260,5 +274,44 @@ describe.skipIf(window.__EX_FORCE_DEVICE__ === 'desktop')('the phone chat with t
     expect(sent).toBeDefined();
     const composer = laidOut('[data-composer-focused]')!.getBoundingClientRect();
     expect(Math.round(composer.top - sent!.getBoundingClientRect().bottom) || 0).toBe(0);
+  });
+});
+
+// The same in a thread, which on a phone fills the screen with its own list
+// and composer: reply, then tap the replies above to put the keyboard away.
+describe.skipIf(window.__EX_FORCE_DEVICE__ === 'desktop')('a phone thread with the keyboard up', () => {
+  // The thread's own list and composer, not the chat's behind it.
+  const panel = () => laidOut('aside[aria-label="Thread"]')!;
+  const inPanel = (selector: string) => panel().querySelector<HTMLElement>(selector)!;
+  const scroller = () => inPanel('[data-message-id="r-24"]').closest<HTMLElement>('.overflow-y-auto')!;
+  const reply = (text: string) =>
+    Array.from(panel().querySelectorAll<HTMLElement>('[data-message-id]')).find((el) => el.textContent?.includes(text));
+
+  it('shows the reply just sent once a tap on the replies above puts the keyboard away', async () => {
+    renderChat(`/conversation/${DM_ID}?thread=${THREAD_ROOT_ID}`);
+    await vi.waitFor(() => expect(laidOut('aside[aria-label="Thread"] [data-message-id="r-24"]')).not.toBeNull(), { timeout: 5000 });
+    await expect.poll(() => scroller().scrollHeight - scroller().scrollTop - scroller().clientHeight).toBeLessThanOrEqual(2);
+
+    inPanel('[data-message-composer] [contenteditable="true"]').focus();
+    fireKeyboard('keyboardWillShow', KEYBOARD_PX);
+    await keyboardSettled(
+      () => (panel().querySelector('[data-composer-focused="true"]')?.getBoundingClientRect().bottom ?? Infinity) <= window.innerHeight - KEYBOARD_PX + 1,
+    );
+    await userEvent.keyboard('A new reply');
+    inPanel('[data-testid="schedule-send-hold"]').click();
+    await expect.poll(() => reply('A new reply')?.dataset.messageId).toBe('m-sent');
+
+    // A tap on the reply above takes the focus off the composer, and the
+    // keyboard goes down. (One on screen: a click on one that isn't scrolls
+    // it into view first, which a finger never does.)
+    await userEvent.click(reply('Reply number 24')!);
+    fireKeyboard('keyboardWillHide');
+    await keyboardSettled(() => panel().querySelector('[data-composer-focused="false"]') !== null);
+    await frames(3);
+
+    const view = scroller().getBoundingClientRect();
+    const sent = reply('A new reply')!.getBoundingClientRect();
+    expect(sent.bottom).toBeLessThanOrEqual(view.bottom + 1);
+    expect(scroller().scrollHeight - scroller().scrollTop - scroller().clientHeight).toBeLessThanOrEqual(2);
   });
 });

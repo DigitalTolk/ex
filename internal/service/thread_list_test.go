@@ -72,10 +72,13 @@ func TestListThreadsPage_UnreadThenFollowed(t *testing.T) {
 	}
 	addMarker(state, "u-1", "ch-1", ParentChannel, "unread-old", base.Add(time.Minute))
 	addMarker(state, "u-1", "ch-1", ParentChannel, "unread-new", base.Add(2*time.Minute))
-	// The rest of the user's state (seen threads, hidden conversations) lists
-	// nothing.
+	// The rest of the user's state (seen threads, hidden conversations) is
+	// never read, and a marker that names no thread lists nothing.
 	state.rows[state.key("u-1", model.UserStateThreadSeen, "read-old")] = &model.UserStateItem{
 		UserID: "u-1", Kind: model.UserStateThreadSeen, TargetID: "read-old", ParentID: "ch-1", ThreadRootID: "read-old", UpdatedAt: base,
+	}
+	state.rows[state.key("u-1", model.UserStateThreadNotification, "legacy")] = &model.UserStateItem{
+		UserID: "u-1", Kind: model.UserStateThreadNotification, TargetID: "legacy", UpdatedAt: base.Add(3 * time.Minute),
 	}
 	for i, id := range []string{"unread-new", "read-old", "read-new"} {
 		at := base.Add(time.Duration(i+1) * time.Minute)
@@ -155,7 +158,7 @@ func TestListThreadsPage_DropsMarkersThatCanNotBeOpened(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("stale markers never dropped")
 	}
-	rows, _ := state.ListUserState(ctx, "u-1")
+	rows, _ := state.ListUserState(ctx, "u-1", model.UserStateThreadNotification)
 	if len(rows) != 1 || rows[0].ThreadRootID != "kept" {
 		t.Fatalf("markers left = %+v, want only kept", rows)
 	}

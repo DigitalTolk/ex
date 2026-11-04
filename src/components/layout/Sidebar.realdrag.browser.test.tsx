@@ -95,7 +95,7 @@ vi.mock('@/hooks/useUserState', () => ({
   shouldRefetchUserStateForRemoteUpdate: vi.fn(() => true),
   resetUserStateSessionState: vi.fn(),
   useUserState: () => ({
-    data: { hiddenConversations: [], channelNotifications: [], threadNotifications: [], threadSeen: {} },
+    data: { hiddenConversations: [], channelNotifications: [], threadNotifications: [] },
   }),
 }));
 vi.mock('@/hooks/useDrafts', () => ({

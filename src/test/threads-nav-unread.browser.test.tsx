@@ -43,7 +43,7 @@ function stubFetch() {
     if (url.includes('/auth/token/refresh')) return json({ accessToken: 't' });
     if (url.includes('/api/v1/user-state')) {
       server.userStateLoads++;
-      return json({ threadNotifications: server.markers, threadSeen: {}, threadMarkedUnread: {}, hiddenConversations: server.hidden });
+      return json({ threadNotifications: server.markers, hiddenConversations: server.hidden });
     }
     if (url.endsWith('/api/v1/channels')) {
       return json([{ channelID: 'ch-1', channelName: 'general', channelType: 'public', role: 'member' }]);

@@ -26,9 +26,9 @@ import { keyboardOverlap, readKeyboardHeight } from '@/lib/keyboard';
 // Resized and un-panned in the same frame, the composer stays exactly where
 // the pan put it, on the keyboard, and only the top of the app moves.
 //
-// Two sources: the Capacitor shell reports the native keyboard height
-// (WKWebView's visualViewport ignores the keyboard), and mobile Safari
-// shrinks the visualViewport.
+// Two sources: a shell that reports the native keyboard height, and the
+// visualViewport, which the keyboard shrinks in mobile Safari and in the iOS
+// app's WKWebView alike (the iOS shell reports no keyboard events).
 
 interface KeyboardInsetState {
   // px of the screen the keyboard covers; 0 while it is down.
@@ -102,14 +102,22 @@ export function useKeyboardInsetTracker(): void {
     const recompute = () => {
       const layout = window.innerHeight;
       const native = nativeHeight > 0 ? keyboardOverlap(nativeHeight, innerAtShow, layout) : 0;
+      // What the visualViewport leaves of the layout viewport (the root
+      // element's box), which the keyboard never resizes. Not of innerHeight:
+      // iOS, the app's WKWebView included, shrinks innerHeight along with the
+      // visualViewport, a moment after it, so the difference was the whole
+      // keyboard or nothing depending on which the event saw first. Every few
+      // taps into the composer the root went unsized and iOS panned the
+      // header off the screen.
       // Pinch-zoom also shrinks the visualViewport; only a touch device at
       // 1x is the keyboard.
+      const viewport = document.documentElement.clientHeight;
       const browser =
         vv && deviceKind() === 'touch' && Math.abs(vv.scale - 1) < 0.01
-          ? Math.max(0, layout - vv.height)
+          ? Math.max(0, viewport - vv.height)
           : 0;
       const covered = Math.max(native, browser);
-      const change = apply(covered, layout - covered);
+      const change = apply(covered, native >= browser ? layout - native : viewport - browser);
       if (change === 'shown') {
         useKeyboardInsetStore.setState({ panUntil: performance.now() + LATE_PAN_MS });
         settle();

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/model"
+	"github.com/DigitalTolk/ex/internal/store"
 )
 
 // mockUserStateStore is mutex-guarded: the notify path persists thread
@@ -18,6 +19,8 @@ type mockUserStateStore struct {
 	setErr    error
 	deleteErr error
 	listErr   error
+	// listedKinds is every kind ListUserState was asked for.
+	listedKinds []model.UserStateKind
 }
 
 func newMockUserStateStore() *mockUserStateStore {
@@ -49,15 +52,31 @@ func (m *mockUserStateStore) DeleteUserState(_ context.Context, userID string, k
 	return nil
 }
 
-func (m *mockUserStateStore) ListUserState(_ context.Context, userID string) ([]*model.UserStateItem, error) {
+func (m *mockUserStateStore) GetUserState(_ context.Context, userID string, kind model.UserStateKind, targetID string) (*model.UserStateItem, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.listErr != nil {
 		return nil, m.listErr
 	}
+	row, ok := m.rows[m.key(userID, kind, targetID)]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	cp := *row
+	return &cp, nil
+}
+
+// ListUserState lists one kind, and records which kinds were asked for.
+func (m *mockUserStateStore) ListUserState(_ context.Context, userID string, kind model.UserStateKind) ([]*model.UserStateItem, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.listedKinds = append(m.listedKinds, kind)
+	if m.listErr != nil {
+		return nil, m.listErr
+	}
 	out := make([]*model.UserStateItem, 0)
 	for _, row := range m.rows {
-		if row.UserID != userID {
+		if row.UserID != userID || row.Kind != kind {
 			continue
 		}
 		cp := *row
@@ -146,12 +165,12 @@ func TestUserStateService_ListAndMutations(t *testing.T) {
 	if got := state.ThreadNotifications; len(got) != 1 || got[0] != "root-2" {
 		t.Fatalf("thread notifications = %#v, want [root-2] after seen", got)
 	}
-	gotSeen, err := time.Parse(time.RFC3339Nano, state.ThreadSeen["root-1"])
-	if err != nil {
-		t.Fatalf("thread seen parse: %v", err)
+	read, err := svc.ThreadRead(ctx, "u-1", "root-1")
+	if err != nil || read.SeenAt == nil {
+		t.Fatalf("ThreadRead = %+v (err %v), want the seen time", read, err)
 	}
-	if gotSeen.Before(beforeSeen) || gotSeen.After(afterSeen) {
-		t.Fatalf("thread seen = %s, want server time between %s and %s", gotSeen, beforeSeen, afterSeen)
+	if read.SeenAt.Before(beforeSeen) || read.SeenAt.After(afterSeen) {
+		t.Fatalf("thread seen = %s, want server time between %s and %s", read.SeenAt, beforeSeen, afterSeen)
 	}
 	if got := state.HiddenConversations; len(got) != 1 || got[0] != "conv-1" {
 		t.Fatalf("hidden conversations = %#v", got)
@@ -236,9 +255,8 @@ func TestUserStateService_ParentLeft_DropsThatChannelsThreadMarkers(t *testing.T
 
 	svc.ParentLeft(ctx, []string{"u-1"}, "ch-left")
 
-	rows, _ := store.ListUserState(ctx, "u-1")
 	left := map[string]bool{}
-	for _, r := range rows {
+	for _, r := range store.rows {
 		left[r.TargetID] = true
 	}
 	if left["left-root"] || !left["kept-root"] || !left["seen-root"] {

@@ -66,6 +66,7 @@ vi.mock('@/hooks/useThreads', () => ({
   useUnfollowThread: () => ({ mutate: vi.fn(), isPending: false }),
   markThreadSeen: vi.fn(),
   noteThreadReadPosition: vi.fn(),
+  useThreadSeenAtOpen: () => ({ known: true, seenAt: undefined }),
   threadHasUnseen: () => true,
 }));
 
@@ -92,8 +93,8 @@ vi.mock('./MessageDropZone', () => ({
 // Fixed 80px rows with an <img> so the delegated load handler has a real
 // IMG target to react to. The id mirrors the real MessageItem (msg-<id>).
 vi.mock('./MessageItem', () => ({
-  MessageItem: ({ message }: { message: Message }) => (
-    <div id={`msg-${message.id}`} data-message-id={message.id} style={{ height: 80 }}>
+  MessageItem: ({ message, highlighted }: { message: Message; highlighted?: boolean }) => (
+    <div id={`msg-${message.id}`} data-message-id={message.id} className={highlighted ? 'ring-1 ring-inset ring-amber-400/50 rounded-md' : undefined} style={{ height: 80 }}>
       <img alt="" data-testid={`img-${message.id}`} width={1} height={1} />
       <span>{message.body}</span>
     </div>

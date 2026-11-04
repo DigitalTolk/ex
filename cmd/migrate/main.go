@@ -22,7 +22,6 @@
 //	thumbnail-webp         re-encode lossless WebP message thumbnails as lossy WebP (S3) [--workers=16]
 //	oidc-unbind            clear an account's pinned SSO identity so its next SSO login re-pins it --email=<address>
 //	thread-activity        order existing followed threads by latest reply for the paged /threads list
-//	thread-participants    put threads rooted before replies wrote follow rows on their participants' /threads lists [--workers=4]
 //
 // Required environment variables (same as the `ex` server):
 //   - AWS_REGION
@@ -74,7 +73,6 @@ func commands() map[string]command {
 		"thumbnail-webp":        {"re-encode lossless WebP message thumbnails as lossy WebP (S3) [--workers=16]", runThumbnailWebP},
 		"oidc-unbind":           {"clear an account's pinned SSO identity so its next SSO login re-pins it --email=<address>", runOIDCUnbind},
 		"thread-activity":       {"order existing followed threads by latest reply for the paged /threads list", runThreadActivity},
-		"thread-participants":   {"put threads rooted before replies wrote follow rows on their participants' /threads lists [--workers=4]", runThreadParticipants},
 	}
 }
 
