@@ -605,8 +605,8 @@ func (f *flakyParticipationStore) SetThreadFollow(ctx context.Context, follow *m
 	return f.indexedThreadFollowStore.SetThreadFollow(ctx, follow)
 }
 
-// The follow rows are what an indexed thread's later replies are routed by
-// (threadFullyIndexed), so a transient write failure is retried rather than
+// The follow rows are what a thread's later replies are routed by
+// (resolveThreadRecipients), so a transient write failure is retried rather than
 // leaving the replier silently out of the thread's future alerts.
 func TestRecordThreadParticipation_RetriesTransientFailure(t *testing.T) {
 	orig := audienceRetryInterval

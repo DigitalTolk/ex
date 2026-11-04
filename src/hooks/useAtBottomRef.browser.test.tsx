@@ -175,4 +175,36 @@ describe('useAtBottomRef (browser)', () => {
     read.click();
     expect(read.dataset.value).toBe('true');
   });
+
+  // Regression: on a phone the composer shrinks back over a few frames after
+  // a send, and each frame the browser pulls the taller view back inside the
+  // content. The scroll event for that comes a frame later; when a reply
+  // taller than the slack (a screenshot) landed in between, the move up read
+  // as the reader leaving, and that reply and every one after it stayed
+  // below the fold.
+  it('stays at the bottom when a tall reply lands before the scroll of a growing view', async () => {
+    const screen = await render(<AttachedProbe height={100} />);
+    const scroller = screen.getByTestId('scroller').element() as HTMLDivElement;
+    const content = scroller.firstElementChild as HTMLElement;
+    const read = screen.getByTestId('read').element() as HTMLButtonElement;
+    scroller.scrollTop = scroller.scrollHeight;
+    scroller.dispatchEvent(new Event('scroll'));
+    await new Promise((r) => requestAnimationFrame(() => r(undefined)));
+    const before = scroller.scrollTop;
+    // The view grows 40px and the browser pulls it up as much…
+    scroller.style.height = '140px';
+    expect(scroller.scrollTop).toBe(before - 40);
+    // …then the reply lands, before that move's scroll event is handled.
+    content.style.height = '1300px';
+    scroller.dispatchEvent(new Event('scroll'));
+    expect(scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight).toBe(300);
+    read.click();
+    expect(read.dataset.value).toBe('true');
+    // A move up by more than the view grew is still the reader's.
+    scroller.style.height = '150px';
+    scroller.scrollTop -= 60;
+    scroller.dispatchEvent(new Event('scroll'));
+    read.click();
+    expect(read.dataset.value).toBe('false');
+  });
 });

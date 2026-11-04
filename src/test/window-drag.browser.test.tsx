@@ -52,7 +52,7 @@ function installFetch() {
     if (url.includes('/api/v1/channels/browse') || url.includes('/api/v1/channels?')) return json([CH]);
     if (url.includes('/api/v1/sidebar/categories')) return json([]);
     if (url.includes('/api/v1/drafts')) return method === 'GET' ? json([]) : new Response(null, { status: 204 });
-    if (url.includes('/api/v1/user-state')) return json({ channelNotifications: [], threadNotifications: [], threadSeen: {}, hiddenConversations: [] });
+    if (url.includes('/api/v1/user-state')) return json({ channelNotifications: [], threadNotifications: [], hiddenConversations: [] });
     if (url.includes('/api/v1/threads')) return json([]);
     if (url.includes('/api/v1/emojis')) return json([]);
     if (url.includes('/api/v1/admin/settings')) return json({ maxUploadBytes: 0, allowedExtensions: [], giphyEnabled: false });

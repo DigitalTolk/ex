@@ -137,6 +137,7 @@ vi.mock('@/hooks/useThreads', async (importOriginal) => ({
   useUnfollowThread: () => ({ mutate: vi.fn(), isPending: false }),
   markThreadSeen: vi.fn(),
   noteThreadReadPosition: vi.fn(),
+  useThreadSeenAtOpen: () => ({ known: true, seenAt: undefined }),
 }));
 
 vi.mock('@/hooks/useWebSocket', () => ({

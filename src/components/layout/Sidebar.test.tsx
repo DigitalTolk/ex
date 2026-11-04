@@ -1001,7 +1001,6 @@ describe('Sidebar', () => {
         return {
           channelNotifications: [],
           threadNotifications: notifications,
-          threadSeen: {},
           hiddenConversations: [],
         };
       }

@@ -5,7 +5,7 @@ import { holdRead, setUnreadAnchor, threadReadKey } from '@/lib/read-position';
 import { setChannelUnreadCountInCache, setConversationUnreadCountInCache } from '@/lib/unread-cache';
 import { showToast } from '@/lib/toast';
 import { markThreadSeen } from '@/hooks/useThreads';
-import type { MarkUnreadResult, UserState } from '@/types';
+import type { MarkUnreadResult, ThreadReadState, UserState } from '@/types';
 
 export interface MarkUnreadInput {
   parentID: string;
@@ -39,21 +39,17 @@ export function applyMarkUnread(qc: QueryClient, res: MarkUnreadResult): void {
     const seenAt = res.seenAt;
     holdRead(threadReadKey(root));
     setUnreadAnchor(threadReadKey(root), { kind: 'message', messageID: res.messageID }, { replace: true });
-    // Rewind this device's seen time and the cached server state together,
-    // so the thread reads as unread here at once (the merge keeps the newer
-    // of the two, and a mark beats a seen time from before it); the
-    // notification flag is what lists it as unread in Threads.
+    // Rewind this device's seen time and the open thread's read state
+    // together, so the thread reads as unread here at once (the merge keeps
+    // the newer of the two, and a mark beats a seen time from before it);
+    // the notification flag is what lists it as unread in Threads.
     markThreadSeen(root, seenAt);
+    qc.setQueryData<ThreadReadState>(queryKeys.threadRead(root), (prev) =>
+      prev ? { seenAt, markedUnreadAt: new Date().toISOString() } : prev,
+    );
     qc.setQueryData<UserState>(queryKeys.userState(), (prev) =>
-      prev
-        ? {
-            ...prev,
-            threadSeen: { ...prev.threadSeen, [root]: seenAt },
-            threadMarkedUnread: { ...prev.threadMarkedUnread, [root]: new Date().toISOString() },
-            threadNotifications: prev.threadNotifications.includes(root)
-              ? prev.threadNotifications
-              : [...prev.threadNotifications, root],
-          }
+      prev && !prev.threadNotifications.includes(root)
+        ? { ...prev, threadNotifications: [...prev.threadNotifications, root] }
         : prev,
     );
     return;

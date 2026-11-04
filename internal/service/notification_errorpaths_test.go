@@ -65,7 +65,7 @@ func TestNotification_ResolveThreadRecipients_ListThreadRepliesError(t *testing.
 func TestNotification_ResolveThreadRecipients_FollowIndexErrorReadsReplies(t *testing.T) {
 	svc, _, _, _, _, _, msgs, follows := setupNotifierWithMessagesAndFollows(t)
 	follows.listErr = errors.New("follow index down")
-	root := &model.Message{ID: "root1", ParentID: "ch1", AuthorID: "root-author", CreatedAt: threadIndexEpoch.Add(time.Hour)}
+	root := &model.Message{ID: "root1", ParentID: "ch1", AuthorID: "root-author", CreatedAt: time.Now()}
 	msgs.messages["ch1#r1"] = &model.Message{ID: "r1", ParentID: "ch1", ParentMessageID: "root1", AuthorID: "replier"}
 	got, _ := svc.resolveThreadRecipients(context.Background(),
 		&model.Message{ID: "r2", ParentID: "ch1", ParentMessageID: "root1", AuthorID: "sender"},

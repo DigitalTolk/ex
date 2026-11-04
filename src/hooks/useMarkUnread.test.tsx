@@ -8,7 +8,7 @@ import { showToast } from '@/lib/toast';
 import { queryKeys } from '@/lib/query-keys';
 import { endReadSession, getUnreadAnchor, isReadHeld, threadReadKey } from '@/lib/read-position';
 import { getSeenMap, resetSeenCache } from '@/hooks/useThreads';
-import type { UserChannel, UserConversation, UserState } from '@/types';
+import type { ThreadReadState, UserChannel, UserConversation, UserState } from '@/types';
 
 vi.mock('@/lib/api', () => ({ apiFetch: vi.fn() }));
 vi.mock('@/lib/toast', () => ({ showToast: vi.fn() }));
@@ -51,16 +51,12 @@ describe('useMarkUnread', () => {
     expect(qc.getQueryData<UserConversation[]>(queryKeys.userConversations())![0]).toMatchObject({ unread: true, unreadCount: 2 });
   });
 
-  it('a thread reply rewinds the thread: local + cached seen time, the mark, the flag', async () => {
+  it("a thread reply rewinds the thread: local seen time, the open thread's read state, the mark, the flag", async () => {
     localStorage.clear();
     resetSeenCache();
     const { qc, result } = setup();
-    qc.setQueryData<UserState>(queryKeys.userState(), {
-      threadNotifications: [],
-      threadSeen: { 'root-1': '2026-10-07T10:00:00Z' },
-      hiddenConversations: [],
-      hiddenSkills: [],
-    });
+    qc.setQueryData<UserState>(queryKeys.userState(), { threadNotifications: [], hiddenConversations: [], hiddenSkills: [] });
+    qc.setQueryData<ThreadReadState>(queryKeys.threadRead('root-1'), { seenAt: '2026-10-07T10:00:00Z' });
     const seenAt = '2026-10-07T09:00:00.999Z';
     vi.mocked(apiFetch).mockResolvedValue({ parentID: 'ch-1', parentType: 'channel', messageID: 'r-1', unreadCount: 0, threadRootID: 'root-1', seenAt });
     await act(() => result.current.mutateAsync({ parentID: 'ch-1', parentType: 'channel', messageID: 'r-1' }));
@@ -68,17 +64,20 @@ describe('useMarkUnread', () => {
     expect(isReadHeld('ch-1')).toBe(false);
     expect(getUnreadAnchor(threadReadKey('root-1'))).toEqual({ kind: 'message', messageID: 'r-1' });
     expect(getSeenMap()['root-1']).toBe(seenAt);
-    const state = qc.getQueryData<UserState>(queryKeys.userState())!;
-    expect(state.threadSeen['root-1']).toBe(seenAt);
-    expect(state.threadMarkedUnread?.['root-1']).toBeTruthy();
-    expect(state.threadNotifications).toEqual(['root-1']);
+    const read = qc.getQueryData<ThreadReadState>(queryKeys.threadRead('root-1'))!;
+    expect(read.seenAt).toBe(seenAt);
+    expect(read.markedUnreadAt).toBeTruthy();
+    expect(qc.getQueryData<UserState>(queryKeys.userState())!.threadNotifications).toEqual(['root-1']);
 
-    // Marking again keeps the flag list free of duplicates; no cached state is fine too.
+    // Marking again keeps the flag list free of duplicates; nothing cached
+    // (the thread isn't open, the state not loaded) is fine too.
     await act(() => result.current.mutateAsync({ parentID: 'ch-1', parentType: 'channel', messageID: 'r-1' }));
     expect(qc.getQueryData<UserState>(queryKeys.userState())!.threadNotifications).toEqual(['root-1']);
     qc.removeQueries({ queryKey: queryKeys.userState() });
+    qc.removeQueries({ queryKey: queryKeys.threadReadAll() });
     await act(() => result.current.mutateAsync({ parentID: 'ch-1', parentType: 'channel', messageID: 'r-1' }));
     expect(qc.getQueryData(queryKeys.userState())).toBeUndefined();
+    expect(qc.getQueryData(queryKeys.threadRead('root-1'))).toBeUndefined();
   });
 
   it('says so when it fails', async () => {

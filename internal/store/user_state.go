@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -15,7 +14,8 @@ import (
 type UserStateStore interface {
 	SetUserState(ctx context.Context, item *model.UserStateItem) error
 	DeleteUserState(ctx context.Context, userID string, kind model.UserStateKind, targetID string) error
-	ListUserState(ctx context.Context, userID string) ([]*model.UserStateItem, error)
+	GetUserState(ctx context.Context, userID string, kind model.UserStateKind, targetID string) (*model.UserStateItem, error)
+	ListUserState(ctx context.Context, userID string, kind model.UserStateKind) ([]*model.UserStateItem, error)
 }
 
 type UserStateStoreImpl struct {
@@ -60,10 +60,35 @@ func (s *UserStateStoreImpl) DeleteUserState(ctx context.Context, userID string,
 	return nil
 }
 
-func (s *UserStateStoreImpl) ListUserState(ctx context.Context, userID string) ([]*model.UserStateItem, error) {
+// GetUserState returns one of userID's state rows; ErrNotFound when it has
+// none.
+func (s *UserStateStoreImpl) GetUserState(ctx context.Context, userID string, kind model.UserStateKind, targetID string) (*model.UserStateItem, error) {
+	out, err := s.Client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: aws.String(s.Table),
+		Key:       compositeKey(userPK(userID), userStateSK(string(kind), targetID)),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("store: get user state: %w", err)
+	}
+	if out.Item == nil {
+		return nil, ErrNotFound
+	}
+	var item userStateItem
+	if err := attributevalue.UnmarshalMap(out.Item, &item); err != nil {
+		return nil, fmt.Errorf("store: unmarshal user state: %w", err)
+	}
+	item.Kind = kind
+	return &item.UserStateItem, nil
+}
+
+// ListUserState lists userID's state rows of one kind. Never every kind at
+// once: thread_seen rows (one per thread the user ever opened, never pruned)
+// are nearly all of a user's state, and every other reader needs one small
+// kind.
+func (s *UserStateStoreImpl) ListUserState(ctx context.Context, userID string, kind model.UserStateKind) ([]*model.UserStateItem, error) {
 	keyCond := expression.KeyAnd(
 		expression.Key("PK").Equal(expression.Value(userPK(userID))),
-		expression.Key("SK").BeginsWith("STATE#"),
+		expression.Key("SK").BeginsWith(userStateSK(string(kind), "")),
 	)
 	expr := mustExpr(expression.NewBuilder().WithKeyCondition(keyCond).Build())
 	rows, err := s.queryAll(ctx, &dynamodb.QueryInput{
@@ -81,18 +106,8 @@ func (s *UserStateStoreImpl) ListUserState(ctx context.Context, userID string) (
 		if err := attributevalue.UnmarshalMap(raw, &item); err != nil {
 			return nil, fmt.Errorf("store: unmarshal user state: %w", err)
 		}
-		if item.Kind == "" {
-			item.Kind = userStateKindFromSK(item.SK)
-		}
+		item.Kind = kind
 		items = append(items, &item.UserStateItem)
 	}
 	return items, nil
-}
-
-func userStateKindFromSK(sk string) model.UserStateKind {
-	parts := strings.SplitN(sk, "#", 3)
-	if len(parts) < 2 {
-		return ""
-	}
-	return model.UserStateKind(parts[1])
 }

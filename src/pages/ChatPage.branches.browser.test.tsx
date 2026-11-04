@@ -116,6 +116,8 @@ const mockPatchListedThread = vi.hoisted(() => vi.fn());
 vi.mock('@/hooks/useThreads', () => ({
   markThreadSeen: mockMarkThreadSeen,
   noteThreadReadPosition: vi.fn(),
+  noteUnseenThreadReply: vi.fn(),
+  useThreadSeenAtOpen: () => ({ known: true, seenAt: undefined }),
   patchListedThreadFromRoot: vi.fn(),
   patchListedThread: (...args: unknown[]) => mockPatchListedThread(...args),
 }));

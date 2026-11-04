@@ -1313,20 +1313,6 @@ func (s *MessageService) SetThreadFollow(ctx context.Context, userID, parentID, 
 	return nil
 }
 
-// threadIndexEpoch is when the write-time thread-participation index (follow
-// rows written for every replier and root author, see
-// recordThreadParticipation) was live everywhere: it shipped 2026-07-08, and
-// this cut-off leaves a margin for rollout. A thread rooted after it has all
-// its participation in follow rows. An older one does once its root is
-// flagged ParticipantsIndexed (`migrate thread-participants`, or the importer
-// for imported threads); until then its replies keep the legacy read that
-// rediscovers participants from the thread's replies.
-var threadIndexEpoch = time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
-
-// ThreadIndexEpoch is threadIndexEpoch, for the thread-participants migration:
-// the threads it backfills are the ones rooted before it.
-func ThreadIndexEpoch() time.Time { return threadIndexEpoch }
-
 // threadParticipationIndex is the optional write-time /threads index the
 // follow store exposes (a conditional put). Asserted, so plain test stores
 // record nothing.
@@ -1369,7 +1355,7 @@ func (s *MessageService) recordThreadParticipation(ctx context.Context, msg *mod
 			write = s.threadFollows.SetThreadFollow
 		}
 		// These rows are how later replies find this thread's participants
-		// (see threadFullyIndexed), so a transient failure is retried, and a
+		// (resolveThreadRecipients), so a transient failure is retried, and a
 		// final one is loud: this participant could miss the thread's alerts.
 		if _, err := retryAudienceLoad(ctx, func() (struct{}, error) { return struct{}{}, write(ctx, follow) }); err != nil {
 			slog.ErrorContext(ctx, "thread participation record failed — participant may miss this thread's alerts",
