@@ -1721,7 +1721,7 @@ func TestFailNoticeCoversEveryReason(t *testing.T) {
 	for _, reason := range []string{
 		"runner_error: boom", "runner_lost", "lease_expired", "harness_missing:codex",
 		"token_mint_failed", "spawn_failed: no such binary", "no_runner", "runner_stopped",
-		"something_new_nobody_mapped", "",
+		"turn_limit", "something_new_nobody_mapped", "",
 	} {
 		got := failNotice(reason)
 		if strings.TrimSpace(got) == "" {
@@ -1730,6 +1730,11 @@ func TestFailNoticeCoversEveryReason(t *testing.T) {
 		if !strings.Contains(got, "stopped") {
 			t.Errorf("reason %q notice does not say it stopped: %q", reason, got)
 		}
+	}
+	// Running out of steps says so in plain words and how to get an answer —
+	// not a raw reason code that reads like an infrastructure outage.
+	if got := failNotice("turn_limit"); !strings.Contains(got, "ran out of steps") || strings.Contains(got, "turn_limit") {
+		t.Errorf("turn_limit notice: %q", got)
 	}
 	// An unbounded error tail is clipped rather than pasted whole into chat.
 	long := failNotice("runner_error: " + strings.Repeat("x", 500))

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -157,16 +158,27 @@ func TestRun_CeilingAndNoProgress(t *testing.T) {
 		loops = append(loops, toolOut("echo", map[string]any{}))
 	}
 	c := &fakeClient{outs: loops}
+	calls := 0
 	text, _, err := Run(context.Background(), c, Config{
 		ModelID: "m", Prompt: "p", MaxIters: 3,
 		Tools: []Tool{{Name: "echo", Description: "d", Schema: map[string]any{"type": "object"},
-			Call: func(_ context.Context, _ json.RawMessage) (string, bool) { return "ok", false }}},
+			Call: func(_ context.Context, _ json.RawMessage) (string, bool) { calls++; return "ok", false }}},
 	})
-	if err == nil || !strings.Contains(err.Error(), "without a final answer") {
-		t.Fatalf("expected ceiling error, got %v", err)
+	if !errors.Is(err, ErrTurnBudget) || !strings.Contains(err.Error(), "without a final answer") {
+		t.Fatalf("expected turn-budget error, got %v", err)
 	}
 	if text != "let me check" {
 		t.Fatalf("partial text lost: %q", text)
+	}
+	// The final turn was announced as tools-off, so its tool call never ran.
+	if len(c.calls) != 3 || calls != 2 {
+		t.Fatalf("converse calls %d, tool runs %d; want 3 and 2", len(c.calls), calls)
+	}
+	if note := lastNote(t, c.calls[2]); !strings.Contains(note, "FINAL turn") {
+		t.Fatalf("final request missing the final-turn note: %q", note)
+	}
+	if note := lastNote(t, c.calls[1]); !strings.Contains(note, "2 turns left") {
+		t.Fatalf("wrap-up note missing: %q", note)
 	}
 
 	// stopReason tool_use with no tool blocks → ErrNoProgress.
@@ -206,8 +218,11 @@ func TestRun_ErrorsAndValidation(t *testing.T) {
 	}
 	tr := c3.calls[1].Messages[len(c3.calls[1].Messages)-1].Content[0].(*types.ContentBlockMemberToolResult)
 	txt := tr.Value.Content[0].(*types.ToolResultContentBlockMemberText).Value
-	if len(txt) > toolResultCap+30 || !strings.Contains(txt, "[truncated]") {
-		t.Fatalf("tool result not truncated: %d chars", len(txt))
+	// Cut to the cap, and the model is told how much it is missing and what
+	// to do instead of re-fetching.
+	if len(txt) > toolResultCap+300 || !strings.Contains(txt, fmt.Sprintf("showing %d of %d chars", toolResultCap, len(big))) ||
+		!strings.Contains(txt, "narrower slice") {
+		t.Fatalf("tool result not truncated with guidance: %d chars, tail %q", len(txt), txt[toolResultCap:])
 	}
 }
 
@@ -407,5 +422,99 @@ func TestRun_ParallelToolExecution(t *testing.T) {
 	// Every call is announced before any result lands (OnEvent stays ordered).
 	if !strings.Contains(strings.Join(kinds, ","), "tool_call,tool_call,tool_result,tool_result") {
 		t.Fatalf("event order: %v", kinds)
+	}
+}
+
+// lastNote is the budget steer riding at the end of a request's last (tool
+// result) message — "" when the message carries none.
+func lastNote(t *testing.T, in *bedrockruntime.ConverseInput) string {
+	t.Helper()
+	content := in.Messages[len(in.Messages)-1].Content
+	if tb, ok := content[len(content)-1].(*types.ContentBlockMemberText); ok {
+		return tb.Value
+	}
+	return ""
+}
+
+// Told it is on its last turn, a model that answers is a normal completion.
+func TestRun_AnswerOnFinalTurn(t *testing.T) {
+	c := &fakeClient{outs: []*bedrockruntime.ConverseOutput{
+		toolOut("echo", map[string]any{}),
+		toolOut("echo", map[string]any{}),
+		textOut(types.StopReasonEndTurn, "found: 3 regions", 1, 1),
+	}}
+	text, _, err := Run(context.Background(), c, Config{
+		ModelID: "m", Prompt: "p", MaxIters: 3,
+		Tools: []Tool{{Name: "echo", Description: "d", Schema: map[string]any{"type": "object"},
+			Call: func(_ context.Context, _ json.RawMessage) (string, bool) { return "ok", false }}},
+	})
+	if err != nil || text != "found: 3 regions" {
+		t.Fatalf("got %q err=%v", text, err)
+	}
+	// Tool results still lead the message the note rides on.
+	if _, ok := c.calls[2].Messages[len(c.calls[2].Messages)-1].Content[0].(*types.ContentBlockMemberToolResult); !ok {
+		t.Fatal("tool result must precede the budget note")
+	}
+}
+
+// A long run hears about its budget at the halfway checkpoint and again
+// near the end — and nothing in between.
+func TestRun_BudgetNotesAcrossALongRun(t *testing.T) {
+	outs := make([]*bedrockruntime.ConverseOutput, 0, 16)
+	for range 15 {
+		outs = append(outs, toolOut("echo", map[string]any{}))
+	}
+	outs = append(outs, textOut(types.StopReasonEndTurn, "done", 1, 1))
+	c := &fakeClient{outs: outs}
+	if _, _, err := Run(context.Background(), c, Config{
+		ModelID: "m", Prompt: "p", MaxIters: 16,
+		Tools: []Tool{{Name: "echo", Description: "d", Schema: map[string]any{"type": "object"},
+			Call: func(_ context.Context, _ json.RawMessage) (string, bool) { return "ok", false }}},
+	}); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	var noted []int
+	for i, in := range c.calls[1:] {
+		if lastNote(t, in) != "" {
+			noted = append(noted, i+1)
+		}
+	}
+	// Request 8 opens the second half; 12–15 are the last four turns.
+	if fmt.Sprint(noted) != "[8 12 13 14 15]" {
+		t.Fatalf("budget notes on requests %v", noted)
+	}
+	if !strings.Contains(lastNote(t, c.calls[8]), "8 of 16 turns used") {
+		t.Fatalf("checkpoint note: %q", lastNote(t, c.calls[8]))
+	}
+}
+
+func TestBudgetNote(t *testing.T) {
+	for _, tc := range []struct {
+		maxIters, remaining int
+		want                string
+	}{
+		{32, 1, "FINAL turn"},
+		{32, 4, "4 turns left"},
+		{32, 5, ""},
+		{32, 16, "16 of 32 turns used"},
+		{32, 17, ""},
+		{12, 6, "6 of 12 turns used"},
+		// Below checkpointMinIters the halfway point is too close to the
+		// wrap-up nudge to be worth a note of its own.
+		{10, 5, ""},
+		{8, 4, "4 turns left"},
+	} {
+		got := budgetNote(tc.maxIters, tc.remaining)
+		if (tc.want == "") != (got == "") || !strings.Contains(got, tc.want) {
+			t.Errorf("budgetNote(%d, %d) = %q, want %q", tc.maxIters, tc.remaining, got, tc.want)
+		}
+	}
+}
+
+func TestTurnBudget(t *testing.T) {
+	for in, want := range map[int]int{0: itersCeiling, -1: itersCeiling, itersCeiling + 1: itersCeiling, 5: 5} {
+		if got := TurnBudget(in); got != want {
+			t.Errorf("TurnBudget(%d) = %d, want %d", in, got, want)
+		}
 	}
 }
