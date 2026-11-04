@@ -35,6 +35,14 @@ describe('CustomEmojiDialog', () => {
     await vi.waitFor(() => expect(document.activeElement?.id).toBe('emoji-name'));
   });
 
+  // A phone shows it as a sheet over the whole screen, not a box as tall as
+  // its content.
+  it.runIf(document.documentElement.classList.contains('tier-mobile'))('fills the screen on a phone', async () => {
+    const screen = await render(<CustomEmojiDialog open onOpenChange={vi.fn()} />);
+    const dialog = screen.getByTestId('custom-emoji-dialog').element() as HTMLElement;
+    await expect.poll(() => dialog.offsetHeight).toBe(window.innerHeight);
+  });
+
   it('falls back to focusing the dialog when there is no form (guests)', async () => {
     form.shown = false;
     const screen = await render(<CustomEmojiDialog open onOpenChange={vi.fn()} />);

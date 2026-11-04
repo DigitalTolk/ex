@@ -37,7 +37,7 @@ export function SettingsDialog({ open, onOpenChange, initialPage = 'profile' }: 
         mobileCloseLabel="Done"
         finalFocus={false}
         initialFocus={() => pageRef.current}
-        className="h-[min(640px,calc(100dvh-2rem))] grid-cols-[200px_minmax(0,1fr)] gap-0 overflow-hidden p-0 mobile:h-auto narrow:grid-cols-1 narrow:grid-rows-[auto_minmax(0,1fr)] narrow:p-0"
+        className="h-[min(640px,calc(100dvh-2rem))] grid-cols-[200px_minmax(0,1fr)] gap-0 overflow-hidden p-0 narrow:grid-cols-1 narrow:grid-rows-[auto_minmax(0,1fr)] narrow:p-0"
         data-testid="settings-dialog"
       >
         {/* Remount per open so every page re-reads fresh server state. */}
