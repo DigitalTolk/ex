@@ -1118,12 +1118,12 @@ describe('Sidebar browser render — rich fixtures', () => {
     expect(document.body.textContent).toContain('Headless');
   });
 
-  it('marks Threads bold, with no count, when threads have unread replies', async () => {
+  it('marks Threads bold and counts its unread threads, capped at "99+"', async () => {
     mockUserState = { ...mockUserState!, threadNotifications: Array.from({ length: 120 }, (_, i) => `msg-${i}`) };
     await render(<Frame />);
     const label = document.querySelector('[data-testid="threads-nav-label"]') as HTMLElement;
     expect(label.className).toContain('font-bold');
-    expect(document.querySelector('[data-testid="threads-unread-badge"]')).toBeNull();
+    expect(document.querySelector('[data-testid="threads-unread-badge"]')?.textContent).toBe('99+');
   });
 
   it('keeps unread channels and conversations visible inside a collapsed section', async () => {
