@@ -287,6 +287,36 @@ describe('MessageItem browser behavior', () => {
     }
   });
 
+  // Touch has no tooltip, so the long-press toast carries the watcher note.
+  it('mobile: the long-press toast says whose watcher brought an agent', async () => {
+    if (window.innerWidth > 767) return;
+    const toasts: Array<{ message: string }> = [];
+    const onToast = (detail: { message: string }) => toasts.push(detail);
+    toastListeners.add(onToast);
+    try {
+      await renderWithProviders(
+        <MessageItem
+          message={makeMessage({
+            reactions: { '👀': ['agent-gg', 'agent-qib'] },
+            agentWatchers: { 'agent-gg': 'user-1', 'agent-qib': 'user-2' },
+          })}
+          authorName="Alice"
+          isOwn={false}
+          channelId="channel-1"
+          currentUserId="user-1"
+          userMap={{ get: (id: string) => ({ displayName: { 'agent-gg': 'gg', 'agent-qib': 'qib', 'user-2': 'Bob' }[id] ?? id }) }}
+        />,
+      );
+      const badge = document.querySelector('[data-testid="reaction-badge"]') as HTMLElement;
+      badge.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'touch' }));
+      await vi.waitFor(() => expect(toasts.length).toBe(1), { timeout: 1500 });
+      expect(toasts[0].message).toBe('gg, qib reacted with 👀 · gg for you, qib for Bob');
+      badge.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerType: 'touch' }));
+    } finally {
+      toastListeners.delete(onToast);
+    }
+  });
+
   it('invokes onReplyInThread from the desktop thread-reply action on hover', async () => {
     if (window.innerWidth <= 767) return;
     const onReplyInThread = vi.fn();

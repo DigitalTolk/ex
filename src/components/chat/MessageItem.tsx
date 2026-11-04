@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type FocusEvent, type PointerEvent, type ReactNode } from 'react';
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type FocusEvent, type PointerEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { SmilePlus, MoreHorizontal, AlarmClock, Eye, Pin, Zap, type LucideIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -290,6 +290,7 @@ function ReactionChip({
   onToggle,
   disabled,
   tooltipContent,
+  interactive,
   children,
 }: {
   reactedByMe: boolean;
@@ -302,6 +303,9 @@ function ReactionChip({
   // doesn't toggle.
   disabled?: boolean;
   tooltipContent: ReactNode;
+  // The tooltip holds something to hover (a watcher agent's name), so the
+  // pointer may move into it. Tooltips are otherwise click-through.
+  interactive?: boolean;
   children: ReactNode;
 }) {
   const longPress = useLongPress({
@@ -350,7 +354,7 @@ function ReactionChip({
       </TooltipTrigger>
       <TooltipContent
         data-testid="reaction-tooltip"
-        className="flex w-[16rem] flex-col items-center gap-1.5 px-4 py-3 text-center"
+        className={`flex w-[16rem] flex-col items-center gap-1.5 px-4 py-3 text-center${interactive ? ' pointer-events-auto' : ''}`}
       >
         {tooltipContent}
       </TooltipContent>
@@ -657,14 +661,67 @@ function MessageItemImpl({
   }
 
   const REACTOR_LIST_MAX = 20;
+  function reactorName(id: string): string {
+    if (id === currentUserId) return 'You';
+    return userMap?.get(id)?.displayName ?? 'Unknown';
+  }
   function formatReactors(userIDs: string[]): string {
     const head = userIDs.slice(0, REACTOR_LIST_MAX);
-    const names = head.map((id) => {
-      if (id === currentUserId) return 'You';
-      return userMap?.get(id)?.displayName ?? 'Unknown';
-    });
+    const names = head.map(reactorName);
     const extra = userIDs.length - head.length;
     return extra > 0 ? `${names.join(', ')} and ${extra} more` : names.join(', ');
+  }
+  // An agent a watcher brought here reacts like one somebody mentioned, so
+  // the reaction looks unexplained unless we say whose watcher it was.
+  function watchedReactors(userIDs: string[]): Array<{ id: string; name: string; by: string }> {
+    return userIDs.slice(0, REACTOR_LIST_MAX).flatMap((id) => {
+      const watcherID = message.agentWatchers?.[id];
+      if (!watcherID) return [];
+      const by = watcherID === currentUserId ? 'you' : (userMap?.get(watcherID)?.displayName ?? 'someone');
+      return [{ id, name: reactorName(id), by }];
+    });
+  }
+  // The tooltip's names. An agent a watcher brought is highlighted, and
+  // hovering it says whose watcher it is.
+  function renderReactorNames(userIDs: string[]): ReactNode {
+    const head = userIDs.slice(0, REACTOR_LIST_MAX);
+    const extra = userIDs.length - head.length;
+    const watcherOf = new Map(watchedReactors(userIDs).map((w) => [w.id, w.by]));
+    return (
+      <span className="font-medium">
+        {head.map((id, i) => {
+          const by = watcherOf.get(id);
+          return (
+            <Fragment key={id}>
+              {i > 0 && ', '}
+              {by ? (
+                <span
+                  data-testid="reaction-watcher-agent"
+                  className="group/agent relative cursor-help text-link underline decoration-dotted underline-offset-2"
+                >
+                  {reactorName(id)}
+                  <span
+                    data-testid="reaction-watcher-owner"
+                    className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 hidden -translate-x-1/2 whitespace-nowrap rounded-md border bg-popover px-2 py-1 font-normal text-popover-foreground shadow-md group-hover/agent:block"
+                  >
+                    {by === 'you' ? 'Your' : by === 'someone' ? 'Someone’s' : `${by}’s`} watcher
+                  </span>
+                </span>
+              ) : (
+                reactorName(id)
+              )}
+            </Fragment>
+          );
+        })}
+        {extra > 0 && ` and ${extra} more`}
+      </span>
+    );
+  }
+  // The touch toast is one line of text, so the watcher note rides inline.
+  function reactorsToastText(userIDs: string[], emoji: string): string {
+    const base = `${formatReactors(userIDs)} reacted with ${renderReactionLabel(emoji)}`;
+    const watched = watchedReactors(userIDs).map((w) => `${w.name} for ${w.by}`);
+    return watched.length > 0 ? `${base} · ${watched.join(', ')}` : base;
   }
 
   const mobileActionsOverlay = !isEditing && !message.deleted && (mobileActionsOpen || mobileReactionPickerOpen) ? (
@@ -1138,15 +1195,16 @@ function MessageItemImpl({
                       key={emoji}
                       reactedByMe={reactedByMe}
                       ariaLabel={`${renderReactionLabel(emoji)} ${users.length}, ${reactedByMe ? 'reacted' : 'react'}`}
-                      reactorsText={`${formatReactors(users)} reacted with ${renderReactionLabel(emoji)}`}
+                      reactorsText={reactorsToastText(users, emoji)}
                       isTouch={isTouch}
                       disabled={!canModify}
                       onToggle={() => handleReact(emoji)}
+                      interactive={!!message.agentWatchers && users.some((id) => message.agentWatchers?.[id])}
                       tooltipContent={
                         <>
                           <EmojiGlyph emoji={emoji} customMap={emojiMap} size="xl" />
                           <span className="text-xs leading-snug">
-                            <span className="font-medium">{formatReactors(users)}</span>
+                            {renderReactorNames(users)}
                             <span className="text-muted-foreground"> reacted with </span>
                             <span className="font-medium">{renderReactionLabel(emoji)}</span>
                           </span>

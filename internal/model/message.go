@@ -79,6 +79,12 @@ type Message struct {
 	// skill usage is visible to everyone in the thread (run logs are
 	// invoker-only, this is the public trace).
 	AgentSkills []string `json:"agentSkills,omitempty" dynamodbav:"agentSkills,omitempty"`
+	// AgentWatchers maps an agent user id to the person whose WATCHER brought
+	// that agent to this message (a channel subscription, not a mention). The
+	// agent's run-state reactions look the same either way, so the reaction
+	// tooltip reads this to say "gg (watcher set up by Alice)" — otherwise
+	// people see an untagged agent react and nobody can tell who asked.
+	AgentWatchers map[string]string `json:"agentWatchers,omitempty" dynamodbav:"agentWatchers,omitempty"`
 	// ClientNonce echoes the sender's client-generated tag (X-Client-Nonce) on
 	// the send response and the message.new broadcast, so the sender's client
 	// can swap its optimistic "sending" row for the real message whichever
@@ -101,6 +107,7 @@ func (m *Message) Tombstone() {
 	m.AttachmentIDs = nil
 	m.MessageAttachments = nil
 	m.Reactions = nil
+	m.AgentWatchers = nil
 	m.Pinned = false
 	m.PinnedAt = nil
 	m.PinnedBy = ""
