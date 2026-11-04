@@ -99,7 +99,7 @@ describe('MessageItem "Remind me" — real POST', () => {
     await userEvent.click(screen.getByTestId('remind-me-trigger'));
     await userEvent.click(screen.getByTestId('remind-custom'));
     await pickTomorrow();
-    await userEvent.fill(screen.getByTestId('reminder-time'), '09:00');
+    await dialMorning(9);
     await userEvent.click(screen.getByTestId('reminder-confirm'));
 
     await vi.waitFor(() => expect(reminderPosts().length).toBe(1));
