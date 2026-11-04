@@ -58,6 +58,18 @@ function reminderPosts(): Array<[string, { method?: string; body: string }]> {
 beforeEach(() => apiFetchMock.mockClear());
 afterEach(() => cleanup());
 
+
+// A phone sets the time on the clock dial (no field to type into). Its
+// numbers let pointers through to the face, so they're pressed as buttons.
+async function dialMorning(hour: number) {
+  const press = (id: string) => (document.querySelector(`[data-testid="${id}"]`) as HTMLButtonElement).click();
+  press('reminder-dial-am');
+  await vi.waitFor(() => expect(document.querySelector(`[data-testid="reminder-dial-hour-${hour}"]`)).not.toBeNull());
+  press(`reminder-dial-hour-${hour}`);
+  await vi.waitFor(() => expect(document.querySelector('[data-testid="reminder-dial-minute-0"]')).not.toBeNull());
+  press('reminder-dial-minute-0');
+}
+
 describe('MessageItem "Remind me" — real POST', () => {
   it('a preset issues POST /api/v1/reminders with the message + future time', async () => {
     if (window.innerWidth <= 767) return; // desktop menu
@@ -105,7 +117,7 @@ describe('MessageItem "Remind me" — real POST', () => {
     await vi.waitFor(() => expect(document.querySelector('[data-testid="mobile-message-actions"]')).not.toBeNull(), { timeout: 2000 });
     await userEvent.click(document.querySelector('[data-testid="mobile-remind"]') as HTMLButtonElement);
     await pickTomorrow();
-    await userEvent.fill(document.querySelector('[data-testid="reminder-time"]') as HTMLInputElement, '09:00');
+    await dialMorning(9);
     // On mobile the confirm lives in the dialog's top-right header (the iOS
     // date wheel covers a bottom footer).
     await userEvent.click(document.querySelector('[data-slot="dialog-mobile-action"]') as HTMLButtonElement);

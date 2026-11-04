@@ -8,7 +8,7 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Calendar, CalendarDayButton } from '@/components/ui/calendar';
-import { TimePicker } from '@/components/ui/time-picker';
+import { ClockDial } from '@/components/ui/clock-dial';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { combineDateAndClock, describeDelay, formatClockTime, hourCycleOf, parseClockTime, splitDateTimeSeed, stepClockTime, type ClockTime } from '@/lib/clock-time';
 import { REMINDER_PRESETS, computeReminderTime } from '@/lib/reminder-times';
@@ -16,6 +16,7 @@ import { formatScheduleTime } from '@/lib/schedule-times';
 import { inputValueForDate } from '@/lib/datetime-input';
 import { dayKey } from '@/lib/format';
 import { localTimeZone } from '@/lib/user-time';
+import { ReminderPeoplePicker } from '@/components/chat/ReminderPeoplePicker';
 
 // A quick pick fills the calendar and time with a ready-made instant; the
 // reader can still adjust before confirming.
@@ -31,15 +32,25 @@ interface ReminderDialogProps {
   // initialValue is a `YYYY-MM-DDTHH:mm` seed (computed by the opener so the
   // impure clock read happens in an event handler, never during render).
   initialValue: string;
-  // onConfirm schedules the reminder for the chosen time. It resolves on success
-  // (the dialog then closes) and rejects on failure (the dialog stays open and
-  // surfaces the error) — so scheduling is never silent.
-  onConfirm: (when: Date) => Promise<void>;
+  // onConfirm schedules the reminder for the chosen time (and, with people,
+  // the people picked). It resolves on success (the dialog then closes) and
+  // rejects on failure (the dialog stays open and surfaces the error) — so
+  // scheduling is never silent.
+  onConfirm: (when: Date, userIDs: string[]) => Promise<void>;
+  // people adds the "Also remind" picker, offering that chat's people.
+  people?: ReminderPeople;
   // copy rewords the dialog for another "pick a future time" use (scheduling
   // a message); reminders use the default.
   copy?: DateTimeDialogCopy;
   // The row of quick picks above the fields; reminders use their presets.
   quickPicks?: QuickPick[];
+}
+
+export interface ReminderPeople {
+  parentID: string;
+  parentType: 'channel' | 'conversation';
+  // Who is already on it, when editing a reminder.
+  initial?: string[];
 }
 
 export interface DateTimeDialogCopy {
@@ -89,8 +100,10 @@ export function ReminderDialog({
   onConfirm,
   copy = REMINDER_COPY,
   quickPicks = REMINDER_QUICK_PICKS,
+  people,
 }: ReminderDialogProps) {
   const [fields, setFields] = useState(() => splitDateTimeSeed(initialValue));
+  const [userIDs, setUserIDs] = useState<string[]>(() => people?.initial ?? []);
   // The month the calendar shows; follows a quick pick, otherwise the reader's.
   const [month, setMonth] = useState<Date | undefined>(() => dateOf(splitDateTimeSeed(initialValue).date));
   // The preview compares against the clock, so it is worked out in the
@@ -136,7 +149,7 @@ export function ReminderDialog({
     setPending(true);
     setError('');
     try {
-      await onConfirm(when);
+      await onConfirm(when, userIDs);
       onOpenChange(false);
     } catch {
       setError(copy.failed);
@@ -193,32 +206,39 @@ export function ReminderDialog({
                 DayButton: (props) => <CalendarDayButton {...props} data-testid={`reminder-day-${dayKey(props.day.date)}`} />,
               }}
             />
-            <div className="flex min-w-0 flex-1 flex-col gap-2 sm:h-[17.5rem]">
-              <input
-                type="text"
-                autoComplete="off"
-                aria-label="Time"
-                data-testid="reminder-time"
-                placeholder={formatClockTime({ hour: 9, minute: 0 })}
-                className="w-full rounded-md border border-border bg-background px-3 py-2 text-base md:text-sm mobile:h-11"
-                value={fields.time}
-                onChange={(e) => update({ ...fields, time: e.target.value })}
-                onBlur={() => {
-                  // Tidy what was typed into the clock format ("930" → "9:30 AM").
-                  if (clock) setFields({ ...fields, time: formatClockTime(clock) });
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') void confirm();
-                  // Arrow keys nudge the time a quarter hour, like the list below.
-                  if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && clock) {
-                    e.preventDefault();
-                    setTime(stepClockTime(clock, e.key === 'ArrowUp' ? -15 : 15));
-                  }
-                }}
-              />
-              <TimePicker value={clock} onChange={setTime} hourCycle={HOUR_CYCLE} className="min-h-0 max-sm:h-44 sm:flex-1" testIdPrefix="reminder" />
+            <div className="flex min-w-0 flex-1 flex-col items-center gap-3">
+              {/* Desktop keeps a field to type into ("930", "2pm"); a phone
+                  picks on the dial alone, with no keyboard to cover the sheet. */}
+              {!isMobile && (
+                <input
+                  type="text"
+                  autoComplete="off"
+                  aria-label="Time"
+                  data-testid="reminder-time"
+                  placeholder={formatClockTime({ hour: 9, minute: 0 })}
+                  className="w-full rounded-md border border-border bg-background px-3 py-2 text-base md:text-sm mobile:h-11"
+                  value={fields.time}
+                  onChange={(e) => update({ ...fields, time: e.target.value })}
+                  onBlur={() => {
+                    // Tidy what was typed into the clock format ("930" → "9:30 AM").
+                    if (clock) setFields({ ...fields, time: formatClockTime(clock) });
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') void confirm();
+                    // Arrow keys nudge the time a quarter hour.
+                    if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && clock) {
+                      e.preventDefault();
+                      setTime(stepClockTime(clock, e.key === 'ArrowUp' ? -15 : 15));
+                    }
+                  }}
+                />
+              )}
+              <ClockDial value={clock} onChange={setTime} hourCycle={HOUR_CYCLE} testIdPrefix="reminder" />
             </div>
           </div>
+          {people && (
+            <ReminderPeoplePicker parentID={people.parentID} parentType={people.parentType} value={userIDs} onChange={setUserIDs} />
+          )}
           {preview && (
             <p className="text-sm text-muted-foreground" data-testid="reminder-preview">
               {preview}

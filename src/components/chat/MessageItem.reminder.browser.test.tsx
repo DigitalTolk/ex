@@ -75,6 +75,18 @@ async function openMenu() {
 beforeEach(() => { createReminderMutate.mockClear(); createReminderMutateAsync.mockClear(); });
 afterEach(() => cleanup());
 
+
+// A phone sets the time on the clock dial (no field to type into). Its
+// numbers let pointers through to the face, so they're pressed as buttons.
+async function dialMorning(hour: number) {
+  const press = (id: string) => (document.querySelector(`[data-testid="${id}"]`) as HTMLButtonElement).click();
+  press('reminder-dial-am');
+  await vi.waitFor(() => expect(document.querySelector(`[data-testid="reminder-dial-hour-${hour}"]`)).not.toBeNull());
+  press(`reminder-dial-hour-${hour}`);
+  await vi.waitFor(() => expect(document.querySelector('[data-testid="reminder-dial-minute-0"]')).not.toBeNull());
+  press('reminder-dial-minute-0');
+}
+
 describe('MessageItem "Remind me"', () => {
   it('schedules a preset reminder for a channel message', async () => {
     if (window.innerWidth <= 767) return; // desktop menu only
@@ -188,7 +200,7 @@ describe('MessageItem "Remind me"', () => {
     await openMobileSheet();
     await userEvent.click(document.querySelector('[data-testid="mobile-remind"]') as HTMLButtonElement);
         await pickTomorrow();
-    await userEvent.fill(document.querySelector('[data-testid="reminder-time"]') as HTMLInputElement, '08:00');
+    await dialMorning(8);
     // On mobile the confirm lives in the dialog's top-right header (the iOS
     // date wheel covers a bottom footer).
     await userEvent.click(document.querySelector('[data-slot="dialog-mobile-action"]') as HTMLButtonElement);
@@ -263,7 +275,7 @@ describe('MessageItem "Remind me" — self-DM parity', () => {
         await openMobileSheet();
         await userEvent.click(document.querySelector('[data-testid="mobile-remind"]') as HTMLButtonElement);
                 await pickTomorrow();
-        await userEvent.fill(document.querySelector('[data-testid="reminder-time"]') as HTMLInputElement, '08:00');
+        await dialMorning(8);
         await userEvent.click(document.querySelector('[data-slot="dialog-mobile-action"]') as HTMLButtonElement);
         await vi.waitFor(() => expect(createReminderMutateAsync).toHaveBeenCalledTimes(1));
         expect(createReminderMutateAsync.mock.calls[0][0]).toMatchObject({

@@ -232,6 +232,7 @@ func NewRouter(d *Deps) http.Handler {
 		mux.Handle("POST /api/v1/activity/items/remove", middleware.WrapFunc(activityH.RemoveItems, authMW, writeLimit))
 		mux.Handle("POST /api/v1/reminders", middleware.WrapFunc(activityH.CreateReminder, authMW, writeLimit))
 		mux.Handle("GET /api/v1/reminders", middleware.WrapFunc(activityH.ListReminders, authMW))
+		mux.Handle("PATCH /api/v1/reminders/{id}", middleware.WrapFunc(activityH.UpdateReminder, authMW, writeLimit))
 		mux.Handle("DELETE /api/v1/reminders/{id}", middleware.WrapFunc(activityH.CancelReminder, authMW))
 	}
 

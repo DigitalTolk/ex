@@ -140,6 +140,10 @@ type Reminder struct {
 	ParentMessageID string    `json:"parentMessageID,omitempty"`
 	ChannelSlug     string    `json:"channelSlug,omitempty"`
 	MessagePreview  string    `json:"messagePreview,omitempty"`
-	RemindAt        time.Time `json:"remindAt"`
-	CreatedAt       time.Time `json:"createdAt"`
+	// UserIDs are the people the owner added: when it comes due, the reminder
+	// bot replies to the message tagging the owner and them. Without any, the
+	// bot DMs the owner alone.
+	UserIDs   []string  `json:"userIDs,omitempty"`
+	RemindAt  time.Time `json:"remindAt"`
+	CreatedAt time.Time `json:"createdAt"`
 }

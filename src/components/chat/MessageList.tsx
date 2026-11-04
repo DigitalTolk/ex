@@ -24,6 +24,7 @@ import {
 } from '@/lib/read-position';
 import { isNewTo, resolveUnreadDivider, unreadFrom } from '@/lib/unread-divider';
 import { useUnreadThreadIDs } from '@/hooks/useUnreadThreads';
+import { useMessageReminders } from '@/hooks/useActivity';
 import { MessageRowDataProvider } from './MessageRowDataProvider';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useMessageListAnchor } from './useMessageListAnchor';
@@ -196,6 +197,7 @@ function VirtuosoMessageList({
   );
   const threadMeta = useMemo(() => deriveThreadMeta(allMessages), [allMessages]);
   const unreadThreads = useUnreadThreadIDs();
+  const reminders = useMessageReminders();
 
   // The "New messages" line (lib/read-position): where this visit's unread
   // starts. A count anchor — the unread count when the chat was opened — is
@@ -702,6 +704,7 @@ function VirtuosoMessageList({
               quickReactions={quickReactions}
               readOnly={readOnly}
               threadHasNew={unreadThreads.has(row.message.id)}
+              reminder={reminders.get(row.message.id)}
             />
           );
         }}
@@ -790,6 +793,7 @@ const MessageRow = memo(function MessageRow({
   quickReactions,
   readOnly,
   threadHasNew,
+  reminder,
 }: MessageRowProps) {
   const msg = row.message;
   const handleContentHeightChange = useCallback(() => {
@@ -840,6 +844,7 @@ const MessageRow = memo(function MessageRow({
         quickReactions={quickReactions}
         readOnly={readOnly}
         threadHasNew={threadHasNew}
+        reminder={reminder}
       />
     </div>
   );

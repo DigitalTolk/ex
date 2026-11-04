@@ -41,6 +41,7 @@ vi.mock('@/hooks/useMessages', () => ({
 // (hence MessageItem) without a QueryClientProvider, so stub the hook.
 vi.mock('@/hooks/useActivity', () => ({
   useCreateReminder: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(() => Promise.resolve({})), isPending: false }),
+  useMessageReminders: () => new Map(),
 }));
 vi.mock('@/hooks/useMarkUnread', () => ({
   useMarkUnread: () => ({ mutate: vi.fn(), isPending: false }),

@@ -10,19 +10,30 @@ import { useUserConversations } from '@/hooks/useConversations';
 import { useDeleteDraft, useDrafts } from '@/hooks/useDrafts';
 import { useScheduledMessages } from '@/hooks/useScheduledMessages';
 import { ScheduledMessagesList } from '@/components/chat/ScheduledMessagesList';
+import { RemindersList } from '@/components/chat/RemindersList';
+import { useReminders } from '@/hooks/useActivity';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { formatLongDateTime, slugify } from '@/lib/format';
 import { toPlainTextPreview } from '@/lib/message-preview';
 import type { MessageDraft } from '@/types';
 
-// DraftsPage holds messages not sent yet: unfinished drafts, and (the
-// Scheduled tab, ?tab=scheduled) messages set to send later.
+const TABS = {
+  drafts: { label: 'Drafts', about: "Messages you started but haven't sent yet." },
+  scheduled: { label: 'Scheduled', about: 'Messages set to send later.' },
+  reminders: { label: 'Reminders', about: 'Reminders you set. When one is due, the Reminder bot DMs you, or tags you and the people you added.' },
+} as const;
+type Tab = keyof typeof TABS;
+
+// DraftsPage holds what's still to come: unfinished drafts, messages set to
+// send later (?tab=scheduled) and reminders (?tab=reminders).
 export default function DraftsPage() {
   useDocumentTitle('Drafts');
   const [params, setParams] = useSearchParams();
-  const tab = params.get('tab') === 'scheduled' ? 'scheduled' : 'drafts';
+  const asked = params.get('tab');
+  const tab: Tab = asked === 'scheduled' || asked === 'reminders' ? asked : 'drafts';
   const { data: scheduled } = useScheduledMessages();
-  const scheduledCount = scheduled?.length ?? 0;
+  const { data: reminders } = useReminders();
+  const counts: Record<Tab, number> = { drafts: 0, scheduled: scheduled?.length ?? 0, reminders: reminders?.length ?? 0 };
 
   return (
     <PageContainer mobileTitle="Drafts">
@@ -30,28 +41,28 @@ export default function DraftsPage() {
       <h1 className="sr-only">Drafts</h1>
       <div>
         <div role="tablist" aria-label="Drafts sections" className="flex gap-1 border-b">
-          {(['drafts', 'scheduled'] as const).map((t) => (
+          {(Object.keys(TABS) as Tab[]).map((t) => (
             <button
               key={t}
               role="tab"
               aria-selected={tab === t}
-              onClick={() => setParams(t === 'scheduled' ? { tab: 'scheduled' } : {}, { replace: true })}
+              onClick={() => setParams(t === 'drafts' ? {} : { tab: t }, { replace: true })}
               className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium ${
                 tab === t ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'
               }`}
             >
-              {t === 'drafts' ? 'Drafts' : 'Scheduled'}
-              {t === 'scheduled' && scheduledCount > 0 && (
-                <span className="ml-1.5 rounded-full bg-muted px-1.5 text-xs tabular-nums text-muted-foreground">{scheduledCount}</span>
+              {TABS[t].label}
+              {counts[t] > 0 && (
+                <span className="ml-1.5 rounded-full bg-muted px-1.5 text-xs tabular-nums text-muted-foreground">{counts[t]}</span>
               )}
             </button>
           ))}
         </div>
-        <p className="mt-3 text-sm text-muted-foreground">
-          {tab === 'scheduled' ? 'Messages set to send later.' : "Messages you started but haven't sent yet."}
-        </p>
+        <p className="mt-3 text-sm text-muted-foreground">{TABS[tab].about}</p>
       </div>
-      {tab === 'scheduled' ? <ScheduledMessagesList /> : <DraftsList />}
+      {tab === 'scheduled' && <ScheduledMessagesList />}
+      {tab === 'reminders' && <RemindersList />}
+      {tab === 'drafts' && <DraftsList />}
     </PageContainer>
   );
 }

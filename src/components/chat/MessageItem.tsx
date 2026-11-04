@@ -21,6 +21,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { LazyReminderDialog as ReminderDialog } from '@/components/chat/LazyReminderDialog';
 import { WatcherDialog } from '@/components/chat/WatcherDialog';
+import { ReminderMark } from '@/components/chat/ReminderMark';
 import { NotSentMark } from '@/components/chat/MessageSendState';
 import { useMessageRowData, useProvidedMessageRowData, type MessageRowData } from '@/hooks/useMessageRowData';
 import { EmojiPicker } from '@/components/EmojiPicker';
@@ -64,7 +65,7 @@ import { useMobileBackClose } from '@/hooks/useMobileBackClose';
 import { useTransientOverlayCleanup } from '@/hooks/useTransientOverlayCleanup';
 import { useIsOnline } from '@/stores/presence';
 import { useMessageActions, type MessageAction } from '@/components/chat/useMessageActions';
-import type { Message, UserStatus } from '@/types';
+import type { Message, Reminder, UserStatus } from '@/types';
 
 // Module-level Set so MessageList/ThreadPanel don't need to thread a
 // context through every callsite. Listeners are MessageItems with an
@@ -257,6 +258,8 @@ interface MessageItemProps {
   // This root's thread has replies the viewer hasn't read: its reply bar
   // says so.
   threadHasNew?: boolean;
+  // Your pending reminder on this message, shown as a ⏰ (ReminderMark).
+  reminder?: Reminder;
 }
 
 function formatTime(dateStr: string): string {
@@ -383,6 +386,7 @@ function MessageItemImpl({
   onContentHeightChange,
   quickReactions,
   threadHasNew,
+  reminder,
 }: MessageItemProps & { rowData: MessageRowData }) {
   const isWebhook = !!message.webhookUsername;
   // Per-author presence subscription: only rows whose author actually
@@ -1033,6 +1037,7 @@ function MessageItemImpl({
               Pinned
             </span>
           )}
+          {reminder && <ReminderMark reminder={reminder} />}
           {myWatchers.length > 0 && (
             <button
               type="button"
@@ -1101,10 +1106,19 @@ function MessageItemImpl({
                 // show "(edited)"), so the marker rides the end of the text's
                 // last line instead, Slack-style.
                 trailing={
-                  !firstInGroup && message.editedAt ? (
-                    <span data-testid="grouped-edited-marker" className="ml-1 text-xs text-muted-foreground">
-                      (edited)
-                    </span>
+                  !firstInGroup && (message.editedAt || reminder) ? (
+                    <>
+                      {message.editedAt && (
+                        <span data-testid="grouped-edited-marker" className="ml-1 text-xs text-muted-foreground">
+                          (edited)
+                        </span>
+                      )}
+                      {reminder && (
+                        <span className="ml-1 inline-flex align-middle">
+                          <ReminderMark reminder={reminder} />
+                        </span>
+                      )}
+                    </>
                   ) : undefined
                 }
               />
@@ -1364,6 +1378,7 @@ function MessageItemImpl({
           onOpenChange={reminderDialog.setOpen}
           initialValue={reminderDialog.seed}
           onConfirm={reminderDialog.schedule}
+          people={reminderDialog.people}
         />
       )}
       {watcherDialog.open && (

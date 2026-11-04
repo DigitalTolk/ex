@@ -17,6 +17,10 @@ export interface User {
   // Directory attributes synced from Microsoft 365 at SSO login (read-only).
   phone?: string;
   manager?: UserManager;
+  // A machine account (a webhook's or the reminder bot's), and an agent
+  // ("agent"): neither is someone to tag in a reminder.
+  isBot?: boolean;
+  kind?: string;
 }
 
 // UserManager is the employee-directory manager reference shown on profile
@@ -432,6 +436,9 @@ export interface Reminder {
   parentMessageID?: string;
   channelSlug?: string;
   messagePreview?: string;
+  // People tagged besides the owner when it comes due (the reminder bot's
+  // reply); none means a personal reminder, the bot's DM to its owner.
+  userIDs?: string[];
   remindAt: string;
   createdAt: string;
 }

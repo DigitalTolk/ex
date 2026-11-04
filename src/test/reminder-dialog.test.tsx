@@ -71,12 +71,16 @@ describe('ReminderDialog', () => {
     expect([when.getMonth(), when.getDate(), when.getHours(), when.getMinutes()]).toEqual([0, 15, 10, 30]);
   });
 
-  it('the time list sets the field, and arrow keys nudge it a quarter hour', () => {
+  it('the clock dial sets the field, and arrow keys nudge it a quarter hour', () => {
     setup('2999-01-01T09:00');
-    expect(screen.getByTestId('reminder-slot-9-0')).toHaveAttribute('aria-selected', 'true');
-    fireEvent.click(screen.getByTestId('reminder-slot-14-15'));
+    // The dial opens on the hours, with the seed's hour chosen.
+    expect(screen.getByTestId('reminder-dial-hour-9')).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(screen.getByTestId('reminder-dial-pm'));
+    fireEvent.click(screen.getByTestId('reminder-dial-hour-14'));
+    // Picking the hour turns the dial to the minutes.
+    fireEvent.click(screen.getByTestId('reminder-dial-minute-15'));
     expect((screen.getByTestId('reminder-time') as HTMLInputElement).value).toMatch(/2:15 PM/);
-    expect(screen.getByTestId('reminder-slot-14-15')).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByTestId('reminder-dial-minute-15')).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByTestId('reminder-preview')).toHaveTextContent(/2:15 PM/);
     fireEvent.keyDown(screen.getByTestId('reminder-time'), { key: 'ArrowDown' });
     expect((screen.getByTestId('reminder-time') as HTMLInputElement).value).toMatch(/2:30 PM/);
@@ -149,6 +153,18 @@ describe('ReminderDialog', () => {
       expect(btn).not.toBeNull();
       return btn as HTMLButtonElement;
     }
+
+    it('picks the time on the dial alone, with no field to type into', async () => {
+      mockIsMobile = true;
+      const { onConfirm } = setup('2999-01-01T09:00');
+      expect(screen.queryByTestId('reminder-time')).not.toBeInTheDocument();
+      fireEvent.click(screen.getByTestId('reminder-dial-hour-7'));
+      fireEvent.click(screen.getByTestId('reminder-dial-minute-45'));
+      fireEvent.click(mobileAction());
+      await waitFor(() => expect(onConfirm).toHaveBeenCalledTimes(1));
+      const when = onConfirm.mock.calls[0][0] as Date;
+      expect([when.getHours(), when.getMinutes()]).toEqual([7, 45]);
+    });
 
     it('moves Set reminder into the top header and drops the footer', () => {
       mockIsMobile = true;

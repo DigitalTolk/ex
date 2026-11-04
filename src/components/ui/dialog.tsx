@@ -132,8 +132,12 @@ function DialogContent({
           // (max-h-none + inset-0) and scrolls the whole sheet. Full-screen,
           // its rows stack from the top (content-start): the grid would
           // otherwise stretch them to fill the screen, opening gaps between
-          // the title and a short body.
-          "fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] max-h-[calc(100dvh-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 overflow-y-auto rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none mobile:inset-0 mobile:content-start mobile:max-h-none mobile:max-w-none mobile:translate-x-0 mobile:translate-y-0 mobile:overflow-y-auto mobile:rounded-none mobile:p-[calc(env(safe-area-inset-top)+0.5rem)_1rem_calc(env(safe-area-inset-bottom)+1rem)] data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          // the title and a short body. Its height is the space above the
+          // on-screen keyboard (--ex-app-height, set by useKeyboardInset)
+          // while one is up: iOS doesn't shrink a fixed sheet for it, so a
+          // field low in the sheet sat behind the keyboard, and bringing it
+          // into view did nothing — as far as the sheet knew it was on screen.
+          "fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] max-h-[calc(100dvh-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 overflow-y-auto rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none mobile:inset-0 mobile:bottom-auto mobile:h-[var(--ex-app-height,100%)] mobile:content-start mobile:max-h-none mobile:max-w-none mobile:translate-x-0 mobile:translate-y-0 mobile:overflow-y-auto mobile:rounded-none mobile:p-[calc(env(safe-area-inset-top)+0.5rem)_1rem_calc(env(safe-area-inset-bottom)+1rem)] data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           DIALOG_SIZE[size],
           hasMobileBar && "mobile:[&_[data-slot=dialog-header]]:pr-20",
           mobileCloseLabel && effectiveAction && "mobile:[&_[data-slot=dialog-header]]:pr-40",

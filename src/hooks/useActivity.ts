@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { ApiError, apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
@@ -60,12 +61,31 @@ export function useReminders() {
   });
 }
 
+const NO_REMINDERS: ReadonlyMap<string, Reminder> = new Map();
+
+// useMessageReminders maps each message you have a pending reminder on to
+// its soonest one, for the ⏰ on its row. Built once per list from the pending
+// list, so a row gets only its own entry (and only its row re-renders when
+// that reminder changes).
+export function useMessageReminders(): ReadonlyMap<string, Reminder> {
+  const { data } = useReminders();
+  return useMemo(() => {
+    if (!data?.length) return NO_REMINDERS;
+    const byMessage = new Map<string, Reminder>();
+    // Soonest first, so the first one seen per message is its next.
+    for (const r of data) if (!byMessage.has(r.messageID)) byMessage.set(r.messageID, r);
+    return byMessage;
+  }, [data]);
+}
+
 export interface CreateReminderInput {
   messageID: string;
   parentID: string;
   parentType: 'channel' | 'conversation';
   channelSlug?: string;
   remindAt: string; // ISO8601
+  // People to tag besides the owner when it comes due.
+  userIDs?: string[];
 }
 
 // useCreateReminder schedules a reminder, then refreshes the pending list. Both
@@ -86,6 +106,28 @@ export function useCreateReminder() {
     onError: () => {
       showToast("Couldn't set the reminder — please try again.");
     },
+  });
+}
+
+export interface UpdateReminderInput {
+  id: string;
+  remindAt: string; // ISO8601
+  userIDs: string[];
+}
+
+// useUpdateReminder changes a pending reminder's time and people. The dialog
+// awaits it and shows the failure itself; one that fired or was cancelled
+// meanwhile (404) also drops out of the refreshed list.
+export function useUpdateReminder() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...body }: UpdateReminderInput) =>
+      apiFetch<Reminder>(`/api/v1/reminders/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        body: JSON.stringify(body),
+      }),
+    onSettled: () => void qc.invalidateQueries({ queryKey: queryKeys.reminders() }),
+    onSuccess: () => showToast('Reminder updated', 'success'),
   });
 }
 
