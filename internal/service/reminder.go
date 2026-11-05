@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/DigitalTolk/ex/internal/apperr"
 	"github.com/DigitalTolk/ex/internal/events"
@@ -28,6 +29,9 @@ const reminderClaimBatch = 100
 // maxReminderPeople caps how many people one reminder may tag besides its
 // owner.
 const maxReminderPeople = 20
+
+// maxReminderNote caps a reminder's note, in characters.
+const maxReminderNote = 500
 
 // The reminder bot's name and avatar emoji, on every message it posts.
 const (
@@ -109,12 +113,16 @@ type ReminderInput struct {
 	RemindAt    time.Time `json:"remindAt"`
 	// UserIDs are people to tag besides the owner when it comes due.
 	UserIDs []string `json:"userIDs"`
+	// Note is optional context, shown with the reminder.
+	Note string `json:"note"`
 }
 
-// ReminderUpdate is an edit of a pending reminder: its new time and people.
+// ReminderUpdate is an edit of a pending reminder: its new time, people and
+// note.
 type ReminderUpdate struct {
 	RemindAt time.Time `json:"remindAt"`
 	UserIDs  []string  `json:"userIDs"`
+	Note     string    `json:"note"`
 }
 
 // ReminderService schedules per-message reminders and fires them at their due
@@ -286,6 +294,10 @@ func (s *ReminderService) Schedule(ctx context.Context, userID string, in Remind
 	if err := s.checkRemindAt(in.RemindAt); err != nil {
 		return nil, err
 	}
+	note, err := reminderNote(in.Note)
+	if err != nil {
+		return nil, err
+	}
 	if err := s.access.CheckAccess(ctx, userID, in.ParentID, in.ParentType); err != nil {
 		return nil, err
 	}
@@ -314,6 +326,7 @@ func (s *ReminderService) Schedule(ctx context.Context, userID string, in Remind
 		ChannelSlug:     in.ChannelSlug,
 		MessagePreview:  messagePreview(ctx, s.mentions, msg),
 		UserIDs:         people,
+		Note:            note,
 		RemindAt:        in.RemindAt,
 		CreatedAt:       now,
 	}
@@ -332,6 +345,16 @@ func (s *ReminderService) checkRemindAt(at time.Time) error {
 		return ErrReminderTimeInvalid
 	}
 	return nil
+}
+
+// reminderNote tidies a reminder's note: trimmed, and at most
+// maxReminderNote characters.
+func reminderNote(note string) (string, error) {
+	note = strings.TrimSpace(note)
+	if utf8.RuneCountInString(note) > maxReminderNote {
+		return "", apperr.Invalid("reminder: a note is at most %d characters", maxReminderNote)
+	}
+	return note, nil
 }
 
 // people vets the people a reminder will tag: each once, never the owner, at
@@ -376,11 +399,15 @@ func (s *ReminderService) people(ctx context.Context, ownerID, parentID, parentT
 	return out, nil
 }
 
-// Update changes a pending reminder's time and people. Returns
+// Update changes a pending reminder's time, people and note. Returns
 // store.ErrNotFound when the user has no such pending reminder (it fired, was
 // cancelled, or isn't theirs).
 func (s *ReminderService) Update(ctx context.Context, userID, id string, in ReminderUpdate) (*model.Reminder, error) {
 	if err := s.checkRemindAt(in.RemindAt); err != nil {
+		return nil, err
+	}
+	note, err := reminderNote(in.Note)
+	if err != nil {
 		return nil, err
 	}
 	r, err := s.store.GetPendingReminder(ctx, userID, id)
@@ -393,6 +420,7 @@ func (s *ReminderService) Update(ctx context.Context, userID, id string, in Remi
 	}
 	r.RemindAt = in.RemindAt
 	r.UserIDs = people
+	r.Note = note
 	if err := s.store.RescheduleReminder(ctx, r); err != nil {
 		return nil, err
 	}
@@ -554,7 +582,7 @@ func (s *ReminderService) post(ctx context.Context, r *model.Reminder) error {
 	if root == "" {
 		root = r.MessageID
 	}
-	body := "⏰ Reminder for " + s.mentionList(ctx, r)
+	body := "⏰ Reminder for " + s.mentionList(ctx, r) + quoteNote(r.Note)
 	if r.ParentMessageID != "" {
 		// A reply in a long thread: point at the very message.
 		body += "\n" + s.messageURL(r)
@@ -585,7 +613,7 @@ func (s *ReminderService) dmOwner(ctx context.Context, r *model.Reminder) error 
 		ParentID:   conv.ID,
 		ParentType: ParentConversation,
 		AuthorID:   bot.ID,
-		Body:       "⏰ You asked me to remind you about this message:\n" + s.messageURL(r),
+		Body:       "⏰ You asked me to remind you about this message:" + quoteNote(r.Note) + "\n" + s.messageURL(r),
 		Username:   reminderBotName,
 		IconEmoji:  reminderBotEmoji,
 	})
@@ -612,6 +640,15 @@ func (s *ReminderService) mentionList(ctx context.Context, r *model.Reminder) st
 		tags = append(tags, reminderMention(id, names[id]))
 	}
 	return strings.Join(tags, " ")
+}
+
+// quoteNote is a reminder's note as a quote on the lines after the bot's
+// opening line; nothing without one.
+func quoteNote(note string) string {
+	if note == "" {
+		return ""
+	}
+	return "\n> " + strings.ReplaceAll(note, "\n", "\n> ")
 }
 
 // reminderMention writes the "@[id|Name]" mention, its name kept clear of
@@ -650,6 +687,9 @@ func (s *ReminderService) firePrivate(ctx context.Context, r *model.Reminder) {
 		body := r.MessagePreview
 		if body == "" {
 			body = "You asked to be reminded about a message."
+		}
+		if r.Note != "" {
+			body = r.Note + "\n" + body
 		}
 		s.notifier.NotifyDirect(ctx, r.UserID, Notification{
 			Kind:       NotificationKindReminder,

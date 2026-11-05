@@ -15,7 +15,7 @@ vi.mock('@/context/AuthContext', () => ({ useOptionalAuth: () => ({ user: me.use
 
 const future = new Date(Date.now() + 2 * 24 * 3600e3).toISOString();
 const reminders: Reminder[] = [
-  { id: 'r-1', userID: 'u-1', messageID: 'm-1', parentID: 'ch-1', parentType: 'channel', channelSlug: 'team-room', parentMessageID: 'root-1', messagePreview: 'Ship **it** at nine', userIDs: ['u-2', 'u-gone'], remindAt: future, createdAt: '' },
+  { id: 'r-1', userID: 'u-1', messageID: 'm-1', parentID: 'ch-1', parentType: 'channel', channelSlug: 'team-room', parentMessageID: 'root-1', messagePreview: 'Ship **it** at nine', userIDs: ['u-2', 'u-gone'], note: 'bring the Q3 numbers', remindAt: future, createdAt: '' },
   { id: 'r-2', userID: 'u-1', messageID: 'm-2', parentID: 'dm-1', parentType: 'conversation', remindAt: future, createdAt: '' },
   { id: 'r-3', userID: 'u-1', messageID: 'm-3', parentID: 'ch-gone', parentType: 'channel', channelSlug: 'old-room', messagePreview: 'hi', remindAt: future, createdAt: '' },
   { id: 'r-4', userID: 'u-1', messageID: 'm-4', parentID: 'ch-nameless', parentType: 'channel', messagePreview: 'hi', remindAt: future, createdAt: '' },
@@ -100,6 +100,8 @@ describe('Drafts page — Reminders tab', () => {
     expect(shared).toHaveTextContent('Ship **it** at nine');
     expect(await within(shared).findByTestId('reminder-row-people')).toHaveTextContent('With Bob, Someone');
     expect(within(shared).getByRole('link')).toHaveAttribute('href', '/channel/team-room?thread=root-1#msg-m-1');
+    expect(within(shared).getByTestId('reminder-row-note')).toHaveTextContent('bring the Q3 numbers');
+    expect(within(dm).queryByTestId('reminder-row-note')).toBeNull();
     expect(dm).toHaveTextContent('Bob, Cara');
     expect(dm).toHaveTextContent('A message');
     expect(within(dm).queryByTestId('reminder-row-people')).toBeNull();
@@ -111,7 +113,7 @@ describe('Drafts page — Reminders tab', () => {
     expect(goneDM).toHaveTextContent('Conversation');
   });
 
-  it("edits the time and the people, offering only the channel's people", async () => {
+  it("edits the time, the people and the note, offering only the channel's people", async () => {
     mockApi();
     renderPage();
     const dialog = await openEditor(0);
@@ -139,6 +141,10 @@ describe('Drafts page — Reminders tab', () => {
     // Someone whose account is gone reads as "Someone", to remove too.
     fireEvent.click(within(dialog).getByLabelText('Remove Someone'));
 
+    // The note starts as it was, and is saved as edited.
+    expect(within(dialog).getByTestId('reminder-note')).toHaveValue('bring the Q3 numbers');
+    fireEvent.change(within(dialog).getByTestId('reminder-note'), { target: { value: ' bring the deck too ' } });
+
     fireEvent.keyDown(within(dialog).getByTestId('reminder-dial-hour-input'), { key: 'a' });
     fireEvent.change(within(dialog).getByTestId('reminder-dial-hour-input'), { target: { value: '9' } });
     fireEvent.change(within(dialog).getByTestId('reminder-dial-minute-input'), { target: { value: '30' } });
@@ -149,6 +155,7 @@ describe('Drafts page — Reminders tab', () => {
     const { path, body } = lastBody('PATCH');
     expect(path).toBe('/api/v1/reminders/r-1');
     expect(body.userIDs).toEqual(['u-3']);
+    expect(body.note).toBe('bring the deck too');
     expect(new Date(body.remindAt as string).getHours()).toBe(9);
     expect(toast).toHaveBeenCalledWith('Reminder updated', 'success');
   });

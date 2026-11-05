@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { AlarmClock, Pencil, Trash2, Users } from 'lucide-react';
+import { AlarmClock, Pencil, StickyNote, Trash2, Users } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -25,8 +25,8 @@ const EDIT_COPY: DateTimeDialogCopy = {
 };
 
 // RemindersList is the Drafts page's "Reminders" tab: every reminder you have
-// set, soonest first — the message it's about, when, and who else it tags —
-// to edit (time and people) or cancel. When one comes due the reminder bot
+// set, soonest first — the message it's about, your note, when, and who else
+// it tags — to edit (time, people and note) or cancel. When one comes due the reminder bot
 // DMs you, or, with people added, replies to the message tagging you all.
 export function RemindersList() {
   const { data: reminders, isLoading } = useReminders();
@@ -77,6 +77,12 @@ export function RemindersList() {
               )}
             </div>
             <p className="mt-1 truncate text-sm text-muted-foreground">{toPlainTextPreview(r.messagePreview ?? '') || 'A message'}</p>
+            {r.note && (
+              <p className="mt-1 flex items-start gap-1 text-sm text-foreground" data-testid="reminder-row-note">
+                <StickyNote className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
+                <span className="line-clamp-2 whitespace-pre-line break-words">{r.note}</span>
+              </p>
+            )}
             <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
               <span className="flex items-center gap-1">
                 <AlarmClock className="h-3.5 w-3.5" aria-hidden />
@@ -107,8 +113,9 @@ export function RemindersList() {
           initialValue={toLocalInputValue(new Date(editing.remindAt))}
           copy={EDIT_COPY}
           people={{ parentID: editing.parentID, parentType: editing.parentType, initial: editing.userIDs ?? [] }}
-          onConfirm={(when, userIDs) =>
-            update.mutateAsync({ id: editing.id, remindAt: when.toISOString(), userIDs }).then(() => undefined)
+          note={editing.note ?? ''}
+          onConfirm={(when, userIDs, note) =>
+            update.mutateAsync({ id: editing.id, remindAt: when.toISOString(), userIDs, note }).then(() => undefined)
           }
         />
       )}

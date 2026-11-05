@@ -1345,6 +1345,7 @@ function MessageItemImpl({
           initialValue={reminderDialog.seed}
           onConfirm={reminderDialog.schedule}
           people={reminderDialog.people}
+          note=""
         />
       )}
       {watcherDialog.open && (

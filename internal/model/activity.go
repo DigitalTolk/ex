@@ -137,13 +137,16 @@ type Reminder struct {
 	ParentType string `json:"parentType"` // "channel" | "conversation"
 	// ParentMessageID is the thread root when the reminded message is a thread
 	// reply, taken from the stored message (never the client) at schedule time.
-	ParentMessageID string    `json:"parentMessageID,omitempty"`
-	ChannelSlug     string    `json:"channelSlug,omitempty"`
-	MessagePreview  string    `json:"messagePreview,omitempty"`
+	ParentMessageID string `json:"parentMessageID,omitempty"`
+	ChannelSlug     string `json:"channelSlug,omitempty"`
+	MessagePreview  string `json:"messagePreview,omitempty"`
 	// UserIDs are the people the owner added: when it comes due, the reminder
 	// bot replies to the message tagging the owner and them. Without any, the
 	// bot DMs the owner alone.
-	UserIDs   []string  `json:"userIDs,omitempty"`
+	UserIDs []string `json:"userIDs,omitempty"`
+	// Note is the owner's own words for context, shown with the reminder
+	// when it comes due.
+	Note      string    `json:"note,omitempty"`
 	RemindAt  time.Time `json:"remindAt"`
 	CreatedAt time.Time `json:"createdAt"`
 }

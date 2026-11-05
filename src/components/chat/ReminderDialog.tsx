@@ -33,12 +33,14 @@ interface ReminderDialogProps {
   // impure clock read happens in an event handler, never during render).
   initialValue: string;
   // onConfirm schedules the reminder for the chosen time (and, with people,
-  // the people picked). It resolves on success (the dialog then closes) and
-  // rejects on failure (the dialog stays open and surfaces the error) — so
-  // scheduling is never silent.
-  onConfirm: (when: Date, userIDs: string[]) => Promise<void>;
+  // the people picked, and with a note, its text). It resolves on success (the
+  // dialog then closes) and rejects on failure (the dialog stays open and
+  // surfaces the error) — so scheduling is never silent.
+  onConfirm: (when: Date, userIDs: string[], note: string) => Promise<void>;
   // people adds the "Also remind" picker, offering that chat's people.
   people?: ReminderPeople;
+  // note adds the optional note field, starting from this text.
+  note?: string;
   // copy rewords the dialog for another "pick a future time" use (scheduling
   // a message); reminders use the default.
   copy?: DateTimeDialogCopy;
@@ -72,6 +74,9 @@ const REMINDER_COPY: DateTimeDialogCopy = {
   previewVerb: 'Reminds you',
 };
 
+// A note's cap, as the server counts it (service.maxReminderNote).
+const MAX_NOTE = 500;
+
 const REMINDER_QUICK_PICKS: QuickPick[] = REMINDER_PRESETS.map((preset) => ({
   key: preset.key,
   label: preset.label,
@@ -98,9 +103,11 @@ export function ReminderDialog({
   copy = REMINDER_COPY,
   quickPicks = REMINDER_QUICK_PICKS,
   people,
+  note: initialNote,
 }: ReminderDialogProps) {
   const [fields, setFields] = useState(() => splitDateTimeSeed(initialValue));
   const [userIDs, setUserIDs] = useState<string[]>(() => people?.initial ?? []);
+  const [note, setNote] = useState(initialNote ?? '');
   // The month the calendar shows; follows a quick pick, otherwise the reader's.
   const [month, setMonth] = useState<Date | undefined>(() => dateOf(splitDateTimeSeed(initialValue).date));
   // The preview compares against the clock, so it is worked out in the
@@ -146,7 +153,7 @@ export function ReminderDialog({
     setPending(true);
     setError('');
     try {
-      await onConfirm(when, userIDs);
+      await onConfirm(when, userIDs, note.trim());
       onOpenChange(false);
     } catch {
       setError(copy.failed);
@@ -209,6 +216,21 @@ export function ReminderDialog({
           </div>
           {people && (
             <ReminderPeoplePicker parentID={people.parentID} parentType={people.parentType} value={userIDs} onChange={setUserIDs} />
+          )}
+          {initialNote !== undefined && (
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium text-muted-foreground">Note (optional)</span>
+              <textarea
+                aria-label="Reminder note"
+                data-testid="reminder-note"
+                placeholder="What it's about, e.g. bring the Q3 numbers"
+                maxLength={MAX_NOTE}
+                rows={2}
+                className="w-full resize-y rounded-md border border-border bg-background px-3 py-2 text-sm mobile:text-base"
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+              />
+            </label>
           )}
           {preview && (
             <p className="text-sm text-muted-foreground" data-testid="reminder-preview">

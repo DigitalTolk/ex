@@ -116,13 +116,14 @@ export function useMessageActions({
   // One builder so the preset (mutate) and custom-dialog (mutateAsync) paths
   // can't drift on the payload shape. The reminder target derives from the
   // message itself, with the channel slug carried for the deep link.
-  const reminderInput = (when: Date, userIDs?: string[]) => ({
+  const reminderInput = (when: Date, userIDs?: string[], note?: string) => ({
     messageID: message.id,
     parentID: message.parentID,
     parentType,
     channelSlug,
     remindAt: when.toISOString(),
     userIDs,
+    note,
   });
 
   function buildMessageLink(): string {
@@ -256,7 +257,8 @@ export function useMessageActions({
       // The custom dialog awaits the result so it can confirm (close) on
       // success and surface the error (stay open) on failure — scheduling is
       // never silent there.
-      schedule: (when: Date, userIDs: string[]) => createReminder.mutateAsync(reminderInput(when, userIDs)).then(() => undefined),
+      schedule: (when: Date, userIDs: string[], note: string) =>
+        createReminder.mutateAsync(reminderInput(when, userIDs, note)).then(() => undefined),
       // The custom dialog can also tag people from the same chat.
       people: { parentID: message.parentID, parentType },
     },

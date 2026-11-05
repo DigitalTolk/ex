@@ -51,6 +51,7 @@ type fakeReminderSvc struct {
 	updateErr error
 	updateIn  service.ReminderUpdate
 	updateID  string
+	schedIn   service.ReminderInput
 }
 
 func (f *fakeReminderSvc) Update(_ context.Context, _, id string, in service.ReminderUpdate) (*model.Reminder, error) {
@@ -58,7 +59,8 @@ func (f *fakeReminderSvc) Update(_ context.Context, _, id string, in service.Rem
 	return f.updated, f.updateErr
 }
 
-func (f *fakeReminderSvc) Schedule(context.Context, string, service.ReminderInput) (*model.Reminder, error) {
+func (f *fakeReminderSvc) Schedule(_ context.Context, _ string, in service.ReminderInput) (*model.Reminder, error) {
+	f.schedIn = in
 	return f.scheduled, f.schedErr
 }
 func (f *fakeReminderSvc) ListPending(context.Context, string) ([]*model.Reminder, error) {
@@ -158,10 +160,13 @@ func TestActivityHandler_CreateReminder(t *testing.T) {
 	h, jwt := setupActivityHandler(t, &fakeActivitySvc{}, good)
 	handler := middleware.Auth(jwt)(http.HandlerFunc(h.CreateReminder))
 	rec := httptest.NewRecorder()
-	body := `{"messageID":"m-1","parentID":"ch-1","parentType":"channel","remindAt":"` + now.Format(time.RFC3339) + `"}`
+	body := `{"messageID":"m-1","parentID":"ch-1","parentType":"channel","remindAt":"` + now.Format(time.RFC3339) + `","userIDs":["u-2"],"note":"bring the numbers"}`
 	handler.ServeHTTP(rec, authedReq(t, jwt, http.MethodPost, "/api/v1/reminders", body))
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("CreateReminder = %d %s", rec.Code, rec.Body.String())
+	}
+	if in := good.schedIn; in.MessageID != "m-1" || len(in.UserIDs) != 1 || in.Note != "bring the numbers" {
+		t.Fatalf("scheduled with %+v", in)
 	}
 }
 

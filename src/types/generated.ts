@@ -184,6 +184,11 @@ export interface Reminder {
    * bot DMs the owner alone.
    */
   userIDs?: string[];
+  /**
+   * Note is the owner's own words for context, shown with the reminder
+   * when it comes due.
+   */
+  note?: string;
   remindAt: string /* RFC3339 */;
   createdAt: string /* RFC3339 */;
 }
