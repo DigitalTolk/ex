@@ -86,6 +86,7 @@ export interface CreateReminderInput {
   remindAt: string; // ISO8601
   // People to tag besides the owner when it comes due.
   userIDs?: string[];
+  note?: string;
 }
 
 // useCreateReminder schedules a reminder, then refreshes the pending list. Both
@@ -113,9 +114,10 @@ export interface UpdateReminderInput {
   id: string;
   remindAt: string; // ISO8601
   userIDs: string[];
+  note: string;
 }
 
-// useUpdateReminder changes a pending reminder's time and people. The dialog
+// useUpdateReminder changes a pending reminder's time, people and note. The dialog
 // awaits it and shows the failure itself; one that fired or was cancelled
 // meanwhile (404) also drops out of the refreshed list.
 export function useUpdateReminder() {

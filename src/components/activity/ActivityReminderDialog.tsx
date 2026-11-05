@@ -17,7 +17,7 @@ export function ActivityReminderDialog({ reminder, channelSlug, onClose }: Activ
   const createReminder = useCreateReminder();
   if (!reminder) return null;
   const { lead } = reminder.row;
-  const confirm = (when: Date) =>
+  const confirm = (when: Date, _people: string[], note: string) =>
     createReminder
       .mutateAsync({
         messageID: lead.messageID,
@@ -25,6 +25,7 @@ export function ActivityReminderDialog({ reminder, channelSlug, onClose }: Activ
         parentType: lead.parentType === 'conversation' ? 'conversation' : 'channel',
         channelSlug,
         remindAt: when.toISOString(),
+        note,
       })
       .then(() => undefined);
   return (
@@ -35,6 +36,7 @@ export function ActivityReminderDialog({ reminder, channelSlug, onClose }: Activ
       onOpenChange={onClose}
       initialValue={reminder.seed}
       onConfirm={confirm}
+      note=""
     />
   );
 }

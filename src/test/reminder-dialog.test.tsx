@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { ReminderDialog } from '@/components/chat/ReminderDialog';
 
 let mockIsMobile = false;
@@ -39,6 +39,22 @@ describe('ReminderDialog', () => {
     expect(onConfirm).toHaveBeenCalledTimes(1);
     expect((onConfirm.mock.calls[0][0] as Date).getFullYear()).toBe(2999);
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+  });
+
+  // Scheduled sends use the same dialog, with no note.
+  it('has a note field only when asked for one, and passes it on trimmed', async () => {
+    setup('2999-01-01T09:00');
+    expect(screen.queryByTestId('reminder-note')).toBeNull();
+    cleanup();
+
+    const onConfirm = vi.fn((_when: Date, _people: string[], _note: string) => Promise.resolve());
+    render(<ReminderDialog open initialValue="2999-01-01T09:00" onConfirm={onConfirm} onOpenChange={vi.fn()} note="" />);
+    const note = screen.getByRole('textbox', { name: 'Reminder note' });
+    expect(note).toHaveValue('');
+    expect(note).toHaveAttribute('maxLength', '500');
+    fireEvent.change(note, { target: { value: '  bring the Q3 numbers\n' } });
+    fireEvent.click(screen.getByTestId('reminder-confirm'));
+    await waitFor(() => expect(onConfirm).toHaveBeenCalledWith(expect.any(Date), [], 'bring the Q3 numbers'));
   });
 
   it('stays open and surfaces an error when scheduling fails', async () => {

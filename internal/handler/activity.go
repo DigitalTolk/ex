@@ -139,6 +139,7 @@ func (h *ActivityHandler) CreateReminder(w http.ResponseWriter, r *http.Request)
 		ChannelSlug string    `json:"channelSlug"`
 		RemindAt    time.Time `json:"remindAt"`
 		UserIDs     []string  `json:"userIDs"`
+		Note        string    `json:"note"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
@@ -151,6 +152,7 @@ func (h *ActivityHandler) CreateReminder(w http.ResponseWriter, r *http.Request)
 		ChannelSlug: body.ChannelSlug,
 		RemindAt:    body.RemindAt,
 		UserIDs:     body.UserIDs,
+		Note:        body.Note,
 	})
 	if err != nil {
 		writeServiceError(w, r, err)
@@ -177,7 +179,7 @@ func (h *ActivityHandler) ListReminders(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, reminders)
 }
 
-// UpdateReminder changes a pending reminder's time and people.
+// UpdateReminder changes a pending reminder's time, people and note.
 func (h *ActivityHandler) UpdateReminder(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromContext(r.Context())
 	if userID == "" {

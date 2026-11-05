@@ -170,9 +170,11 @@ describe('MessageItem "Remind me"', () => {
     await userEvent.click(screen.getByTestId('remind-custom'));
         await pickTomorrow();
     await dialMorning(9);
+    await userEvent.type(screen.getByTestId('reminder-note'), 'bring the numbers');
     await userEvent.click(screen.getByTestId('reminder-confirm'));
     await vi.waitFor(() => expect(createReminderMutateAsync).toHaveBeenCalledTimes(1));
     expect(new Date(createReminderMutateAsync.mock.calls[0][0].remindAt as string).getDate()).toBe(tomorrow().getDate());
+    expect(createReminderMutateAsync.mock.calls[0][0].note).toBe('bring the numbers');
   });
 
   it('mobile action sheet shows a single Remind me item (no inline preset list) that opens the dialog', async () => {

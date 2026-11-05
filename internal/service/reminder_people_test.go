@@ -270,6 +270,75 @@ func TestReminderPeople_ReplyInAThread(t *testing.T) {
 	}
 }
 
+// A note is kept trimmed, changed or cleared by an edit, and refused when too
+// long — on schedule and on edit alike.
+func TestReminderNote_ScheduleAndUpdate(t *testing.T) {
+	ctx := context.Background()
+	r := newPeopleRig(accessByUser{})
+	in := peopleInput("u-2")
+	in.Note = "  bring the Q3 numbers \n"
+	got, err := r.svc.Schedule(ctx, "u-1", in)
+	if err != nil || got.Note != "bring the Q3 numbers" || r.store.scheduled[0].Note != "bring the Q3 numbers" {
+		t.Fatalf("Schedule = %+v, %v", got, err)
+	}
+
+	r.store.getR = &model.Reminder{ID: "r1", UserID: "u-1", ParentID: "ch-1", ParentType: ParentChannel, Note: "old"}
+	later := peopleBase.Add(2 * time.Hour)
+	if got, err := r.svc.Update(ctx, "u-1", "r1", ReminderUpdate{RemindAt: later, Note: "new"}); err != nil || got.Note != "new" {
+		t.Fatalf("Update = %+v, %v", got, err)
+	}
+	if got, err := r.svc.Update(ctx, "u-1", "r1", ReminderUpdate{RemindAt: later}); err != nil || got.Note != "" {
+		t.Fatalf("cleared Update = %+v, %v", got, err)
+	}
+
+	// 500 characters is fine (counted as characters, not bytes); 501 is not.
+	in.Note = strings.Repeat("é", maxReminderNote)
+	if _, err := r.svc.Schedule(ctx, "u-1", in); err != nil {
+		t.Fatalf("a %d-character note: %v", maxReminderNote, err)
+	}
+	in.Note += "x"
+	if _, err := r.svc.Schedule(ctx, "u-1", in); !errors.Is(err, apperr.ErrValidation) {
+		t.Fatalf("too long on Schedule = %v", err)
+	}
+	r.store.rescheduled = nil
+	if _, err := r.svc.Update(ctx, "u-1", "r1", ReminderUpdate{RemindAt: later, Note: in.Note}); !errors.Is(err, apperr.ErrValidation) {
+		t.Fatalf("too long on Update = %v", err)
+	}
+	if len(r.store.rescheduled) != 0 {
+		t.Fatalf("rescheduled a too-long note: %v", r.store.rescheduled)
+	}
+}
+
+// The note goes out with the reminder as a quote, line by line: in the bot's
+// reply, in its DM, and in the private alert when the bot can't post.
+func TestReminderNote_Delivered(t *testing.T) {
+	ctx := context.Background()
+	r := newPeopleRig(accessByUser{})
+	r.store.due = []*model.Reminder{
+		{ID: "r1", UserID: "u-1", MessageID: "m-1", ParentID: "ch-1", ParentType: ParentChannel, ChannelSlug: "general", UserIDs: []string{"u-2"}, Note: "bring the numbers\nand the deck"},
+		{ID: "r2", UserID: "u-1", MessageID: "m-1", ParentID: "conv-9", ParentType: ParentConversation, Note: "call back"},
+	}
+	if _, err := r.svc.ProcessDue(ctx); err != nil {
+		t.Fatalf("ProcessDue: %v", err)
+	}
+	if want := "⏰ Reminder for @[u-1|Alice] @[u-2|Bob]\n> bring the numbers\n> and the deck"; r.poster.posts[0].Body != want {
+		t.Fatalf("reply = %q, want %q", r.poster.posts[0].Body, want)
+	}
+	if want := "⏰ You asked me to remind you about this message:\n> call back\nhttps://ex.example.com/conversation/conv-9#msg-m-1"; r.poster.posts[1].Body != want {
+		t.Fatalf("DM = %q, want %q", r.poster.posts[1].Body, want)
+	}
+
+	r = newPeopleRig(accessByUser{})
+	r.poster.err = errors.New("posting down")
+	r.store.due = []*model.Reminder{{ID: "r3", UserID: "u-1", MessageID: "m-1", ParentID: "ch-1", ParentType: ParentChannel, UserIDs: []string{"u-2"}, Note: "call back"}}
+	if _, err := r.svc.ProcessDue(ctx); err != nil {
+		t.Fatalf("ProcessDue: %v", err)
+	}
+	if len(r.notif.notifs) != 1 || r.notif.notifs[0].Body != "call back\nship it" {
+		t.Fatalf("private alert = %+v, want the note then the message", r.notif.notifs)
+	}
+}
+
 // A personal reminder is the bot's DM to its owner, linking the message.
 func TestReminderPeople_PersonalReminderIsTheBotsDM(t *testing.T) {
 	r := newPeopleRig(accessByUser{})

@@ -439,6 +439,8 @@ export interface Reminder {
   // People tagged besides the owner when it comes due (the reminder bot's
   // reply); none means a personal reminder, the bot's DM to its owner.
   userIDs?: string[];
+  // The owner's context, shown with the reminder when it comes due.
+  note?: string;
   remindAt: string;
   createdAt: string;
 }
