@@ -185,17 +185,23 @@ describe('MessageInput - Office files in a private channel', () => {
     expect(onDraftChange).toHaveBeenLastCalledWith({ body: `[Q3 plan.docx](${ONE_DRIVE_URL})`, attachmentIDs: [] }, expect.anything());
   });
 
+  // Picked with another file, whose chip it leaves alone.
   it('attaches the file instead when OneDrive refuses it', async () => {
     mockPutOfficeFile.mockRejectedValue(new Error('OneDrive upload refused (409)'));
-    attachedAs('att-docx');
+    mockUploadAttachment.mockImplementation(async (f: File, cb?: { onInit?: (i: object) => void }) => {
+      const init = { id: `att-${f.name}`, filename: f.name, contentType: f.type, size: f.size, alreadyExists: true };
+      cb?.onInit?.(init);
+      return init;
+    });
     const { onSend } = renderComposer();
     const file = docx();
-    pick(file);
+    pick(file, new File(['n'], 'notes.txt', { type: 'text/plain' }));
     await waitFor(() => expect(mockUploadAttachment).toHaveBeenCalledWith(file, expect.anything()));
     expect(await screen.findByText('Q3 plan.docx')).toBeInTheDocument();
+    expect(screen.getByText('notes.txt')).toBeInTheDocument();
     expect(screen.queryByText(/to OneDrive/)).toBeNull();
     fireEvent.click(await screen.findByLabelText('Send message'));
-    await waitFor(() => expect(onSend).toHaveBeenCalledWith({ body: '', attachmentIDs: ['att-docx'] }));
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith({ body: '', attachmentIDs: ['att-Q3 plan.docx', 'att-notes.txt'] }));
   });
 
   it.each([
