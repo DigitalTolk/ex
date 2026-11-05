@@ -230,7 +230,9 @@ function Wheel({ label, values, index, onPick, onKey, period = false, testId, ro
   }, [stopped])
 
   // The drum: each row on show tilts away and fades with its distance from
-  // the box — written straight on the rows, no render.
+  // the box — and on AM/PM, the row in the white pill turns dark as it
+  // enters, not once the wheel stops (white on the white pill, it vanished
+  // mid-spin) — written straight on the rows, no render.
   const drawing = useRef(0)
   const draw = () => {
     const el = ref.current!
@@ -243,6 +245,10 @@ function Wheel({ label, values, index, onPick, onKey, period = false, testId, ro
       const d = Math.max(-3, Math.min(3, row - at))
       item.style.transform = `rotateX(${-d * 24}deg) scale(${Math.max(0.5, 1 - Math.abs(d) * 0.22)})`
       item.style.opacity = String(Math.max(0, 1 - Math.abs(d) * 0.42))
+      if (period) {
+        item.classList.toggle("text-background", Math.abs(d) < 0.5)
+        item.classList.toggle("text-foreground", Math.abs(d) >= 0.5)
+      }
     }
   }
   // Newly rendered rows get their tilt before they're seen.
@@ -370,7 +376,7 @@ function Wheel({ label, values, index, onPick, onKey, period = false, testId, ro
               }}
               className={cn(
                 "flex items-center justify-center tabular-nums will-change-transform",
-                period ? cn("text-lg font-bold", i === index ? "text-background" : "text-foreground") : "text-4xl font-bold text-foreground",
+                period ? "text-lg font-bold" : "text-4xl font-bold text-foreground",
               )}
               style={{ height: ROW }}
             >
