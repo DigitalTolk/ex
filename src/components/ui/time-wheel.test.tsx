@@ -134,6 +134,23 @@ describe('TimeWheel', () => {
     expect(onChange).toHaveBeenLastCalledWith({ hour: 12, minute: 59 });
   });
 
+  // The row in the white pill is dark — as it passes through, mid-spin, not
+  // once the wheel stops on it.
+  it('darkens whichever AM/PM row is in the pill, as it scrolls', () => {
+    vi.useFakeTimers();
+    const { onChange } = setup({ hour: 9, minute: 0 });
+    const am = screen.getByTestId('t-wheel-am');
+    const pm = screen.getByTestId('t-wheel-pm');
+    expect([am, pm].map((r) => r.classList.contains('text-background'))).toEqual([true, false]);
+    const el = wheel('period');
+    el.scrollTop = ROW * 0.7;
+    fireEvent.scroll(el);
+    act(() => vi.advanceTimersByTime(20));
+    expect(onChange).not.toHaveBeenCalled();
+    expect([am, pm].map((r) => r.classList.contains('text-background'))).toEqual([false, true]);
+    expect(am).toHaveClass('text-foreground');
+  });
+
   it('spins AM/PM like the others, without going round', () => {
     vi.useFakeTimers();
     const { onChange, rerender } = setup({ hour: 9, minute: 0 });
