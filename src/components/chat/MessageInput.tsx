@@ -142,7 +142,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     drafts,
     setDrafts,
     markLocallyEdited,
-    officeChannelID: signedInWithMicrosoft && typingParentType === 'channel' ? typingParentID : undefined,
+    officeParent: signedInWithMicrosoft && typingParentType && typingParentID ? { type: typingParentType, id: typingParentID } : undefined,
   });
   const {
     editorFocused,

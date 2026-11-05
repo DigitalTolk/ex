@@ -12,29 +12,17 @@ describe('isOfficeFile', () => {
 });
 
 describe('keepsOfficeFilesInOneDrive', () => {
-  const qc = (settings: unknown, channels: unknown) => {
+  const qc = (settings: unknown) => {
     const c = new QueryClient();
     if (settings) c.setQueryData(queryKeys.workspaceSettings(), settings);
-    if (channels) c.setQueryData(queryKeys.userChannels(), channels);
     return c;
   };
-  const channels = [
-    { channelID: 'ch-p', channelType: 'private' },
-    { channelID: 'ch-o', channelType: 'public' },
-  ];
 
-  it('is on for a private channel the user is in, while SharePoint sharing is on', () => {
-    expect(keepsOfficeFilesInOneDrive(qc({ sharePointHosts: ['*.sharepoint.com'] }, channels), 'ch-p')).toBe(true);
-  });
-
-  it('is off for a public or unknown channel, with sharing off, or before anything has loaded', () => {
-    const on = { sharePointHosts: ['*.sharepoint.com'] };
-    expect(keepsOfficeFilesInOneDrive(qc(on, channels), 'ch-o')).toBe(false);
-    expect(keepsOfficeFilesInOneDrive(qc(on, channels), 'ch-x')).toBe(false);
-    expect(keepsOfficeFilesInOneDrive(qc(on, null), 'ch-p')).toBe(false);
-    expect(keepsOfficeFilesInOneDrive(qc({ sharePointHosts: [] }, channels), 'ch-p')).toBe(false);
-    expect(keepsOfficeFilesInOneDrive(qc({}, channels), 'ch-p')).toBe(false);
-    expect(keepsOfficeFilesInOneDrive(qc(null, channels), 'ch-p')).toBe(false);
+  it('is on while SharePoint sharing is on, and off otherwise or before the settings load', () => {
+    expect(keepsOfficeFilesInOneDrive(qc({ sharePointHosts: ['*.sharepoint.com'] }))).toBe(true);
+    expect(keepsOfficeFilesInOneDrive(qc({ sharePointHosts: [] }))).toBe(false);
+    expect(keepsOfficeFilesInOneDrive(qc({}))).toBe(false);
+    expect(keepsOfficeFilesInOneDrive(qc(null))).toBe(false);
   });
 });
 
@@ -105,23 +93,26 @@ describe('putOfficeFile', () => {
     const up = { name: 'Q3 plan & more.docx', webURL: 'https://x.sharepoint.com/q3.docx', size: 5 };
     FakeXHR.answer = { status: 201, response: up };
     const progress = vi.fn();
-    await expect(putOfficeFile('ch/1', file, progress)).resolves.toEqual(up);
+    await expect(putOfficeFile({ type: 'channel', id: 'ch/1' }, file, progress)).resolves.toEqual(up);
     const xhr = FakeXHR.last;
     expect([xhr.method, xhr.url]).toEqual(['PUT', '/api/v1/channels/ch%2F1/office-files?name=Q3%20plan%20%26%20more.docx']);
     expect(xhr.headers).toEqual({ Authorization: 'Bearer tok-1' });
     expect([xhr.withCredentials, xhr.responseType, xhr.body]).toEqual([true, 'json', file]);
     expect(progress.mock.calls).toEqual([[0.5]]);
+    // A DM's goes to the conversation's.
+    await expect(putOfficeFile({ type: 'conversation', id: 'dm-1' }, file, progress)).resolves.toEqual(up);
+    expect(FakeXHR.last.url).toBe('/api/v1/conversations/dm-1/office-files?name=Q3%20plan%20%26%20more.docx');
   });
 
   it('refuses anything but the file: another status, no link, or no answer at all', async () => {
     vi.stubGlobal('XMLHttpRequest', FakeXHR);
     for (const answer of [{ status: 409, response: { error: 'sign in' } }, { status: 201, response: null }, { status: 201, response: {} }]) {
       FakeXHR.answer = answer;
-      await expect(putOfficeFile('ch-1', file, vi.fn())).rejects.toThrow(`OneDrive upload refused (${answer.status})`);
+      await expect(putOfficeFile({ type: 'channel', id: 'ch-1' }, file, vi.fn())).rejects.toThrow(`OneDrive upload refused (${answer.status})`);
     }
     // Signed out: no token to send.
     expect(FakeXHR.last.headers).toEqual({});
     FakeXHR.answer = 'network-error';
-    await expect(putOfficeFile('ch-1', file, vi.fn())).rejects.toThrow('OneDrive upload failed');
+    await expect(putOfficeFile({ type: 'channel', id: 'ch-1' }, file, vi.fn())).rejects.toThrow('OneDrive upload failed');
   });
 });

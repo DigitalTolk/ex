@@ -10,17 +10,18 @@ import (
 	"strings"
 
 	"github.com/DigitalTolk/ex/internal/apperr"
-	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/msgraph"
 )
 
-// Office files in a private channel. A Word, Excel or PowerPoint file posted
-// in a private channel goes into its uploader's OneDrive, under
-// Ex/<channel>, rather than ex's own storage: the message then carries its
-// link, which shares it with the channel's members (see sharepoint.go) and
-// shows it as its file, open for editing in Office. Everywhere else — and for
-// anyone without a working Microsoft sign-in — it stays an ordinary
-// attachment; the client falls back to that whenever this refuses.
+// Office files in a channel or a conversation. A Word, Excel or PowerPoint
+// file posted in a channel, a DM or a group DM goes into its uploader's
+// OneDrive, under Ex/<channel> (Ex/Direct messages, or the group's name),
+// rather than ex's own storage: the message then carries its
+// link, which shares it with the members as any posted link is (see
+// sharepoint.go) and shows it as its file, open for editing in Office.
+// Everywhere else — and for anyone without a working Microsoft sign-in — it
+// stays an ordinary attachment; the client falls back to that whenever this
+// refuses.
 
 // officeExtensions are the files that go to OneDrive.
 var officeExtensions = map[string]bool{"doc": true, "docx": true, "xls": true, "xlsx": true, "ppt": true, "pptx": true}
@@ -51,10 +52,13 @@ func oneDriveName(name string) string {
 	return strings.Trim(name, " .")
 }
 
-// UploadOfficeFile puts an Office file, posted by userID in a private channel
-// they belong to, into their own OneDrive and returns its link. body holds
-// exactly size bytes.
-func (s *SharePointService) UploadOfficeFile(ctx context.Context, userID, channelID, name string, body io.Reader, size int64) (*OfficeUpload, error) {
+// directMessagesFolder is where a DM's files go, under Ex.
+const directMessagesFolder = "Direct messages"
+
+// UploadOfficeFile puts an Office file, posted by userID in a channel or a
+// conversation they belong to, into their own OneDrive and returns its
+// link. body holds exactly size bytes.
+func (s *SharePointService) UploadOfficeFile(ctx context.Context, userID, parentID, parentType, name string, body io.Reader, size int64) (*OfficeUpload, error) {
 	name = oneDriveName(path.Base(strings.ReplaceAll(name, `\`, "/")))
 	if !officeExtensions[strings.ToLower(strings.TrimPrefix(path.Ext(name), "."))] {
 		return nil, apperr.Invalid("sharepoint: only Word, Excel and PowerPoint files go to OneDrive")
@@ -62,14 +66,11 @@ func (s *SharePointService) UploadOfficeFile(ctx context.Context, userID, channe
 	if !s.d.Uploads.AllowsExtension(ctx, name) || !s.d.Uploads.AllowsSize(ctx, size) {
 		return nil, apperr.Invalid("sharepoint: this file's type or size isn't allowed")
 	}
-	ch, err := s.d.Channels.GetByID(ctx, channelID)
+	folder, err := s.officeFolder(ctx, parentID, parentType)
 	if err != nil {
 		return nil, err
 	}
-	if ch.Type != model.ChannelTypePrivate || ch.Archived {
-		return nil, apperr.Invalid("sharepoint: Office files go to OneDrive only in private channels")
-	}
-	if err := s.d.Access.CheckAccess(ctx, userID, channelID, ParentChannel); err != nil {
+	if err := s.d.Access.CheckAccess(ctx, userID, parentID, parentType); err != nil {
 		return nil, err
 	}
 	ts, err := s.d.Tokens.TokenSource(ctx, userID)
@@ -78,10 +79,6 @@ func (s *SharePointService) UploadOfficeFile(ctx context.Context, userID, channe
 	}
 	if err != nil {
 		return nil, err
-	}
-	folder := oneDriveName(ch.Name)
-	if folder == "" {
-		folder = ch.ID
 	}
 	item, err := s.d.Graph.Upload(ctx, ts, []string{oneDriveFolder, folder}, name, body, size)
 	if errors.Is(err, msgraph.ErrSignInRequired) {
@@ -97,4 +94,38 @@ func (s *SharePointService) UploadOfficeFile(ctx context.Context, userID, channe
 		return nil, fmt.Errorf("sharepoint: uploaded file's link %q is not on a shared host", item.WebURL)
 	}
 	return &OfficeUpload{Name: item.Name, WebURL: item.WebURL, Size: item.Size}, nil
+}
+
+// officeFolder is the folder under Ex a parent's Office files go in: a
+// channel's name (its id when the name leaves nothing OneDrive accepts), a
+// group DM's name, else Direct messages. Archived channels, and a group DM
+// since turned into a channel, keep theirs as attachments.
+func (s *SharePointService) officeFolder(ctx context.Context, parentID, parentType string) (string, error) {
+	if parentType == ParentConversation {
+		conv, err := s.d.Conversations.GetConversation(ctx, parentID)
+		if err != nil {
+			return "", err
+		}
+		if conv.ConvertedToChannelID != "" {
+			return "", apperr.Invalid("sharepoint: this conversation is now a channel")
+		}
+		if name := oneDriveName(conv.Name); name != "" {
+			return name, nil
+		}
+		return directMessagesFolder, nil
+	}
+	if parentType != ParentChannel {
+		return "", apperr.Invalid("sharepoint: invalid parent type")
+	}
+	ch, err := s.d.Channels.GetByID(ctx, parentID)
+	if err != nil {
+		return "", err
+	}
+	if ch.Archived {
+		return "", apperr.Invalid("sharepoint: the channel is archived")
+	}
+	if name := oneDriveName(ch.Name); name != "" {
+		return name, nil
+	}
+	return ch.ID, nil
 }

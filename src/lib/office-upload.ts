@@ -1,10 +1,9 @@
 import type { QueryClient } from '@tanstack/react-query';
 import { getAccessToken } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
-import type { UserChannel } from '@/types/generated';
 import type { WorkspaceSettings } from '@/types';
 
-// Office files in a private channel go to the uploader's OneDrive instead of
+// Office files in a channel or a DM go to the uploader's OneDrive instead of
 // being attached: the message carries the file's link, which shares it with
 // the channel's members and shows as its SharePoint card. The server decides
 // (internal/service/sharepoint_upload.go); the client only skips asking when
@@ -24,24 +23,29 @@ export interface OfficeUpload {
   size: number;
 }
 
-// Whether channelID's Office files can go to OneDrive at all: SharePoint
-// sharing is on, and the channel is a private one the user is in. Read from
-// the cache when a file is picked — never subscribed to — so a composer costs
-// nothing extra to render.
-export function keepsOfficeFilesInOneDrive(queryClient: QueryClient, channelID: string): boolean {
-  const settings = queryClient.getQueryData<WorkspaceSettings>(queryKeys.workspaceSettings());
-  if (!settings?.sharePointHosts?.length) return false;
-  const channels = queryClient.getQueryData<UserChannel[]>(queryKeys.userChannels());
-  return channels?.find((c) => c.channelID === channelID)?.channelType === 'private';
+// Where a file is being added: a channel, or a DM or group DM.
+export interface OfficeParent {
+  type: 'channel' | 'conversation';
+  id: string;
 }
 
-// putOfficeFile sends file to channelID's OneDrive endpoint, reporting how
+// Whether Office files can go to OneDrive at all: SharePoint sharing is on.
+// Any channel's or conversation's can — their links share them with the
+// members, as a posted link does. Read from the cache when a file is picked —
+// never subscribed to — so a composer costs nothing extra to render.
+export function keepsOfficeFilesInOneDrive(queryClient: QueryClient): boolean {
+  const settings = queryClient.getQueryData<WorkspaceSettings>(queryKeys.workspaceSettings());
+  return !!settings?.sharePointHosts?.length;
+}
+
+// putOfficeFile sends file to its parent's OneDrive endpoint, reporting how
 // much has gone up. Resolves with the file in OneDrive; rejects on any other
 // answer, so the caller attaches it instead.
-export function putOfficeFile(channelID: string, file: File, onProgress: (fraction: number) => void): Promise<OfficeUpload> {
+export function putOfficeFile(parent: OfficeParent, file: File, onProgress: (fraction: number) => void): Promise<OfficeUpload> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open('PUT', `/api/v1/channels/${encodeURIComponent(channelID)}/office-files?name=${encodeURIComponent(file.name)}`);
+    const base = parent.type === 'channel' ? 'channels' : 'conversations';
+    xhr.open('PUT', `/api/v1/${base}/${encodeURIComponent(parent.id)}/office-files?name=${encodeURIComponent(file.name)}`);
     const token = getAccessToken();
     if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
     xhr.withCredentials = true;

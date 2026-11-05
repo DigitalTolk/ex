@@ -5,7 +5,7 @@ import { uploadAttachment, useDeleteDraftAttachment } from '@/hooks/useAttachmen
 import { isImageAttachment } from '@/lib/file-helpers';
 import { MAX_ATTACHMENTS_PER_MESSAGE } from '@/lib/limits';
 import { ApiError } from '@/lib/api';
-import { isOfficeFile, keepsOfficeFilesInOneDrive, officeFileLink, putOfficeFile } from '@/lib/office-upload';
+import { isOfficeFile, keepsOfficeFilesInOneDrive, officeFileLink, putOfficeFile, type OfficeParent } from '@/lib/office-upload';
 
 // Uploads run at most this many at a time.
 const UPLOAD_POOL_SIZE = 4;
@@ -14,16 +14,16 @@ interface ComposerUploadsOptions {
   drafts: DraftAttachment[];
   setDrafts: Dispatch<SetStateAction<DraftAttachment[]>>;
   markLocallyEdited: () => void;
-  // The channel whose Office files may go to the user's OneDrive (see
+  // Where Office files may go to the user's OneDrive from (see
   // lib/office-upload). Unset, every file is attached.
-  officeChannelID?: string;
+  officeParent?: OfficeParent;
 }
 
 // useComposerUploads turns picked, pasted and dropped files into attachment
 // chips: each file gets a chip with a progress bar at once, uploads run in a
 // small pool, a failed file drops only its own chip, and removing a chip
 // deletes its draft attachment on the server.
-export function useComposerUploads({ drafts, setDrafts, markLocallyEdited, officeChannelID }: ComposerUploadsOptions) {
+export function useComposerUploads({ drafts, setDrafts, markLocallyEdited, officeParent }: ComposerUploadsOptions) {
   const queryClient = useQueryClient();
   const [isUploading, setIsUploading] = useState(false);
   const [uploadError, setUploadError] = useState('');
@@ -72,19 +72,19 @@ export function useComposerUploads({ drafts, setDrafts, markLocallyEdited, offic
     // captured (allSettled-style) so one bad file doesn't abort siblings.
     const errors: string[] = [];
     let cursor = 0;
-    const oneDriveChannel = officeChannelID && keepsOfficeFilesInOneDrive(queryClient, officeChannelID) ? officeChannelID : null;
+    const oneDrive = officeParent && keepsOfficeFilesInOneDrive(queryClient) ? officeParent : null;
     const setProgress = (id: string, fraction: number) =>
       setDrafts((prev) => prev.map((d) => (d.id === id ? { ...d, progress: fraction } : d)));
     const runOne = async (idx: number) => {
       const file = files[idx];
       const tempID = tempIDs[idx];
-      if (oneDriveChannel && isOfficeFile(file.name)) {
+      if (oneDrive && isOfficeFile(file.name)) {
         setDrafts((prev) => prev.map((d) => (d.id === tempID ? { ...d, destination: 'OneDrive' } : d)));
         try {
           // The server passes the bytes on to Microsoft as they come and
           // answers once OneDrive has the file, so the chip stays short of
           // done until the link is back.
-          const up = await putOfficeFile(oneDriveChannel, file, (fraction) => setProgress(tempID, Math.min(fraction, 0.99)));
+          const up = await putOfficeFile(oneDrive, file, (fraction) => setProgress(tempID, Math.min(fraction, 0.99)));
           // In OneDrive: the chip stays, and the message carries its link
           // instead of the file.
           setDrafts((prev) =>

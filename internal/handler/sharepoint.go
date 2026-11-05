@@ -16,7 +16,7 @@ type SharePointService interface {
 	Link(ctx context.Context, viewerID, parentID, parentType, rawURL string) (*model.SharePointLink, error)
 	RetryLink(ctx context.Context, userID, parentID, parentType, rawURL string) error
 	Preview(ctx context.Context, viewerID, parentID, parentType, fileID string) (string, error)
-	UploadOfficeFile(ctx context.Context, userID, channelID, name string, body io.Reader, size int64) (*service.OfficeUpload, error)
+	UploadOfficeFile(ctx context.Context, userID, parentID, parentType, name string, body io.Reader, size int64) (*service.OfficeUpload, error)
 }
 
 // maxSharePointURL caps the link a request names; real ones are far shorter.
@@ -113,11 +113,21 @@ const maxOfficeFileName = 255
 // JSON bodies, not files.
 const officeUploadDeadline = 10 * time.Minute
 
-// UploadOfficeFile puts an Office file posted in a private channel into the
+// UploadOfficeFile puts an Office file posted in a channel into the
 // caller's OneDrive: PUT /api/v1/channels/{id}/office-files?name=…, the file
 // as the body. 409 when they have no working Microsoft sign-in; any refusal
 // tells the client to attach it the ordinary way instead.
 func (h *SharePointHandler) UploadOfficeFile(w http.ResponseWriter, r *http.Request) {
+	h.uploadOfficeFile(w, r, service.ParentChannel)
+}
+
+// UploadConversationOfficeFile is UploadOfficeFile for a DM or group DM:
+// PUT /api/v1/conversations/{id}/office-files?name=….
+func (h *SharePointHandler) UploadConversationOfficeFile(w http.ResponseWriter, r *http.Request) {
+	h.uploadOfficeFile(w, r, service.ParentConversation)
+}
+
+func (h *SharePointHandler) uploadOfficeFile(w http.ResponseWriter, r *http.Request, parentType string) {
 	name := r.URL.Query().Get("name")
 	if name == "" || len(name) > maxOfficeFileName {
 		writeError(w, http.StatusBadRequest, "invalid_name", "name is required")
@@ -132,7 +142,7 @@ func (h *SharePointHandler) UploadOfficeFile(w http.ResponseWriter, r *http.Requ
 	_ = rc.SetReadDeadline(time.Now().Add(officeUploadDeadline))
 	_ = rc.SetWriteDeadline(time.Now().Add(officeUploadDeadline))
 	body := http.MaxBytesReader(w, r.Body, r.ContentLength)
-	up, err := h.svc.UploadOfficeFile(r.Context(), middleware.UserIDFromContext(r.Context()), pathParam(r, "id"), name, body, r.ContentLength)
+	up, err := h.svc.UploadOfficeFile(r.Context(), middleware.UserIDFromContext(r.Context()), pathParam(r, "id"), parentType, name, body, r.ContentLength)
 	if err != nil {
 		writeServiceError(w, r, err)
 		return

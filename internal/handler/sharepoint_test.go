@@ -29,12 +29,12 @@ type fakeSharePointSvc struct {
 	uploadErr  error
 }
 
-func (f *fakeSharePointSvc) UploadOfficeFile(_ context.Context, userID, channelID, name string, body io.Reader, size int64) (*service.OfficeUpload, error) {
+func (f *fakeSharePointSvc) UploadOfficeFile(_ context.Context, userID, parentID, parentType, name string, body io.Reader, size int64) (*service.OfficeUpload, error) {
 	b, err := io.ReadAll(body)
 	if err != nil {
 		return nil, err
 	}
-	f.calls = append(f.calls, fmt.Sprintf("upload %s %s %s %q %d", userID, channelID, name, b, size))
+	f.calls = append(f.calls, fmt.Sprintf("upload %s %s %s %s %q %d", userID, parentType, parentID, name, b, size))
 	return f.upload, f.uploadErr
 }
 
@@ -174,9 +174,15 @@ func TestSharePointHandler_UploadOfficeFile(t *testing.T) {
 	if rec.Code != http.StatusCreated || !strings.Contains(rec.Body.String(), `"webURL":"https://contoso-my.sharepoint.com/q3.docx"`) {
 		t.Fatalf("upload = %d %s", rec.Code, rec.Body.String())
 	}
-	if svc.calls[0] != `upload u-1 ch-1 Q3 plan.docx "hello" 5` {
+	if svc.calls[0] != `upload u-1 channel ch-1 Q3 plan.docx "hello" 5` {
 		t.Fatalf("calls = %v", svc.calls)
 	}
+	// A DM's or group DM's, the same way.
+	upload = func(h *SharePointHandler) http.HandlerFunc { return h.UploadConversationOfficeFile }
+	if rec := serve(svc, "/api/v1/conversations/ch-1/office-files?name=a.xlsx", "hi"); rec.Code != http.StatusCreated || svc.calls[1] != `upload u-1 conversation ch-1 a.xlsx "hi" 2` {
+		t.Fatalf("conversation upload = %d, calls %v", rec.Code, svc.calls)
+	}
+	upload = func(h *SharePointHandler) http.HandlerFunc { return h.UploadOfficeFile }
 
 	// No sign-in: 409, which the client takes as "attach it instead".
 	if rec := serve(&fakeSharePointSvc{uploadErr: service.ErrMicrosoftSignInRequired}, target, "hello"); rec.Code != http.StatusConflict {

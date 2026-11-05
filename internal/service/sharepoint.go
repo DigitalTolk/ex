@@ -1031,6 +1031,9 @@ func (j *sharePointJob) joined(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("sharepoint: list files: %w", err)
 	}
+	// Says how many files a join found to share: none, for a parent whose
+	// files were never shared, is otherwise silent.
+	slog.InfoContext(ctx, "sharepoint sharing files with members who joined", "parentID", j.task.ParentID, "userIDs", j.task.UserIDs, "files", len(items))
 	for i := range items {
 		it := &items[i]
 		if it.Retired {

@@ -224,6 +224,7 @@ func NewRouter(d *Deps) http.Handler {
 		mux.Handle("POST /api/v1/sharepoint/link/retry", middleware.WrapFunc(sharePointH.Retry, authMW, writeLimit))
 		mux.Handle("GET /api/v1/sharepoint/preview", middleware.WrapFunc(sharePointH.Preview, authMW))
 		mux.Handle("PUT /api/v1/channels/{id}/office-files", middleware.WrapFunc(sharePointH.UploadOfficeFile, authMW, writeLimit))
+		mux.Handle("PUT /api/v1/conversations/{id}/office-files", middleware.WrapFunc(sharePointH.UploadConversationOfficeFile, authMW, writeLimit))
 	}
 
 	if activityH != nil {

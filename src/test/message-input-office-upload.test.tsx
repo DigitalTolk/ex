@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { EditorView } from '@codemirror/view';
 import { queryKeys } from '@/lib/query-keys';
 
-// A Word, Excel or PowerPoint file picked in a private channel goes to the
+// A Word, Excel or PowerPoint file picked in a channel or a DM goes to the
 // user's OneDrive and into the message as its link; anything else, or any
 // refusal, is attached the ordinary way.
 
@@ -86,7 +86,7 @@ function attachedAs(id: string) {
   });
 }
 
-describe('MessageInput - Office files in a private channel', () => {
+describe('MessageInput - Office files', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     authProvider = 'oidc';
@@ -102,7 +102,7 @@ describe('MessageInput - Office files in a private channel', () => {
     const { onSend } = renderComposer();
     const file = docx();
     pick(file);
-    await waitFor(() => expect(mockPutOfficeFile).toHaveBeenCalledWith('ch-deal', file, expect.any(Function)));
+    await waitFor(() => expect(mockPutOfficeFile).toHaveBeenCalledWith({ type: 'channel', id: 'ch-deal' }, file, expect.any(Function)));
     // The chip shows where it is going, and how far along.
     act(() => progress(0.5));
     const bar = await screen.findByRole('progressbar', { name: 'Uploading Q3 plan.docx to OneDrive' });
@@ -207,8 +207,6 @@ describe('MessageInput - Office files in a private channel', () => {
   it.each([
     ['a guest', () => { authProvider = 'guest'; }, {}],
     ['someone signed out', () => { authProvider = null; }, {}],
-    ['a public channel', () => {}, { parentID: 'ch-open' }],
-    ['a direct message', () => {}, { parentType: 'conversation' as const, parentID: 'dm-1' }],
   ])('attaches it without asking OneDrive for %s', async (_name, setup, where) => {
     setup();
     attachedAs('att-docx');
@@ -216,5 +214,22 @@ describe('MessageInput - Office files in a private channel', () => {
     pick(docx());
     await waitFor(() => expect(mockUploadAttachment).toHaveBeenCalled());
     expect(mockPutOfficeFile).not.toHaveBeenCalled();
+  });
+
+  // A public channel's or a DM's files go to OneDrive too: the link shares
+  // the file with the members as a posted link does.
+  it.each([
+    ['a public channel', { parentID: 'ch-open' }, { type: 'channel', id: 'ch-open' }],
+    ['a direct message', { parentType: 'conversation' as const, parentID: 'dm-1' }, { type: 'conversation', id: 'dm-1' }],
+  ])('puts the file in OneDrive in %s', async (_name, where, parent) => {
+    mockPutOfficeFile.mockResolvedValue({ name: 'Q3 plan.docx', webURL: ONE_DRIVE_URL, size: 5 });
+    const { onSend } = renderComposer(where);
+    const file = docx();
+    pick(file);
+    await screen.findByText(/in OneDrive/);
+    expect(mockPutOfficeFile).toHaveBeenCalledWith(parent, file, expect.any(Function));
+    fireEvent.click(await screen.findByLabelText('Send message'));
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith({ body: `[Q3 plan.docx](${ONE_DRIVE_URL})`, attachmentIDs: [] }));
+    expect(mockUploadAttachment).not.toHaveBeenCalled();
   });
 });

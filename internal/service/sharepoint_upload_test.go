@@ -38,6 +38,7 @@ type officeUpload struct {
 	access   *spAccess
 	limits   *spUploadLimits
 	channels *spChannels
+	convs    *spConversations
 }
 
 func newOfficeUpload() *officeUpload {
@@ -52,17 +53,26 @@ func newOfficeUpload() *officeUpload {
 			"ch-old":      {ID: "ch-old", Name: "old deals", Type: model.ChannelTypePrivate, Archived: true},
 			"ch-nameless": {ID: "ch-nameless", Name: "...", Type: model.ChannelTypePrivate},
 		}},
+		convs: &spConversations{convs: map[string]*model.Conversation{
+			"dm-1":        {ID: "dm-1", Type: model.ConversationTypeDM, ParticipantIDs: []string{"alice", "bob"}},
+			"grp-1":       {ID: "grp-1", Type: model.ConversationTypeGroup, Name: "Launch: crew"},
+			"grp-channel": {ID: "grp-channel", Type: model.ConversationTypeGroup, ConvertedToChannelID: "ch-deal"},
+		}},
 	}
 	u.graph.uploadItem = &msgraph.DriveItem{ID: "it-1", Name: "Q3- plan.docx", Size: 5, WebURL: "https://contoso-my.sharepoint.com/personal/alice/Q3-%20plan.docx"}
 	u.svc = NewSharePointService(SharePointDeps{
-		Graph: u.graph, Tokens: u.tokens, Access: u.access, Channels: u.channels, Uploads: u.limits,
+		Graph: u.graph, Tokens: u.tokens, Access: u.access, Channels: u.channels, Conversations: u.convs, Uploads: u.limits,
 		Hosts: []string{"*.sharepoint.com"},
 	})
 	return u
 }
 
 func (u *officeUpload) upload(channelID, name string) (*OfficeUpload, error) {
-	return u.svc.UploadOfficeFile(context.Background(), "alice", channelID, name, strings.NewReader("hello"), 5)
+	return u.svc.UploadOfficeFile(context.Background(), "alice", channelID, ParentChannel, name, strings.NewReader("hello"), 5)
+}
+
+func (u *officeUpload) uploadTo(convID, name string) (*OfficeUpload, error) {
+	return u.svc.UploadOfficeFile(context.Background(), "alice", convID, ParentConversation, name, strings.NewReader("hello"), 5)
 }
 
 // The file goes into alice's own OneDrive, under Ex/<channel>, as her, named
@@ -80,12 +90,66 @@ func TestUploadOfficeFile(t *testing.T) {
 		t.Fatalf("uploads = %v, want %q", u.graph.uploads, want)
 	}
 
+	// A public channel's go the same way.
+	if _, err := u.upload("ch-open", "notes.docx"); err != nil {
+		t.Fatalf("public channel: %v", err)
+	}
+	if u.graph.uploads[1] != "Ex/general/notes.docx (5 of 5) as tok-alice" {
+		t.Fatalf("uploads = %v", u.graph.uploads)
+	}
+	u.graph.uploads = u.graph.uploads[:1]
+
 	// A channel whose name leaves nothing OneDrive accepts gets its id.
 	if _, err := u.upload("ch-nameless", "Budget.XLSX"); err != nil {
 		t.Fatalf("nameless channel: %v", err)
 	}
 	if u.graph.uploads[1] != "Ex/ch-nameless/Budget.XLSX (5 of 5) as tok-alice" {
 		t.Fatalf("uploads = %v", u.graph.uploads)
+	}
+}
+
+// A DM's files go under Ex/Direct messages, a named group DM's under its
+// name — as alice, like a channel's — once she's in it.
+func TestUploadOfficeFileInAConversation(t *testing.T) {
+	u := newOfficeUpload()
+	if _, err := u.uploadTo("dm-1", "Q3.docx"); err != nil {
+		t.Fatalf("DM: %v", err)
+	}
+	if _, err := u.uploadTo("grp-1", "deck.pptx"); err != nil {
+		t.Fatalf("group: %v", err)
+	}
+	want := []string{"Ex/Direct messages/Q3.docx (5 of 5) as tok-alice", "Ex/Launch- crew/deck.pptx (5 of 5) as tok-alice"}
+	if strings.Join(u.graph.uploads, "|") != strings.Join(want, "|") {
+		t.Fatalf("uploads = %v, want %v", u.graph.uploads, want)
+	}
+	if got := u.access.checked; len(got) != 2 || got[0] != "alice:dm-1:conversation" {
+		t.Fatalf("access checked = %v", got)
+	}
+
+	for _, c := range []struct {
+		name string
+		conv string
+		set  func(*officeUpload)
+		want error
+	}{
+		{"no such conversation", "dm-gone", nil, store.ErrNotFound},
+		{"now a channel", "grp-channel", nil, apperr.ErrValidation},
+		{"not in it", "dm-1", func(u *officeUpload) { u.access.err = ErrForbidden }, ErrForbidden},
+	} {
+		u := newOfficeUpload()
+		if c.set != nil {
+			c.set(u)
+		}
+		if _, err := u.uploadTo(c.conv, "a.docx"); !errors.Is(err, c.want) {
+			t.Errorf("%s: err = %v, want %v", c.name, err, c.want)
+		}
+		if len(u.graph.uploads) != 0 {
+			t.Errorf("%s: uploaded anyway", c.name)
+		}
+	}
+	// Neither a channel nor a conversation.
+	if _, err := u.svc.UploadOfficeFile(context.Background(), "alice", "x", "thread", "a.docx", strings.NewReader("hello"), 5); !errors.Is(err, apperr.ErrValidation) {
+		t.Fatalf("bad parent type = %v", err)
 	}
 }
 
@@ -103,7 +167,6 @@ func TestUploadOfficeFileRefusals(t *testing.T) {
 		{"a type the workspace refuses", "ch-deal", "a.docx", func(u *officeUpload) { u.limits.refuseType = true }, apperr.ErrValidation},
 		{"too big for the workspace", "ch-deal", "a.docx", func(u *officeUpload) { u.limits.maxSize = 4 }, apperr.ErrValidation},
 		{"no such channel", "ch-gone", "a.docx", nil, store.ErrNotFound},
-		{"a public channel", "ch-open", "a.docx", nil, apperr.ErrValidation},
 		{"an archived channel", "ch-old", "a.pptx", nil, apperr.ErrValidation},
 		{"not a member", "ch-deal", "a.docx", func(u *officeUpload) { u.access.err = ErrForbidden }, ErrForbidden},
 		{"never signed in with Microsoft", "ch-deal", "a.doc", func(u *officeUpload) { u.tokens.missing["alice"] = true }, ErrMicrosoftSignInRequired},

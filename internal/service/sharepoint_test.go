@@ -455,9 +455,15 @@ func (m *spMessages) GetMessage(_ context.Context, parentID, id string) (*model.
 	return nil, store.ErrNotFound
 }
 
-type spAccess struct{ err error }
+type spAccess struct {
+	err     error
+	checked []string
+}
 
-func (a *spAccess) CheckAccess(context.Context, string, string, string) error { return a.err }
+func (a *spAccess) CheckAccess(_ context.Context, userID, parentID, parentType string) error {
+	a.checked = append(a.checked, userID+":"+parentID+":"+parentType)
+	return a.err
+}
 
 // ---------------------------------------------------------------- harness
 
