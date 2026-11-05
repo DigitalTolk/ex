@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { ScheduleSendMenu } from './ScheduleSendMenu';
 import { SCHEDULE_PRESETS } from '@/lib/schedule-times';
+import { wheelTo } from '@/test/wheel-time';
 
 vi.mock('@/components/ui/dropdown-menu');
 
@@ -27,11 +28,8 @@ describe('ScheduleSendMenu', () => {
       fireEvent.click(screen.getByTestId(`reminder-quick-${key}`));
       expect(screen.getByTestId('reminder-preview')).toHaveTextContent(/^Sends /);
     }
-    // Tomorrow morning is now set; type a different time for it.
-    fireEvent.focus(screen.getByTestId('reminder-dial-hour-input'));
-    fireEvent.change(screen.getByTestId('reminder-dial-hour-input'), { target: { value: '8' } });
-    fireEvent.focus(screen.getByTestId('reminder-dial-minute-input'));
-    fireEvent.change(screen.getByTestId('reminder-dial-minute-input'), { target: { value: '30' } });
+    // Tomorrow morning is now set; turn the wheels to a different time for it.
+    wheelTo(8, 30, (el, key) => fireEvent.keyDown(el, { key }));
     expect(screen.getByTestId('reminder-preview')).toHaveTextContent(/^Sends Tomorrow at 8:30/);
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Schedule' }));

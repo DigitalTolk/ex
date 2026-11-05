@@ -1,8 +1,10 @@
+import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-react';
 import { userEvent } from 'vitest/browser';
 import { ReminderDialog } from './ReminderDialog';
-import { ClockDial } from '@/components/ui/clock-dial';
+import { TimeWheel } from '@/components/ui/time-wheel';
+import type { ClockTime } from '@/lib/clock-time';
 
 // The date-and-time picker as laid out by a real browser: on a phone the
 // calendar and the time list are stacked, and neither may run wider than the
@@ -19,43 +21,47 @@ async function openAt(seed: string) {
 }
 
 
-// Presses the dial's face at the given angles (degrees clockwise from 12) on
-// its outer ring — a press at the first, a drag through the rest — and lets go.
-async function dragOnFace(angles: number[], ring = 0.4) {
-  const face = document.querySelector<HTMLElement>('[data-testid="reminder-dial-face"]')!;
-  const box = face.getBoundingClientRect();
-  const at = (deg: number) => ({
-    clientX: box.left + box.width / 2 + box.width * ring * Math.sin((deg * Math.PI) / 180),
-    clientY: box.top + box.height / 2 - box.height * ring * Math.cos((deg * Math.PI) / 180),
-  });
-  const fire = (type: string, deg: number) =>
-    face.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerId: 7, ...at(deg) }));
-  fire('pointerdown', angles[0]);
-  for (const deg of angles.slice(1)) fire('pointermove', deg);
-  fire('pointerup', angles[angles.length - 1]);
-  await new Promise((r) => requestAnimationFrame(r));
+const wheel = (part: string) => document.querySelector<HTMLElement>(`[data-testid="reminder-wheel-${part}"]`)!;
+// offsetHeight: the row's layout height, untilted by the drum.
+const rowHeight = () => wheel('minute').querySelector<HTMLElement>('[data-row]')!.offsetHeight;
+
+// Spins a wheel by `rows` (down the list for positive) the way a swipe or a
+// mouse wheel scrolls it — a few rows a frame — and waits for it to settle.
+async function spin(part: string, rows: number) {
+  const el = wheel(part);
+  const value = el.getAttribute('aria-valuenow');
+  for (let left = rows; left !== 0; ) {
+    const step = Math.sign(left) * Math.min(5, Math.abs(left));
+    el.scrollBy({ top: step * rowHeight(), behavior: 'instant' });
+    left -= step;
+    await new Promise((r) => requestAnimationFrame(r));
+  }
+  // (WebKit takes each step for a scroll of its own, settling between them:
+  // wait for where the whole spin lands, not the first value it passes.)
+  const n = Number(el.getAttribute('aria-valuemax')) + 1;
+  const lands = String((((Number(value) + rows) % n) + n) % n);
+  await vi.waitFor(() => expect(el.getAttribute('aria-valuenow')).toBe(lands));
 }
 
 describe('the reminder picker layout', () => {
-  it('lays the clock dial out round, its twelve hours on the face', async () => {
+  it('lays the wheels out with the chosen row in the band across the middle', async () => {
     await openAt('2026-10-21T09:00');
-    const face = laidOut('[data-testid="reminder-dial-face"]');
-    expect(Math.round(face.width)).toBe(Math.round(face.height));
-    for (const hour of [0, 3, 6, 9]) {
-      const label = laidOut(`[data-testid="reminder-dial-hour-${hour}"]`);
-      expect(label.left).toBeGreaterThanOrEqual(face.left);
-      expect(label.right).toBeLessThanOrEqual(face.right);
+    const wheels = laidOut('[data-testid="reminder-wheel"]');
+    const middle = wheels.top + wheels.height / 2;
+    for (const id of ['hour-9', 'minute-0', 'am']) {
+      const row = laidOut(`[data-testid="reminder-wheel-${id}"]`);
+      expect(Math.abs(row.top + row.height / 2 - middle)).toBeLessThanOrEqual(1);
     }
-    // 12 at the top, 6 at the bottom.
-    expect(laidOut('[data-testid="reminder-dial-hour-0"]').top).toBeLessThan(laidOut('[data-testid="reminder-dial-hour-6"]').top);
+    // Five rows show: two either side of the chosen one.
+    expect(wheel('hour').offsetHeight).toBe(5 * rowHeight());
   });
 
-  it.skipIf(window.innerWidth >= 640)('stacks a full-width calendar over the dial on a phone', async () => {
+  it.skipIf(window.innerWidth >= 640)('stacks a full-width calendar over the wheels on a phone', async () => {
     await openAt('2026-10-21T09:00');
     const calendar = laidOut('[data-slot="calendar"]');
-    const face = laidOut('[data-testid="reminder-dial-face"]');
-    expect(face.top).toBeGreaterThan(calendar.bottom);
-    expect(Math.abs((face.left + face.right) / 2 - (calendar.left + calendar.right) / 2)).toBeLessThanOrEqual(1);
+    const wheels = laidOut('[data-testid="reminder-wheel"]');
+    expect(wheels.top).toBeGreaterThan(calendar.bottom);
+    expect(Math.abs((wheels.left + wheels.right) / 2 - (calendar.left + calendar.right) / 2)).toBeLessThanOrEqual(1);
     // Full width, the days keep a tap height rather than turning into
     // ever-taller squares.
     // offsetHeight: the layout size, unscaled by the dialog's zoom-in.
@@ -73,18 +79,18 @@ describe('the reminder picker layout', () => {
 });
 
 // On a phone the keyboard covered half the sheet: whatever was typed low in
-// it couldn't be seen. The time is picked on the clock dial instead, and while
+// it couldn't be seen. The time is picked on the wheels instead, and while
 // a keyboard is up (a field further down, like the people
 // to remind) the sheet ends where the keyboard begins, so the field scrolls
 // into view above it.
 describe.skipIf(window.__EX_FORCE_DEVICE__ === 'desktop')('the reminder picker on a phone', () => {
-  it('picks the time on the dial, with no field to type into', async () => {
+  it('picks the time by spinning the wheels, with no field to type into', async () => {
     const onConfirm = vi.fn((_when: Date, _people: string[]) => Promise.resolve());
     await render(<ReminderDialog open initialValue="2099-10-21T09:00" onConfirm={onConfirm} onOpenChange={vi.fn()} />);
-    await vi.waitFor(() => expect(document.querySelector('[data-testid="reminder-dial-face"]')).not.toBeNull());
-    expect(document.querySelector('[data-testid="reminder-time"]')).toBeNull();
-    await dragOnFace([90, 120]); // to 4 o'clock
-    await dragOnFace([132]); // the minutes, to :22
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="reminder-wheel"]')).not.toBeNull());
+    expect(document.querySelector('input:not([type="hidden"])')).toBeNull();
+    await spin('hour', -5); // 9 → 4
+    await spin('minute', 22); // :00 → :22
     await userEvent.click(document.querySelector('[data-slot="dialog-mobile-action"]') as HTMLElement);
     await vi.waitFor(() => expect(onConfirm).toHaveBeenCalled());
     const when = onConfirm.mock.calls[0][0];
@@ -104,63 +110,63 @@ describe.skipIf(window.__EX_FORCE_DEVICE__ === 'desktop')('the reminder picker o
   });
 });
 
-// Mouse and finger both pick by dragging the hand: the hour first, then —
-// the dial having turned — the minutes, to the minute. A 24-hour clock reads
-// a press on the inner ring as the afternoon hour.
-describe('dragging the clock hand', () => {
-  it('sets the hour, then the minutes, by where the hand is let go', async () => {
-    const onConfirm = vi.fn((_when: Date, _people: string[]) => Promise.resolve());
-    await render(<ReminderDialog open initialValue="2099-10-21T21:00" onConfirm={onConfirm} onOpenChange={vi.fn()} />);
-    await vi.waitFor(() => expect(document.querySelector('[data-testid="reminder-dial-face"]')).not.toBeNull());
-    await dragOnFace([0, 60, 90]); // 3 o'clock, staying PM
-    // Let go of the hour: the face turns to the minutes.
-    await vi.waitFor(() => expect(document.querySelector('[data-testid="reminder-dial-minute-0"]')).not.toBeNull());
-    await dragOnFace([200, 246]); // :41
-    expect(document.querySelector('[data-testid="reminder-dial-minute-0"]')).not.toBeNull();
-    expect((document.querySelector('[data-testid="reminder-dial-hour-input"]') as HTMLInputElement).value).toBe('3');
-    expect((document.querySelector('[data-testid="reminder-dial-minute-input"]') as HTMLInputElement).value).toBe('41');
-    expect(document.querySelector('[data-testid="reminder-dial-pm"]')?.getAttribute('aria-pressed')).toBe('true');
-  });
+// A wheel is spun by scrolling it (a swipe, a trackpad, a mouse wheel); it
+// settles on the row that stops in its box. The wheels go round.
+function Controlled({ initial, hourCycle, onChange }: { initial: ClockTime; hourCycle?: 12 | 24; onChange: (t: ClockTime) => void }) {
+  const [value, setValue] = useState(initial);
+  return (
+    <TimeWheel
+      value={value}
+      hourCycle={hourCycle}
+      testIdPrefix="reminder"
+      onChange={(t) => {
+        setValue(t);
+        onChange(t);
+      }}
+    />
+  );
+}
 
-  it('reads the inner ring as 13–00 on a 24-hour clock', async () => {
+describe('spinning the wheels', () => {
+  it('settles on the row a spin stops at', async () => {
     const onChange = vi.fn();
-    const { container } = await render(<ClockDial value={{ hour: 9, minute: 0 }} onChange={onChange} hourCycle={24} testIdPrefix="reminder" />);
-    // Each pick turns the dial to the minutes; back to the hours for the next.
-    const hours = async () => {
-      await userEvent.click(container.querySelector('[data-testid="reminder-dial-hour-input"]') as HTMLInputElement);
-      await vi.waitFor(() => expect(container.querySelector('[data-testid="reminder-dial-hour-0"]')).not.toBeNull());
-    };
-    await dragOnFace([90], 0.26);
-    expect(onChange).toHaveBeenLastCalledWith({ hour: 15, minute: 0 });
-    await hours();
-    await dragOnFace([0], 0.26);
-    expect(onChange).toHaveBeenLastCalledWith({ hour: 0, minute: 0 });
-    await hours();
-    await dragOnFace([0]);
-    expect(onChange).toHaveBeenLastCalledWith({ hour: 12, minute: 0 });
-    await hours();
-    await dragOnFace([90]);
-    expect(onChange).toHaveBeenLastCalledWith({ hour: 3, minute: 0 });
+    await render(<Controlled initial={{ hour: 9, minute: 0 }} onChange={onChange} />);
+    await spin('minute', 41);
+    expect(onChange).toHaveBeenLastCalledWith({ hour: 9, minute: 41 });
+    await spin('hour', -1);
+    expect(onChange).toHaveBeenLastCalledWith({ hour: 8, minute: 41 });
   });
-});
 
-// The hand glides to a new time, the short way round: from 11 to 1 it passes
-// 12 rather than sweeping back through every hour. During a drag it doesn't
-// glide at all, so it stays under the finger.
-describe('the clock hand', () => {
-  const hand = () => document.querySelector<HTMLElement>('[data-testid="reminder-dial-hand"]')!;
-  const turn = () => Number(/rotate\((-?[\d.]+)deg\)/.exec(hand().style.transform)![1]);
+  it('goes round past :59 to :00, and settles back in the middle of its rows', async () => {
+    const onChange = vi.fn();
+    await render(<Controlled initial={{ hour: 9, minute: 58 }} onChange={onChange} />);
+    const minutes = wheel('minute');
+    const before = minutes.scrollTop;
+    await spin('minute', 3);
+    expect(onChange).toHaveBeenLastCalledWith({ hour: 9, minute: 1 });
+    // As far from either end as before: it can keep going round.
+    await vi.waitFor(() => expect(minutes.scrollTop).toBe(before - 57 * rowHeight()));
+  });
 
-  it('turns the short way round, gliding unless dragged', async () => {
-    const { rerender } = await render(<ClockDial value={{ hour: 11, minute: 0 }} onChange={vi.fn()} testIdPrefix="reminder" />);
-    expect(turn()).toBe(330);
-    expect(hand().className).toContain('transition-transform');
-    await rerender(<ClockDial value={{ hour: 1, minute: 0 }} onChange={vi.fn()} testIdPrefix="reminder" />);
-    expect(turn()).toBe(390);
-    const face = document.querySelector<HTMLElement>('[data-testid="reminder-dial-face"]')!;
-    const box = face.getBoundingClientRect();
-    face.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 3, clientX: box.left + box.width / 2 + 50, clientY: box.top + box.height / 2 }));
-    await vi.waitFor(() => expect(hand().className).not.toContain('transition-transform'));
-    expect(turn()).toBe(450);
+  it('turns to a time set from outside, the short way', async () => {
+    const { rerender } = await render(<TimeWheel value={{ hour: 9, minute: 58 }} onChange={vi.fn()} testIdPrefix="reminder" />);
+    const minutes = wheel('minute');
+    const before = minutes.scrollTop;
+    const tops: number[] = [];
+    minutes.addEventListener('scroll', () => tops.push(minutes.scrollTop));
+    await rerender(<TimeWheel value={{ hour: 9, minute: 2 }} onChange={vi.fn()} testIdPrefix="reminder" />);
+    // Four rows on, not 56 back — then, stopped, back to the middle copy.
+    await vi.waitFor(() => expect(minutes.scrollTop).toBe(before - 56 * rowHeight()));
+    // (A smooth scroll may overshoot a few pixels before it snaps.)
+    expect(Math.round((Math.max(...tops) - before) / rowHeight())).toBe(4);
+  });
+
+  it('has 00–23 and no AM/PM on a 24-hour clock', async () => {
+    const onChange = vi.fn();
+    await render(<Controlled initial={{ hour: 9, minute: 0 }} hourCycle={24} onChange={onChange} />);
+    expect(document.querySelector('[data-testid="reminder-wheel-period"]')).toBeNull();
+    expect(wheel('hour').getAttribute('aria-valuetext')).toBe('09');
+    await spin('hour', 6);
+    expect(onChange).toHaveBeenLastCalledWith({ hour: 15, minute: 0 });
   });
 });
