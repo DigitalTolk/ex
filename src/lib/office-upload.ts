@@ -66,3 +66,14 @@ export function officeFileLink(up: OfficeUpload): string {
   const url = up.webURL.replace(/[()]/g, (c) => (c === '(' ? '%28' : '%29'));
   return `[${text}](${url})`;
 }
+
+// What a composer's text and chips send: the attachments by id, and each
+// OneDrive file's link (its chip's `link`) on a line after the text — the
+// composer edits raw markdown, so the link only joins the text on its way out.
+export function composerValue(body: string, chips: readonly { id: string; link?: string }[]): { body: string; attachmentIDs: string[] } {
+  const links = chips.flatMap((c) => (c.link ? [c.link] : []));
+  return {
+    body: [body, ...links].filter((s) => s !== '').join('\n'),
+    attachmentIDs: chips.filter((c) => !c.link).map((c) => c.id),
+  };
+}

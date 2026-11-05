@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, render as rtlRender, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { EditorView } from '@codemirror/view';
 import { queryKeys } from '@/lib/query-keys';
 
 // A Word, Excel or PowerPoint file picked in a private channel goes to the
@@ -9,11 +10,12 @@ import { queryKeys } from '@/lib/query-keys';
 
 const mockUploadAttachment = vi.fn();
 const mockPutOfficeFile = vi.fn();
+const mockDeleteDraft = vi.fn();
 let authProvider: 'oidc' | 'guest' | null = 'oidc';
 
 vi.mock('@/hooks/useAttachments', () => ({
   uploadAttachment: (...args: unknown[]) => mockUploadAttachment(...args),
-  useDeleteDraftAttachment: () => ({ mutateAsync: vi.fn(), mutate: vi.fn(), isPending: false }),
+  useDeleteDraftAttachment: () => ({ mutateAsync: mockDeleteDraft, mutate: vi.fn(), isPending: false }),
   useAttachment: () => ({ data: undefined, isLoading: false }),
 }));
 vi.mock('@/lib/office-upload', async (orig) => ({
@@ -51,12 +53,22 @@ function renderComposer({ parentType = 'channel', parentID = 'ch-deal' }: { pare
     { channelID: 'ch-open', channelName: 'general', channelType: 'public' },
   ]);
   const onSend = vi.fn();
+  const onDraftChange = vi.fn();
   const view = rtlRender(
     <QueryClientProvider client={qc}>
-      <MessageInput onSend={onSend} typingParentID={parentID} typingParentType={parentType} />
+      <MessageInput onSend={onSend} onDraftChange={onDraftChange} typingParentID={parentID} typingParentType={parentType} />
     </QueryClientProvider>,
   );
-  return { onSend, unmount: view.unmount };
+  return { onSend, onDraftChange, unmount: view.unmount };
+}
+
+function editorText() {
+  return EditorView.findFromDOM(document.querySelector('.cm-content') as HTMLElement)!.state.doc.toString();
+}
+
+function typeInto(text: string) {
+  const v = EditorView.findFromDOM(document.querySelector('.cm-content') as HTMLElement)!;
+  act(() => v.dispatch({ changes: { from: v.state.doc.length, insert: text } }));
 }
 
 function pick(...files: File[]) {
@@ -80,17 +92,33 @@ describe('MessageInput - Office files in a private channel', () => {
     authProvider = 'oidc';
   });
 
-  it('puts the file in OneDrive and its link in the message, with no attachment', async () => {
-    mockPutOfficeFile.mockImplementation(async (_ch: string, _f: File, onProgress: (n: number) => void) => {
-      onProgress(0.5);
-      return { name: 'Q3 plan.docx', webURL: ONE_DRIVE_URL, size: 5 };
+  it('puts the file in OneDrive, keeps its chip, and sends its link instead of an attachment', async () => {
+    let progress!: (n: number) => void;
+    let finish!: (v: unknown) => void;
+    mockPutOfficeFile.mockImplementation((_ch: string, _f: File, onProgress: (n: number) => void) => {
+      progress = onProgress;
+      return new Promise((r) => { finish = r; });
     });
     const { onSend } = renderComposer();
     const file = docx();
     pick(file);
     await waitFor(() => expect(mockPutOfficeFile).toHaveBeenCalledWith('ch-deal', file, expect.any(Function)));
-    // The chip shows while it goes up, then gives way to the link.
-    await waitFor(() => expect(screen.queryByText('Q3 plan.docx')).toBeNull());
+    // The chip shows where it is going, and how far along.
+    act(() => progress(0.5));
+    const bar = await screen.findByRole('progressbar', { name: 'Uploading Q3 plan.docx to OneDrive' });
+    expect(bar).toHaveAttribute('aria-valuenow', '50');
+    expect(screen.getByText(/to OneDrive/)).toBeInTheDocument();
+    // Every byte sent isn't the file in OneDrive: it stays short of done
+    // until the link is back.
+    act(() => progress(1));
+    expect(bar).toHaveAttribute('aria-valuenow', '99');
+    // Then the chip says it is there, and the text stays the user's: the
+    // link joins the message only as it goes.
+    await act(async () => finish({ name: 'Q3 plan.docx', webURL: ONE_DRIVE_URL, size: 5 }));
+    expect(await screen.findByText(/in OneDrive/)).toBeInTheDocument();
+    expect(screen.queryByRole('progressbar')).toBeNull();
+    expect(screen.getByText('Q3 plan.docx')).toBeInTheDocument();
+    expect(editorText()).toBe('');
     fireEvent.click(await screen.findByLabelText('Send message'));
     await waitFor(() => expect(onSend).toHaveBeenCalledWith({ body: `[Q3 plan.docx](${ONE_DRIVE_URL})`, attachmentIDs: [] }));
     expect(mockUploadAttachment).not.toHaveBeenCalled();
@@ -115,10 +143,46 @@ describe('MessageInput - Office files in a private channel', () => {
     const { onSend } = renderComposer();
     pick(docx(), new File(['n'], 'notes.txt', { type: 'text/plain' }));
     await screen.findByText('notes.txt');
-    await waitFor(() => expect(screen.queryByText('Q3 plan.docx')).toBeNull());
+    await screen.findByText(/in OneDrive/);
     fireEvent.click(await screen.findByLabelText('Send message'));
     await waitFor(() => expect(onSend).toHaveBeenCalledWith({ body: `[Q3 plan.docx](${ONE_DRIVE_URL})`, attachmentIDs: ['att-notes'] }));
     expect(mockPutOfficeFile).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends the link after what was typed', async () => {
+    mockPutOfficeFile.mockResolvedValue({ name: 'Q3 plan.docx', webURL: ONE_DRIVE_URL, size: 5 });
+    const { onSend } = renderComposer();
+    typeInto('here is the plan');
+    pick(docx());
+    await screen.findByText(/in OneDrive/);
+    fireEvent.click(await screen.findByLabelText('Send message'));
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith({ body: `here is the plan\n[Q3 plan.docx](${ONE_DRIVE_URL})`, attachmentIDs: [] }));
+  });
+
+  // Removing the chip takes the link out of the message; the file is the
+  // user's own, in their OneDrive, and nothing in ex is deleted.
+  it('drops the link when its chip is removed', async () => {
+    mockPutOfficeFile.mockResolvedValue({ name: 'Q3 plan.docx', webURL: ONE_DRIVE_URL, size: 5 });
+    const { onSend } = renderComposer();
+    typeInto('never mind');
+    pick(docx());
+    await screen.findByText(/in OneDrive/);
+    fireEvent.click(screen.getByLabelText('Remove Q3 plan.docx'));
+    expect(screen.queryByText('Q3 plan.docx')).toBeNull();
+    expect(mockDeleteDraft).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByLabelText('Send message'));
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith({ body: 'never mind', attachmentIDs: [] }));
+  });
+
+  // The draft keeps the link in its text, so leaving the channel before
+  // sending loses nothing.
+  it('saves the link with the draft', async () => {
+    mockPutOfficeFile.mockResolvedValue({ name: 'Q3 plan.docx', webURL: ONE_DRIVE_URL, size: 5 });
+    const { onDraftChange } = renderComposer();
+    pick(docx());
+    await screen.findByText(/in OneDrive/);
+    act(() => { window.dispatchEvent(new Event('blur')); });
+    expect(onDraftChange).toHaveBeenLastCalledWith({ body: `[Q3 plan.docx](${ONE_DRIVE_URL})`, attachmentIDs: [] }, expect.anything());
   });
 
   it('attaches the file instead when OneDrive refuses it', async () => {
@@ -129,6 +193,7 @@ describe('MessageInput - Office files in a private channel', () => {
     pick(file);
     await waitFor(() => expect(mockUploadAttachment).toHaveBeenCalledWith(file, expect.anything()));
     expect(await screen.findByText('Q3 plan.docx')).toBeInTheDocument();
+    expect(screen.queryByText(/to OneDrive/)).toBeNull();
     fireEvent.click(await screen.findByLabelText('Send message'));
     await waitFor(() => expect(onSend).toHaveBeenCalledWith({ body: '', attachmentIDs: ['att-docx'] }));
   });

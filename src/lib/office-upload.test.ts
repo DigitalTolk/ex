@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { QueryClient } from '@tanstack/react-query';
 import { clearAccessToken, setAccessToken } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
-import { isOfficeFile, keepsOfficeFilesInOneDrive, officeFileLink, putOfficeFile } from './office-upload';
+import { composerValue, isOfficeFile, keepsOfficeFilesInOneDrive, officeFileLink, putOfficeFile } from './office-upload';
 
 describe('isOfficeFile', () => {
   it('knows Word, Excel and PowerPoint files, old and new', () => {
@@ -43,6 +43,15 @@ describe('officeFileLink', () => {
     expect(officeFileLink({ name: 'Plan [v2] \\ final.docx', webURL: 'https://x.sharepoint.com/a(1).docx', size: 1 })).toBe(
       '[Plan \\[v2\\] \\\\ final.docx](https://x.sharepoint.com/a%281%29.docx)',
     );
+  });
+});
+
+describe('composerValue', () => {
+  it('sends attachments by id and OneDrive files as links after the text', () => {
+    const chips = [{ id: 'att-1' }, { id: 'pending-2', link: '[a.docx](https://x/a)' }, { id: 'pending-3', link: '[b.xlsx](https://x/b)' }];
+    expect(composerValue('see these', chips)).toEqual({ body: 'see these\n[a.docx](https://x/a)\n[b.xlsx](https://x/b)', attachmentIDs: ['att-1'] });
+    expect(composerValue('', chips.slice(1, 2))).toEqual({ body: '[a.docx](https://x/a)', attachmentIDs: [] });
+    expect(composerValue('hi', [])).toEqual({ body: 'hi', attachmentIDs: [] });
   });
 });
 

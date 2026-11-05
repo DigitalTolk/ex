@@ -22,7 +22,6 @@ import { useLinkDialog } from './useLinkDialog';
 import { useSlashCommands } from './useSlashCommands';
 import { useTypingPing } from './useTypingPing';
 import { useOptionalAuth } from '@/context/AuthContext';
-import { officeFileLink, type OfficeUpload } from '@/lib/office-upload';
 
 export interface MessageInputValue {
   body: string;
@@ -136,8 +135,6 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     onDraftChange,
     suppressAutoFocus,
   });
-  // An Office file kept in OneDrive goes into the message as its link.
-  const insertOfficeLink = (up: OfficeUpload) => editorRef.current?.insertText(`${officeFileLink(up)} `);
   // Only a Microsoft sign-in can keep files in OneDrive; a guest's are
   // attached without asking.
   const signedInWithMicrosoft = useOptionalAuth()?.user?.authProvider === 'oidc';
@@ -146,7 +143,6 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     setDrafts,
     markLocallyEdited,
     officeChannelID: signedInWithMicrosoft && typingParentType === 'channel' ? typingParentID : undefined,
-    onOfficeFile: insertOfficeLink,
   });
   const {
     editorFocused,

@@ -7,6 +7,7 @@ import {
   countCodepoints,
 } from '@/lib/limits';
 import { normalizeEmojiInBody } from '@/lib/emoji-shortcodes';
+import { composerValue } from '@/lib/office-upload';
 import type { MessageInputValue } from './MessageInput';
 import type { SlashCommandOutcome } from './useSlashCommands';
 
@@ -47,7 +48,7 @@ export function useComposerSubmit({
   // Codepoint cap mirrors the backend rule: the user pastes "🚀🚀🚀…",
   // each emoji is one user-visible char, and we count it as one — not
   // as four bytes or two UTF-16 units.
-  const bodyCodepoints = countCodepoints(body);
+  const bodyCodepoints = countCodepoints(composerValue(body, drafts).body);
   const bodyOverLimit = bodyCodepoints > MAX_MESSAGE_BODY_CHARS;
   const attachmentsOverLimit = drafts.length > MAX_ATTACHMENTS_PER_MESSAGE;
 
@@ -56,9 +57,9 @@ export function useComposerSubmit({
       (text.trim() !== '' || drafts.length > 0) &&
       !disabled &&
       !isUploading &&
-      countCodepoints(text) <= MAX_MESSAGE_BODY_CHARS &&
+      countCodepoints(composerValue(text, drafts).body) <= MAX_MESSAGE_BODY_CHARS &&
       !attachmentsOverLimit,
-    [drafts.length, disabled, isUploading, attachmentsOverLimit],
+    [drafts, disabled, isUploading, attachmentsOverLimit],
   );
   const canSend = sendable(body);
   // What the editor holds now, for sending. `body` is the last render's copy:
@@ -87,7 +88,7 @@ export function useComposerSubmit({
     const command = submitCommand(trimmed, drafts.length > 0);
     if (command === 'busy') return;
     if (command === 'not-a-command') {
-      onSend({ body: normalizeEmojiInBody(trimmed), attachmentIDs: drafts.map((d) => d.id) });
+      onSend(composerValue(normalizeEmojiInBody(trimmed), drafts));
     }
     if (variant === 'inline') return; // parent unmounts the inline edit
     clearAfterSubmit();
@@ -99,7 +100,7 @@ export function useComposerSubmit({
     const text = currentBody();
     /* istanbul ignore next -- the schedule menu only renders with onSchedule and is disabled while !canSend; defensive */
     if (!sendable(text) || !onSchedule) return;
-    await onSchedule({ body: normalizeEmojiInBody(text.trim()), attachmentIDs: drafts.map((d) => d.id) }, sendAt);
+    await onSchedule(composerValue(normalizeEmojiInBody(text.trim()), drafts), sendAt);
     clearAfterSubmit();
   }, [sendable, currentBody, onSchedule, drafts, clearAfterSubmit]);
 
