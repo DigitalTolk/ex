@@ -26,6 +26,7 @@ function renderAt(path: string) {
           <Route path="/admin" element={<AdminLayout />}>
             <Route index element={<div data-testid="page-workspace" />} />
             <Route path="agents" element={<AdminAgentsPage />} />
+            <Route path="bots" element={<div data-testid="page-bots" />} />
           </Route>
         </Routes>
       </MemoryRouter>
@@ -43,7 +44,7 @@ describe('AdminLayout', () => {
   it('renders the tab strip with the current tab active', () => {
     renderAt('/admin');
     expect(screen.getByRole('navigation', { name: 'Admin sections' })).toBeInTheDocument();
-    expect(screen.getAllByRole('link').map((l) => l.textContent)).toEqual(['Workspace', 'Agents']);
+    expect(screen.getAllByRole('link').map((l) => l.textContent)).toEqual(['Workspace', 'Agents', 'Bots']);
     expect(screen.getByRole('link', { name: 'Workspace' })).toHaveAttribute('aria-current', 'page');
     expect(screen.getByTestId('page-workspace')).toBeInTheDocument();
   });
@@ -56,6 +57,14 @@ describe('AdminLayout', () => {
     expect(screen.getByRole('link', { name: 'Agents' })).toHaveAttribute('aria-current', 'page');
     expect(screen.getByRole('link', { name: 'Workspace' })).not.toHaveAttribute('aria-current');
     expect(screen.getByRole('link', { name: 'Workspace' }).className).not.toContain('font-semibold');
+  });
+
+  it('marks the Bots tab active on the bots page', () => {
+    renderAt('/admin/bots');
+    expect(screen.getByTestId('page-bots')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Bots' })).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByRole('link', { name: 'Bots' })).toHaveAttribute('href', '/admin/bots');
+    expect(screen.getByRole('link', { name: 'Workspace' })).not.toHaveAttribute('aria-current');
   });
 
   it('switches pages when a tab is clicked', () => {

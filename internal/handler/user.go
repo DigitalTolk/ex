@@ -233,6 +233,16 @@ const listAllPageSize = 500
 // hand them the organisation's address book. Their own record still comes
 // back whole through /users/me.
 func publicUserJSON(r *http.Request, u *model.User) JSON {
+	out := publicUserFields(r, u)
+	// A bot says so (the member list labels it), with its handle in place of
+	// its undeliverable address.
+	if u.IsBot {
+		out["isBot"], out["username"] = true, u.Username
+	}
+	return out
+}
+
+func publicUserFields(r *http.Request, u *model.User) JSON {
 	if callerIsGuest(r) && u.ID != middleware.UserIDFromContext(r.Context()) {
 		return JSON{
 			"id":          u.ID,
@@ -301,7 +311,13 @@ func usersForCaller(r *http.Request, users []*model.User) any {
 func (h *UserHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	q := queryParam(r, "q", "")
 	if q != "" {
-		users, err := h.userSvc.Search(r.Context(), q, 20)
+		search := h.userSvc.Search
+		// Adding someone to a channel: bots too (they post only where they
+		// are members, so this is how one gets in).
+		if queryParam(r, "bots", "") == "true" {
+			search = h.userSvc.SearchInvitable
+		}
+		users, err := search(r.Context(), q, 20)
 		if err != nil {
 			writeServiceError(w, r, err)
 			return

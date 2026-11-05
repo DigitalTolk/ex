@@ -405,6 +405,10 @@ export default function ChatPage() {
     [EventType.WebhookChanged]: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.incomingWebhooks() });
     },
+    [EventType.BotChanged]: () => {
+      // An admin changed a bot or its tokens: the admin page's lists refetch.
+      queryClient.invalidateQueries({ queryKey: queryKeys.bots() });
+    },
     [EventType.ProjectChanged]: () => {
       // A project or its design references changed (any member, any device):
       // the list and every open project detail refetch.

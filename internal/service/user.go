@@ -1087,11 +1087,12 @@ func (s *UserService) DeactivatedAmong(ctx context.Context, userIDs []string) (m
 }
 
 // forgetCachedUser drops a changed account's cached profile and the shared
-// roster copy. A nil cache is a no-op.
+// roster and bot copies. A nil cache is a no-op.
 func forgetCachedUser(ctx context.Context, c Cache, userID string) {
 	if c == nil {
 		return
 	}
 	_ = c.Delete(ctx, "user:"+userID)
 	_ = c.Delete(ctx, rosterCacheKey)
+	_ = c.Delete(ctx, botsCacheKey)
 }

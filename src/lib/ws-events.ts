@@ -64,6 +64,7 @@ export const wsEventSchemas = {
   [EventType.ReplayExhausted]: nudge,
   [EventType.SessionRenewed]: sessionRenewedSchema,
   [EventType.WebhookChanged]: nudge,
+  [EventType.BotChanged]: nudge,
   [EventType.ProjectChanged]: nudge,
   [EventType.SettingsUpdated]: nudge,
   [EventType.RunnersChanged]: nudge,

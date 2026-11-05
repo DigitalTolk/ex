@@ -1,10 +1,30 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import { User as UserIcon, Users, X } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { MessageInput, type MessageInputValue } from '@/components/chat/MessageInput';
+import { MessageList } from '@/components/chat/MessageList';
+import type { DraftChangeHandler } from '@/components/chat/useComposerDraft';
 import { useCreateConversation, useUserLookup, useUserConversations } from '@/hooks/useConversations';
+import { useConversationUserMap } from '@/hooks/useConversationUserMap';
+import {
+  appendMessageToCache,
+  CLIENT_NONCE_HEADER,
+  newClientNonce,
+  useConversationMessages,
+} from '@/hooks/useMessages';
+import {
+  condemnDraftForSend,
+  removeDraftScopeFromCache,
+  useDraftAttachmentChips,
+  useDraftForScope,
+  useSaveDraft,
+} from '@/hooks/useDrafts';
+import { useFrequentEmojis } from '@/hooks/useEmoji';
+import { useEventCallback } from '@/hooks/useEventCallback';
 import { conversationsWith } from '@/lib/conversation-match';
+import { shortName } from '@/lib/format';
 import { apiFetch } from '@/lib/api';
 import { useAuth } from '@/context/AuthContext';
 import { usePresence } from '@/context/PresenceContext';
@@ -18,6 +38,8 @@ interface PickedUser {
   displayName: string;
 }
 
+const draftScope = (parentID: string) => ({ parentID, parentType: 'conversation' as const });
+
 export default function NewConversationPage() {
   useDocumentTitle('New message');
   const [query, setQuery] = useState('');
@@ -30,14 +52,17 @@ export default function NewConversationPage() {
   const autoFocusTextInput = useAutoFocusTextInput();
   const { data: searchResults } = useUserLookup(query);
   const { online } = usePresence();
-  const createConversation = useCreateConversation();
   // The DMs and group messages you already have with everyone picked, the
   // one with exactly them first.
   const { data: conversations } = useUserConversations();
-  const existing = useMemo(
+  const matches = useMemo(
     () => conversationsWith(conversations ?? [], picked.map((p) => p.id), user?.id),
     [conversations, picked, user?.id],
   );
+  const exact = matches.find((m) => m.exact)?.conversation;
+  // One without a message yet is only a draft's home (see below).
+  const started = matches.filter((m) => m.conversation.activated !== false);
+  const composer = useNewConversationComposer(picked, exact?.conversationID);
 
   // Filter out already-picked users from the suggestion list.
   const suggestions = (searchResults ?? []).filter(
@@ -99,10 +124,6 @@ export default function NewConversationPage() {
     }
   }
 
-  // Posting a message is the gesture that creates (or forwards into) the
-  // conversation. Until the user actually sends something, no DM/group
-  // exists on the server — so opening "New conversation" idly leaves no
-  // empty rows in the recipients' sidebars.
   async function handleSend(value: MessageInputValue) {
     if (picked.length === 0) {
       setError('Pick at least one recipient.');
@@ -113,36 +134,16 @@ export default function NewConversationPage() {
     }
     setError('');
     try {
-      const conv = await createConversation.mutateAsync({
-        type: picked.length > 1 ? 'group' : 'dm',
-        participantIDs: picked.map((p) => p.id),
-      });
-      // The standard useSendMessage hook is bound to a conversation id
-      // at construction time, but we only know the id once create
-      // resolves. apiFetch directly here keeps the page from carrying a
-      // pending hook for a conversation that may not exist yet.
-      await apiFetch<Message>(`/api/v1/conversations/${conv.id}/messages`, {
-        method: 'POST',
-        body: JSON.stringify({
-          body: value.body,
-          parentMessageID: '',
-          // MessageInputValue guarantees attachmentIDs (this handler already
-          // dereferences it in the empty-message guard above).
-          attachmentIDs: value.attachmentIDs,
-        }),
-      });
-      navigate(`/conversation/${conv.id}`, { replace: true });
+      await composer.send(value);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to send');
     }
   }
 
   return (
-    // Chat-window shell: same flex-col / overflow layout the channel and
-    // conversation views use, so this page slots into the main content
-    // area without visual jolt. The To: row replaces the channel header
-    // at the top; the composer pins to the bottom; the middle is empty
-    // until the user sends the first message.
+    // Chat-window shell, laid out like an open conversation: the To: row
+    // where its header goes, then the messages you already have with these
+    // people, then the composer.
     <div
       className="flex min-h-0 flex-1 flex-col overflow-hidden"
       data-testid="new-conversation-form"
@@ -203,7 +204,7 @@ export default function NewConversationPage() {
           </div>
         </div>
 
-        {/* Autocomplete dropdown — overlays the empty message area
+        {/* Autocomplete dropdown — overlays the message area
             below so it doesn't push the composer down when it opens. */}
         {suggestions.length > 0 && (
           <ul
@@ -244,42 +245,39 @@ export default function NewConversationPage() {
         )}
       </div>
 
-      {/* Empty message area — fills the gap between the To: row and the
-          composer the same way an empty chat would. We don't render
-          fake messages; just a neutral hint. */}
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        {existing.length > 0 ? (
-          <section className="space-y-1 p-4" aria-labelledby="existing-conversations">
-            <h2 id="existing-conversations" className="px-2 pb-1 text-xs font-semibold text-muted-foreground">
-              Existing conversations
-            </h2>
-            <ul>
-              {existing.map(({ conversation }) => {
-                const Icon = conversation.type === 'group' ? Users : UserIcon;
-                return (
-                  <li key={conversation.conversationID}>
-                    <button
-                      type="button"
-                      data-testid={`existing-conversation-${conversation.conversationID}`}
-                      onClick={() => navigate(`/conversation/${conversation.conversationID}`)}
-                      className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-muted mobile:py-3 mobile:text-base"
-                    >
-                      <Icon className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-                      <span className="min-w-0 flex-1 truncate font-medium">{conversation.displayName}</span>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          </section>
-        ) : (
-          <div className="flex h-full items-center justify-center px-6 text-center text-sm text-muted-foreground">
-            {picked.length === 0
-              ? 'Type a name above to find someone, then send a message to start the chat.'
-              : 'No messages yet. Send the first one below to start the conversation.'}
-          </div>
-        )}
-      </div>
+      {/* The conversation with exactly these people, once it has messages;
+          otherwise the ones that take in everyone picked and more. */}
+      {exact && exact.activated !== false ? (
+        <ConversationHistory key={exact.conversationID} id={exact.conversationID} participantIDs={exact.participantIDs} />
+      ) : (
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          {started.length > 0 && (
+            <section className="space-y-1 p-4" aria-labelledby="existing-conversations">
+              <h2 id="existing-conversations" className="px-2 pb-1 text-xs font-semibold text-muted-foreground">
+                Existing conversations
+              </h2>
+              <ul>
+                {started.map(({ conversation }) => {
+                  const Icon = conversation.type === 'group' ? Users : UserIcon;
+                  return (
+                    <li key={conversation.conversationID}>
+                      <button
+                        type="button"
+                        data-testid={`existing-conversation-${conversation.conversationID}`}
+                        onClick={() => navigate(`/conversation/${conversation.conversationID}`)}
+                        className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-muted mobile:py-3 mobile:text-base"
+                      >
+                        <Icon className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                        <span className="min-w-0 flex-1 truncate font-medium">{conversation.displayName}</span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+          )}
+        </div>
+      )}
 
       {/* Footer / composer area — error sits inline above the composer
           like a chat-input validation message would. */}
@@ -295,16 +293,184 @@ export default function NewConversationPage() {
         )}
         <MessageInput
           onSend={handleSend}
-          disabled={createConversation.isPending || picked.length === 0}
+          disabled={picked.length === 0}
           placeholder={
             picked.length === 0
               ? 'Pick at least one recipient first…'
-              : picked.length === 1
-                ? `Message ${picked[0].displayName}…`
-                : `Message ${picked.length} people…`
+              : `Write to ${picked.length === 1 ? picked[0].displayName : picked.map((p) => shortName(p.displayName)).join(', ')}`
           }
+          initialBody={composer.draft?.body ?? ''}
+          initialDrafts={composer.draftAttachments}
+          onDraftChange={composer.onDraftChange}
         />
       </div>
     </div>
+  );
+}
+
+// useNewConversationComposer keeps what is written to the people picked as
+// the draft of their conversation, as an open conversation's composer does,
+// and sends it there.
+//
+// That conversation is made the first time there is something to keep in it
+// (the server finds the one these people already have instead). Made, not
+// started: nobody else sees it, in their sidebar or anywhere, until its first
+// message — and yours shows it only while it holds your draft
+// (useSidebarSections).
+//
+// The text belongs to the page, not to the people: it stays in the box while
+// they change, and goes to the next save's conversation, leaving no draft
+// where it was before.
+function useNewConversationComposer(picked: PickedUser[], existingID: string | undefined) {
+  const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const createAsync = useCreateConversation().mutateAsync;
+  const saveDraft = useSaveDraft().mutate;
+  const ids = picked.map((p) => p.id);
+  const key = [...ids].sort().join(',');
+  // Conversations made here, by the people they are with (key).
+  const [made, setMade] = useState<Record<string, string>>({});
+  const making = useRef(new Map<string, Promise<string>>());
+  const id = existingID ?? made[key];
+  const { data: draft } = useDraftForScope(useMemo(() => ({ parentID: id, parentType: 'conversation' as const }), [id]));
+  const draftAttachments = useDraftAttachmentChips(draft?.attachmentIDs);
+  // Where this page last saved text of its own (not a draft it only showed).
+  const savedIn = useRef<string | undefined>(undefined);
+
+  const ensure = useEventCallback((): Promise<string> => {
+    if (id) return Promise.resolve(id);
+    let pending = making.current.get(key);
+    if (!pending) {
+      const forKey = key;
+      pending = createAsync({ type: ids.length > 1 ? 'group' : 'dm', participantIDs: ids }).then(
+        (conv) => {
+          setMade((prev) => ({ ...prev, [forKey]: conv.id }));
+          return conv.id;
+        },
+        (err: unknown) => {
+          // The next save or send asks again.
+          making.current.delete(forKey);
+          throw err;
+        },
+      );
+      making.current.set(forKey, pending);
+    }
+    return pending;
+  });
+
+  const clear = (parentID: string) =>
+    saveDraft({ ...draftScope(parentID), body: '', attachmentIDs: [], silent: true });
+
+  const onDraftChange: DraftChangeHandler = useEventCallback((value, options) => {
+    if (ids.length === 0) return;
+    const hasContent = value.body !== '' || value.attachmentIDs.length > 0;
+    const was = savedIn.current;
+    if (!id && !hasContent) {
+      // Emptied before these people had a conversation: nothing to keep,
+      // and what was saved before went with the text.
+      if (was) clear(was);
+      savedIn.current = undefined;
+      return;
+    }
+    const shown = draft;
+    const makes = !id;
+    void ensure().then(
+      (to) => {
+        saveDraft({
+          ...draftScope(to),
+          body: value.body,
+          attachmentIDs: value.attachmentIDs,
+          // Keystroke saves persist silently; the focus-loss flush (notify)
+          // is what surfaces the draft in the sidebar. Except the one that
+          // makes the conversation: the page then reads that conversation's
+          // draft from the local list, which a silent save never reaches
+          // (useSaveDraft), and would take it to have none.
+          silent: !options?.notify && !makes,
+          keepalive: options?.keepalive,
+        });
+        if (was && was !== to) clear(was);
+        // Only text this page wrote moves with the recipients: a draft the
+        // conversation already had, merely shown, stays where it is.
+        const own = !shown || shown.body !== value.body || !sameIDs(shown.attachmentIDs ?? [], value.attachmentIDs);
+        savedIn.current = own && hasContent ? to : undefined;
+      },
+      () => {
+        // Not made: the next save tries again.
+      },
+    );
+  });
+
+  const send = useEventCallback(async (value: MessageInputValue) => {
+    const to = await ensure();
+    const scope = draftScope(to);
+    // As an open conversation's send does (useSendMessage): the server
+    // clears the draft with the send, so no save racing it may bring it back.
+    const rollback = condemnDraftForSend(scope);
+    const clientNonce = newClientNonce();
+    let sent: Message;
+    try {
+      sent = await apiFetch<Message>(`/api/v1/conversations/${to}/messages`, {
+        method: 'POST',
+        headers: { [CLIENT_NONCE_HEADER]: clientNonce },
+        body: JSON.stringify({
+          body: value.body,
+          parentMessageID: '',
+          attachmentIDs: value.attachmentIDs,
+        }),
+      });
+    } catch (err) {
+      rollback();
+      throw err;
+    }
+    removeDraftScopeFromCache(queryClient, scope);
+    appendMessageToCache(queryClient, to, { ...sent, clientNonce: sent.clientNonce ?? clientNonce });
+    const was = savedIn.current;
+    if (was && was !== to) clear(was);
+    savedIn.current = undefined;
+    navigate(`/conversation/${to}`, { replace: true });
+  });
+
+  return { draft, draftAttachments, onDraftChange, send };
+}
+
+function sameIDs(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((v, i) => v === b[i]);
+}
+
+// ConversationHistory shows the messages of the conversation the people
+// picked already have, as the conversation itself does. Replying in a thread
+// opens it there.
+function ConversationHistory({ id, participantIDs }: { id: string; participantIDs: string[] | undefined }) {
+  const { user } = useAuth();
+  const navigate = useNavigate();
+  const quickReactions = useFrequentEmojis(6);
+  const {
+    data,
+    hasNextPage,
+    isFetchingNextPage,
+    isLoading,
+    fetchNextPage,
+    hasPreviousPage,
+    isFetchingPreviousPage,
+    fetchPreviousPage,
+  } = useConversationMessages(id);
+  const { userMap } = useConversationUserMap(data?.pages, participantIDs);
+  const openThread = useEventCallback((rootID: string) => navigate(`/conversation/${id}?thread=${rootID}`));
+  return (
+    <MessageList
+      pages={data?.pages ?? []}
+      hasNextPage={hasNextPage}
+      isFetchingNextPage={isFetchingNextPage}
+      isLoading={isLoading}
+      fetchNextPage={fetchNextPage}
+      hasPreviousPage={hasPreviousPage}
+      isFetchingPreviousPage={isFetchingPreviousPage}
+      fetchPreviousPage={fetchPreviousPage}
+      currentUserId={user?.id}
+      conversationId={id}
+      userMap={userMap}
+      quickReactions={quickReactions}
+      onReplyInThread={openThread}
+    />
   );
 }

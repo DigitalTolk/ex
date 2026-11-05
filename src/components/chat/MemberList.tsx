@@ -44,6 +44,8 @@ interface SearchUser {
   email: string;
   avatarURL?: string;
   userStatus?: UserStatus | null;
+  isBot?: boolean;
+  username?: string;
 }
 
 // How long typing must pause before the add-member search asks the server.
@@ -73,7 +75,7 @@ export function MemberList({ members, channelId, channelSlug, currentUserId, cur
   // useUserLookup), so results always belong to what was last typed. A
   // failed search reads as no results.
   const searchTerm = useDebouncedValue(query, SEARCH_DEBOUNCE_MS);
-  const search = useUserLookup(searchTerm, { keepPrevious: true });
+  const search = useUserLookup(searchTerm, { keepPrevious: true, bots: true });
   const searching = query.length >= 2;
   const results: SearchUser[] = searching && searchTerm.length >= 2 ? (search.data ?? []) : [];
 
@@ -303,6 +305,7 @@ const MemberRow = memo(function MemberRow({
           <span className="truncate text-sm">{m.displayName || 'Unknown'}</span>
           <UserStatusIndicator status={entry?.userStatus} />
         </span>
+        {entry?.isBot && <Badge variant="secondary" className="text-xs px-1 py-0">Bot</Badge>}
         {roleBadge(m.role)}
         {onSetRole && roles.length > 0 && (
           <DropdownMenu>
@@ -346,7 +349,8 @@ function SearchResultRow({ user: u, added, onSelect }: { user: SearchUser; added
     <UserPickerRow
       testID={`member-add-user-${u.id}`}
       displayName={u.displayName}
-      email={u.email}
+      // A bot's address is undeliverable; its handle says what it is.
+      email={u.isBot ? (u.username ? `@${u.username}` : undefined) : u.email}
       avatarURL={u.avatarURL}
       online={online}
       userStatus={u.userStatus}

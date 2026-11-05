@@ -9,6 +9,8 @@ export const queryKeys = {
     sortedIDs === undefined ? (['users-batch'] as const) : (['users-batch', sortedIDs] as const),
   searchUsers: (query?: string) =>
     query === undefined ? (['searchUsers'] as const) : (['searchUsers', query] as const),
+  // The add-member search, which finds bots too.
+  searchInvitable: (query: string) => ['searchUsers', query, 'invitable'] as const,
   allUsers: () => ['allUsers'] as const,
 
   // Workspace
@@ -87,6 +89,9 @@ export const queryKeys = {
   adminSearchStatus: () => ['admin-search-status'] as const,
   adminEmailStatus: () => ['admin-email-status'] as const,
   incomingWebhooks: () => ['incoming-webhooks'] as const,
+  // Bot accounts (admin page); a bot's tokens sit under it.
+  bots: () => ['bots'] as const,
+  botTokens: (botID: string) => ['bots', botID, 'tokens'] as const,
   // Projects page (products + design references). project(key) nests under
   // projects() so one invalidation refreshes the list and every open detail.
   projects: () => ['projects'] as const,

@@ -75,6 +75,10 @@ type Deps struct {
 	Sidebar    *SidebarHandler
 	Search     *SearchHandler
 	Webhook    *WebhookHandler
+	// Bot accounts: the admin page's API, and the Mattermost-compatible API
+	// (/api/v4) bots call with their tokens.
+	Bot        *BotHandler
+	Mattermost *MattermostHandler
 	Activity   *ActivityHandler
 	Command    *CommandHandler
 	// Scheduled messages: compose now, deliver at a chosen time.
