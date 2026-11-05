@@ -46,10 +46,22 @@ type User struct {
 	CreatedAt            time.Time             `json:"createdAt" dynamodbav:"createdAt"`
 	UpdatedAt            time.Time             `json:"updatedAt" dynamodbav:"updatedAt"`
 
-	// IsBot marks a machine account: today, the backing identity of an incoming
-	// webhook. A bot owns the DM conversations its webhook posts into, and is
-	// hidden from the people directory, user search and mention autocomplete.
+	// IsBot marks a machine account: the identity behind an incoming webhook
+	// (which owns the DM conversations its webhook posts into), or a bot
+	// account admins manage, created on the admin page or migrated from
+	// Mattermost, that an integration acts as through the Mattermost API.
+	// Bots are hidden from the people directory, user search and mention
+	// autocomplete; a bot account shows up only when adding someone to a
+	// channel.
 	IsBot bool `json:"isBot,omitempty" dynamodbav:"isBot,omitempty"`
+	// Username is a bot's handle, unique among bots: the Mattermost API's
+	// `username`. People have none, and neither do the bots behind incoming
+	// webhooks or the bots migrated without one.
+	Username string `json:"username,omitempty" dynamodbav:"username,omitempty"`
+	// BotDescription says what a bot is for.
+	BotDescription string `json:"botDescription,omitempty" dynamodbav:"botDescription,omitempty"`
+	// BotOwnerID is the admin who created the bot (Mattermost's owner_id).
+	BotOwnerID string `json:"-" dynamodbav:"botOwnerID,omitempty"`
 
 	// Phone and Manager are directory attributes synced from Microsoft 365
 	// at SSO login when the Graph integration is enabled. They are owned by

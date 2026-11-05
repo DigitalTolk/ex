@@ -14,6 +14,8 @@ describe('sameUserMap', () => {
     expect(sameUserMap(base, { u2: base.u1 })).toBe(false);
     expect(sameUserMap(base, { u1: { ...base.u1, displayName: 'Alicia' } })).toBe(false);
     expect(sameUserMap(base, { u1: { ...base.u1, avatarURL: 'b.png' } })).toBe(false);
+    // A bot known only by its member name at first: the label must still come.
+    expect(sameUserMap({ u1: { displayName: 'A' } }, { u1: { displayName: 'A', isBot: true } })).toBe(false);
     expect(sameUserMap(base, { u1: { ...base.u1, userStatus: undefined } })).toBe(false);
     expect(sameUserMap({ u1: { displayName: 'A' } }, { u1: { displayName: 'A', userStatus: { emoji: '🌴', text: '' } } })).toBe(false);
     expect(sameUserMap(base, { u1: { ...base.u1, userStatus: { emoji: '🎉', text: 'Away' } } })).toBe(false);

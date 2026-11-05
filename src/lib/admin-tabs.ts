@@ -1,4 +1,4 @@
-import { Bot, SlidersHorizontal } from 'lucide-react';
+import { Bot, BotMessageSquare, SlidersHorizontal } from 'lucide-react';
 
 // The admin area: one "Admin" entry in the user menu, rendered by AdminLayout
 // as tabs — the same shape the AI hub uses for Agents/Skills/Connectors.
@@ -10,6 +10,7 @@ import { Bot, SlidersHorizontal } from 'lucide-react';
 export const ADMIN_TABS = [
   { to: '/admin', label: 'Workspace', Icon: SlidersHorizontal, end: true },
   { to: '/admin/agents', label: 'Agents', Icon: Bot, end: false },
+  { to: '/admin/bots', label: 'Bots', Icon: BotMessageSquare, end: false },
 ] as const;
 
 // ADMIN_HOME is where the user menu's Admin entry lands.

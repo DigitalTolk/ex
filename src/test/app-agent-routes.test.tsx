@@ -22,6 +22,7 @@ vi.mock('@/pages/SchedulesPage', () => ({ default: () => <div data-testid="stub-
 vi.mock('@/pages/ProjectsPage', () => ({ default: () => <div data-testid="stub-ProjectsPage" /> }));
 vi.mock('@/pages/ProjectDetailPage', () => ({ default: () => <div data-testid="stub-ProjectDetailPage" /> }));
 vi.mock('@/pages/AdminAgentsPage', () => ({ default: () => <div data-testid="stub-AdminAgentsPage" /> }));
+vi.mock('@/pages/AdminBotsPage', () => ({ default: () => <div data-testid="stub-AdminBotsPage" /> }));
 vi.mock('@/pages/RunnerConnectPage', () => ({ default: () => <div data-testid="stub-RunnerConnectPage" /> }));
 vi.mock('@/pages/RunnersPage', () => ({ default: () => <div data-testid="stub-RunnersPage" /> }));
 
@@ -99,6 +100,14 @@ describe('App — agent feature lazy routes', () => {
     expect(await screen.findByTestId('stub-AdminAgentsPage', {}, { timeout: 15000 })).toBeInTheDocument();
     expect(screen.getByRole('navigation', { name: 'Admin sections' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Agents' })).toHaveAttribute('href', '/admin/agents');
+    view.unmount();
+  });
+
+  it('resolves the /admin/bots chunk under the admin tab strip', async () => {
+    window.history.pushState({}, '', '/admin/bots');
+    const view = render(<App />);
+    expect(await screen.findByTestId('stub-AdminBotsPage', {}, { timeout: 15000 })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Bots' })).toHaveAttribute('aria-current', 'page');
     view.unmount();
   });
 });

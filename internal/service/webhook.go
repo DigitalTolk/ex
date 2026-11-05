@@ -675,6 +675,13 @@ func (s *IncomingWebhookService) proxyImages(ctx context.Context, iconURL string
 	return icon
 }
 
+// TranslateMarkup turns Mattermost (and Slack) message markup into ex's:
+// ~channel and @user references into mentions, @channel and <!channel> into
+// @all, <url|label> into a link. The Mattermost-compatible API posts with it.
+func (s *IncomingWebhookService) TranslateMarkup(ctx context.Context, text string) string {
+	return s.newRefs().translate(ctx, text)
+}
+
 func (r *webhookRefs) translate(ctx context.Context, text string) string {
 	text = strings.ReplaceAll(text, "<!channel>", "@all")
 	text = strings.ReplaceAll(text, "<!all>", "@all")

@@ -17,6 +17,9 @@ export interface User {
   // Directory attributes synced from Microsoft 365 at SSO login (read-only).
   phone?: string;
   manager?: UserManager;
+  // A bot account, and its handle.
+  isBot?: boolean;
+  username?: string;
 }
 
 // UserManager is the employee-directory manager reference shown on profile

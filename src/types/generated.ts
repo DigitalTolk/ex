@@ -1130,6 +1130,51 @@ export interface RefreshToken {
 }
 
 //////////
+// source: bot.go
+
+/**
+ * BotAccount is a bot as the admin API lists it: the bot accounts admins
+ * create, and the ones migrated from Mattermost. The bots behind incoming
+ * webhooks belong to their webhooks and are not listed.
+ */
+export interface BotAccount {
+  id: string;
+  username: string;
+  displayName: string;
+  description: string;
+  /**
+   * OwnerID is the admin who created the bot; empty for a migrated one.
+   */
+  ownerID: string;
+  /**
+   * Status is "active" or "deactivated" (a disabled bot).
+   */
+  status: string;
+  createdAt: string /* RFC3339 */;
+  updatedAt: string /* RFC3339 */;
+}
+/**
+ * BotToken is an access token a bot authenticates the Mattermost-compatible
+ * API (/api/v4) with. Only the SHA-256 of the secret is stored: the secret is
+ * shown once, when the token is made, and cannot be read back.
+ */
+export interface BotToken {
+  id: string;
+  botUserID: string;
+  description: string;
+  createdBy: string;
+  createdAt: string /* RFC3339 */;
+}
+/**
+ * BotTokenIssued answers the request that made a token: the record, and the
+ * secret, which is never shown again.
+ */
+export interface BotTokenIssued {
+  token: BotToken;
+  secret: string;
+}
+
+//////////
 // source: channel.go
 
 export type ChannelType = string;
@@ -2475,11 +2520,25 @@ export interface User {
   createdAt: string /* RFC3339 */;
   updatedAt: string /* RFC3339 */;
   /**
-   * IsBot marks a machine account: today, the backing identity of an incoming
-   * webhook. A bot owns the DM conversations its webhook posts into, and is
-   * hidden from the people directory, user search and mention autocomplete.
+   * IsBot marks a machine account: the identity behind an incoming webhook
+   * (which owns the DM conversations its webhook posts into), or a bot
+   * account admins manage, created on the admin page or migrated from
+   * Mattermost, that an integration acts as through the Mattermost API.
+   * Bots are hidden from the people directory, user search and mention
+   * autocomplete; a bot account shows up only when adding someone to a
+   * channel.
    */
   isBot?: boolean;
+  /**
+   * Username is a bot's handle, unique among bots: the Mattermost API's
+   * `username`. People have none, and neither do the bots behind incoming
+   * webhooks or the bots migrated without one.
+   */
+  username?: string;
+  /**
+   * BotDescription says what a bot is for.
+   */
+  botDescription?: string;
   /**
    * Phone and Manager are directory attributes synced from Microsoft 365
    * at SSO login when the Graph integration is enabled. They are owned by
