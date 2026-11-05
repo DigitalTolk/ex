@@ -9,6 +9,7 @@ import {
   useSharePointHosts,
   useSharePointHostsSetting,
   useSharePointLink,
+  useSharePointPreview,
 } from './useSharePoint';
 
 const apiFetchMock = vi.fn();
@@ -74,6 +75,21 @@ describe('useSharePointLink', () => {
     const { wrapper } = setup();
     renderHook(() => useSharePointLink({}, LINK), { wrapper });
     expect(apiFetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('useSharePointPreview', () => {
+  it('reads the address that shows the file, once, and never keeps it', async () => {
+    apiFetchMock.mockResolvedValueOnce({ url: 'https://contoso.sharepoint.com/embed?nb=true' });
+    const { qc, wrapper } = setup();
+    const { result, unmount } = renderHook(() => useSharePointPreview({ conversationId: 'dm-1' }, 'f-1'), { wrapper });
+    await waitFor(() => expect(result.current.data).toBe('https://contoso.sharepoint.com/embed?nb=true'));
+    expect(apiFetchMock).toHaveBeenCalledWith('/api/v1/sharepoint/preview?parentType=conversation&parentID=dm-1&fileID=f-1');
+    // Never stale while it shows (a window focus doesn't reload the viewer),
+    // and gone once the lightbox closes: the address expires.
+    expect(result.current.isStale).toBe(false);
+    unmount();
+    await waitFor(() => expect(qc.getQueryCache().findAll({ queryKey: ['sharepoint-preview'] })).toHaveLength(0));
   });
 });
 

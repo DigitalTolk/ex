@@ -10,6 +10,17 @@ vi.mock('@/hooks/useSharePoint', () => ({
   useSharePointLink: (parent: unknown, url: string) => ({ data: mockLink(parent, url) }),
   useRetrySharePointLink: () => ({ mutate: mockRetry, isPending: retryPending }),
 }));
+// The lightbox has its own tests (ImageLightbox.sharepoint.browser): here,
+// only what the card hands it and when it opens.
+const lightboxSources = vi.hoisted(() => ({ current: [] as { key: string; slide: unknown }[], postedIn: undefined as string | undefined }));
+const mockOpen = vi.hoisted(() => vi.fn());
+vi.mock('@/hooks/useAttachmentLightbox', () => ({
+  useAttachmentLightbox: ({ sources, postedIn }: { sources: { key: string; slide: unknown }[]; postedIn?: string }) => {
+    lightboxSources.current = sources;
+    lightboxSources.postedIn = postedIn;
+    return { isOpenable: (k: string) => !!sources.find((x) => x.key === k && x.slide), open: mockOpen, lightbox: null };
+  },
+}));
 
 const LINK = 'https://contoso.sharepoint.com/:w:/s/team/Eabc';
 const FILE = {
@@ -32,6 +43,10 @@ function renderCard(link: SharePointLink | null | undefined, viewer = 'poster') 
       parent={{ channelId: 'ch-1' }}
       currentUserId={viewer}
       nameOf={(id) => NAMES[id] ?? 'Unknown'}
+      authorName="Ann"
+      authorAvatarURL="/a.png"
+      postedIn="~plans"
+      postedAt="2026-10-30T09:00:00Z"
       onContentHeightChange={onHeight}
     />,
   );
@@ -39,6 +54,7 @@ function renderCard(link: SharePointLink | null | undefined, viewer = 'poster') 
 }
 
 beforeEach(() => {
+  mockOpen.mockReset();
   mockLink.mockReset();
   mockRetry.mockReset();
   retryPending = false;
@@ -122,34 +138,56 @@ describe('SharePointCard', () => {
     expect(screen.getByRole('button', { name: 'Retry' })).toBeDisabled();
   });
 
-  // Nothing is previewed in the app: a file opens in SharePoint (to edit,
-  // where Office edits it), in a new tab, and downloads from beside it.
-  it('opens a file in SharePoint, and downloads it from the card', () => {
+  it('opens a file in the lightbox, and a modified click in SharePoint', () => {
     renderCard({ url: LINK, status: 'shared', posterID: 'poster', file: FILE }, 'viewer');
+    expect(lightboxSources.current).toEqual([
+      {
+        key: 'file',
+        slide: { sharePoint: { file: FILE, parent: { channelId: 'ch-1' } }, authorName: 'Ann', authorAvatarURL: '/a.png', postedAt: '2026-10-30T09:00:00Z' },
+      },
+    ]);
+    expect(lightboxSources.postedIn).toBe('~plans');
     const open = screen.getByTestId('sharepoint-card-open');
-    expect(open).toHaveAttribute('href', FILE.editURL);
-    expect(open).toHaveAttribute('target', '_blank');
-    // fireEvent returns true: the click keeps its default, the link's own way.
-    expect(fireEvent.click(open)).toBe(true);
-    const download = screen.getByRole('link', { name: 'Download Plan.docx' });
-    expect(download).toHaveAttribute('href', FILE.downloadURL);
-    expect(download).toHaveAttribute('target', '_blank');
+    // fireEvent returns false once the click's default was prevented.
+    expect(fireEvent.click(open)).toBe(false);
+    expect(mockOpen).toHaveBeenCalledWith('file');
+    for (const modifier of ['metaKey', 'ctrlKey', 'shiftKey', 'altKey']) {
+      expect(fireEvent.click(open, { [modifier]: true })).toBe(true);
+    }
+    expect(mockOpen).toHaveBeenCalledTimes(1);
     // Its type shows as its tile.
     expect(screen.getByTestId('file-type-icon')).toHaveAttribute('data-kind', 'document');
   });
 
-  it('has no download for a folder, a file without a download address, or one not known yet', () => {
-    const { unmount } = renderCard({ url: LINK, status: 'shared', posterID: 'x', file: { ...FILE, name: 'Reports', folder: true } }, 'viewer');
-    expect(screen.getByTestId('sharepoint-card-open')).toHaveAttribute('href', FILE.editURL);
-    expect(screen.getByTestId('file-type-icon')).toHaveAttribute('data-kind', 'other');
-    expect(screen.queryByTestId('sharepoint-card-download')).toBeNull();
+  // Beside the file, a download from SharePoint (in a new tab, where the
+  // browser holds the Microsoft sign-in) — not for a folder, an item with no
+  // download address, or a file not known yet.
+  it('downloads a file from the card', () => {
+    const { unmount } = renderCard({ url: LINK, status: 'shared', posterID: 'poster', file: FILE }, 'viewer');
+    const download = screen.getByRole('link', { name: 'Download Plan.docx' });
+    expect(download).toHaveAttribute('href', FILE.downloadURL);
+    expect(download).toHaveAttribute('target', '_blank');
+    expect(mockOpen).not.toHaveBeenCalled();
     unmount();
-    const second = renderCard({ url: LINK, status: 'shared', posterID: 'x', file: { ...FILE, downloadURL: undefined } }, 'viewer');
-    expect(screen.queryByTestId('sharepoint-card-download')).toBeNull();
-    second.unmount();
+    for (const link of [
+      { url: LINK, status: 'shared' as const, posterID: 'x', file: { ...FILE, folder: true } },
+      { url: LINK, status: 'shared' as const, posterID: 'x', file: { ...FILE, downloadURL: undefined } },
+      { url: LINK, status: 'pending' as const, posterID: 'x' },
+    ]) {
+      const view = renderCard(link, 'viewer');
+      expect(screen.queryByTestId('sharepoint-card-download')).toBeNull();
+      view.unmount();
+    }
+  });
+
+  it('opens a folder, or a file not known yet, in SharePoint', () => {
+    const { unmount } = renderCard({ url: LINK, status: 'shared', posterID: 'x', file: { ...FILE, name: 'Reports', folder: true } }, 'viewer');
+    expect(fireEvent.click(screen.getByTestId('sharepoint-card-open'))).toBe(true);
+    expect(screen.getByTestId('file-type-icon')).toHaveAttribute('data-kind', 'other');
+    unmount();
     renderCard({ url: LINK, status: 'pending', posterID: 'poster' });
-    expect(screen.getByTestId('sharepoint-card-open')).toHaveAttribute('href', LINK);
-    expect(screen.queryByTestId('sharepoint-card-download')).toBeNull();
+    expect(fireEvent.click(screen.getByTestId('sharepoint-card-open'))).toBe(true);
+    expect(mockOpen).not.toHaveBeenCalled();
   });
 
   it('shows nobody else a link that failed before its file was known', () => {

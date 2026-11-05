@@ -654,7 +654,7 @@ function MessageItemImpl({
     [hasParent, message.body, sharePointHosts],
   );
   const sharePointParent = useMemo(() => ({ channelId, conversationId }), [channelId, conversationId]);
-  // The lightbox header's "where", for its files.
+  // The lightbox header's "where": its files and SharePoint cards.
   const postedIn = channelSlug ? `~${channelSlug}` : conversationId ? 'Direct message' : undefined;
   const renderLink = useCallback(
     (href: string, children: ReactNode) =>
@@ -1130,6 +1130,10 @@ function MessageItemImpl({
                 parent={sharePointParent}
                 currentUserId={currentUserId}
                 nameOf={(id) => userMap?.get(id)?.displayName ?? 'Unknown'}
+                authorName={displayAuthorName}
+                authorAvatarURL={displayAuthorAvatarURL}
+                postedIn={postedIn}
+                postedAt={message.createdAt}
                 onContentHeightChange={onContentHeightChange}
               />
             ))}

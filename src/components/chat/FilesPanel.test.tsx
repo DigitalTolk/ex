@@ -275,7 +275,7 @@ describe('FilesPanel', () => {
     ]);
   });
 
-  it('lists SharePoint files, which open in SharePoint rather than the lightbox', async () => {
+  it('lists SharePoint files, which open in the lightbox (a folder in SharePoint)', async () => {
     const doc: SharePointFile = {
       id: 'f-1',
       name: 'Budget.xlsx',
@@ -295,22 +295,27 @@ describe('FilesPanel', () => {
       ],
     });
     renderPanel();
-    const budget = await screen.findByRole('link', { name: 'Open Budget.xlsx' });
+    const budget = await screen.findByRole('button', { name: 'Open Budget.xlsx' });
     expect(budget.textContent).toContain('Alice');
     expect(budget.textContent).toContain('SharePoint');
     expect(within(budget).getByTestId('file-type-icon')).toHaveAttribute('data-kind', 'spreadsheet');
-    // For editing, where Office edits it, in a new tab — no slide of its own.
-    expect(budget).toHaveAttribute('href', doc.editURL);
-    expect(budget).toHaveAttribute('target', '_blank');
-    expect(lightbox.sources[0].slide).toBeNull();
-    // A folder too.
+    fireEvent.click(budget);
+    expect(lightbox.open).toHaveBeenCalledWith('sp:f-1:m-2');
+    // A slide among the attachments, shown as the viewer in its own viewer.
+    expect(lightbox.sources[0].slide).toEqual({
+      authorName: 'Alice',
+      authorAvatarURL: undefined,
+      postedAt: '2026-05-02T12:00:00Z',
+      sharePoint: { file: doc, parent: { channelId: 'ch-1', conversationId: undefined } },
+    });
+    // A folder opens in SharePoint.
     const reports = screen.getByRole('link', { name: 'Open Reports' });
     expect(reports).toHaveAttribute('href', folder.webURL);
     expect(reports).toHaveAttribute('target', '_blank');
     expect(reports.textContent).toContain('Unknown');
     expect(lightbox.sources[1].slide).toBeNull();
     // A file of no known type still opens; the attachment beside them too.
-    expect(within(screen.getByRole('link', { name: 'Open notes' })).getByTestId('file-type-icon')).toHaveAttribute('data-kind', 'other');
+    expect(within(screen.getByRole('button', { name: 'Open notes' })).getByTestId('file-type-icon')).toHaveAttribute('data-kind', 'other');
     expect(screen.getByRole('button', { name: 'Open spec.pdf' })).toBeEnabled();
     expect(screen.getAllByTestId('files-row')).toHaveLength(4);
   });

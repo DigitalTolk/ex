@@ -1,6 +1,7 @@
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, useMemo, type MouseEvent, type ReactNode } from 'react';
 import { Download } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { useAttachmentLightbox } from '@/hooks/useAttachmentLightbox';
 import { useRetrySharePointLink, useSharePointLink, type SharePointParent } from '@/hooks/useSharePoint';
 import { formatBytes } from '@/lib/format';
 import { sharePointOpenURL } from '@/lib/sharepoint';
@@ -42,17 +43,44 @@ interface SharePointCardProps {
   parent: SharePointParent;
   currentUserId?: string;
   nameOf: (userId: string) => string;
+  // The lightbox header: who posted it, where and when.
+  authorName: string;
+  authorAvatarURL?: string;
+  postedIn?: string;
+  postedAt: string;
   onContentHeightChange?: () => void;
 }
 
-// SharePointCard shows a posted SharePoint link as its file. It opens in
-// SharePoint, in a new tab — for editing, where Office for the web edits it —
-// and a file downloads from the button beside it. The person who posted it
-// also sees how sharing it with the channel went, and can retry a share that
-// failed.
-export function SharePointCard({ url, parent, currentUserId, nameOf, onContentHeightChange }: SharePointCardProps) {
+// SharePointCard shows a posted SharePoint link as its file. A file opens in
+// the lightbox as it is, with Edit (Office for the web) and Download, and
+// downloads from the card too; a folder, or a modified click, opens it in
+// SharePoint. The person who posted
+// it also sees how sharing it with the channel went, and can retry a share
+// that failed.
+export function SharePointCard({
+  url,
+  parent,
+  currentUserId,
+  nameOf,
+  authorName,
+  authorAvatarURL,
+  postedIn,
+  postedAt,
+  onContentHeightChange,
+}: SharePointCardProps) {
   const { data: link } = useSharePointLink(parent, url);
   const retry = useRetrySharePointLink(parent, url);
+  const previewable = link?.file && !link.file.folder ? link.file : null;
+  const sources = useMemo(
+    () => [
+      {
+        key: 'file',
+        slide: previewable ? { sharePoint: { file: previewable, parent }, authorName, authorAvatarURL, postedAt } : null,
+      },
+    ],
+    [previewable, parent, authorName, authorAvatarURL, postedAt],
+  );
+  const { isOpenable, open, lightbox } = useAttachmentLightbox({ sources, postedIn });
   const mine = !!link && link.posterID === currentUserId;
   // Nothing to show anyone else about a link that failed before its file
   // was known.
@@ -65,6 +93,12 @@ export function SharePointCard({ url, parent, currentUserId, nameOf, onContentHe
   }, [visible, note, onContentHeightChange]);
   if (!visible) return null;
   const file = link.file;
+  function onOpen(e: MouseEvent) {
+    // A modified click keeps the link's own way: SharePoint, in a new tab.
+    if (!isOpenable('file') || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    e.preventDefault();
+    open('file');
+  }
   // From SharePoint, in a new tab (the browser there holds the Microsoft
   // sign-in). A folder, or an item Microsoft 365 gave no ids, has none.
   const download = file && !file.folder ? file.downloadURL : undefined;
@@ -75,6 +109,7 @@ export function SharePointCard({ url, parent, currentUserId, nameOf, onContentHe
           href={externalHref(sharePointOpenURL(file, url))}
           target="_blank"
           rel="noopener noreferrer"
+          onClick={onOpen}
           data-testid="sharepoint-card-open"
           className="flex min-w-0 flex-1 items-center gap-3"
         >
@@ -118,6 +153,7 @@ export function SharePointCard({ url, parent, currentUserId, nameOf, onContentHe
           )}
         </div>
       )}
+      {lightbox}
     </div>
   );
 }

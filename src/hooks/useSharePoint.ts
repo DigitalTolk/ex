@@ -52,6 +52,21 @@ export function useSharePointLink(parent: SharePointParent, url: string, enabled
   });
 }
 
+// useSharePointPreview reads the short-lived address that shows a shared file
+// as it is (Office for the web's viewer), fetched as the viewer. Read once
+// each time the lightbox shows the file: the address expires and acts as the
+// viewer, so it is never kept, nor read again while it shows.
+export function useSharePointPreview(parent: SharePointParent, fileID: string) {
+  return useQuery({
+    queryKey: queryKeys.sharePointPreview(parentPath(parent), fileID),
+    queryFn: async () =>
+      (await apiFetch<{ url: string }>(`/api/v1/sharepoint/preview?${parentQuery(parent, { fileID })}`)).url,
+    staleTime: Infinity,
+    gcTime: 0,
+    retry: false,
+  });
+}
+
 // Shares a link that failed again, as the person who posted it.
 export function useRetrySharePointLink(parent: SharePointParent, url: string) {
   const qc = useQueryClient();
