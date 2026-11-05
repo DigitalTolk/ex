@@ -1,6 +1,6 @@
-import { useEffect, useMemo, type MouseEvent, type ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
+import { Download } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { useAttachmentLightbox } from '@/hooks/useAttachmentLightbox';
 import { useRetrySharePointLink, useSharePointLink, type SharePointParent } from '@/hooks/useSharePoint';
 import { formatBytes } from '@/lib/format';
 import { sharePointOpenURL } from '@/lib/sharepoint';
@@ -42,43 +42,17 @@ interface SharePointCardProps {
   parent: SharePointParent;
   currentUserId?: string;
   nameOf: (userId: string) => string;
-  // The lightbox header: who posted it, where and when.
-  authorName: string;
-  authorAvatarURL?: string;
-  postedIn?: string;
-  postedAt: string;
   onContentHeightChange?: () => void;
 }
 
-// SharePointCard shows a posted SharePoint link as its file. A file opens in
-// the lightbox as it is, with Edit (Office for the web) and Download; a
-// folder, or a modified click, opens it in SharePoint. The person who posted
-// it also sees how sharing it with the channel went, and can retry a share
-// that failed.
-export function SharePointCard({
-  url,
-  parent,
-  currentUserId,
-  nameOf,
-  authorName,
-  authorAvatarURL,
-  postedIn,
-  postedAt,
-  onContentHeightChange,
-}: SharePointCardProps) {
+// SharePointCard shows a posted SharePoint link as its file. It opens in
+// SharePoint, in a new tab — for editing, where Office for the web edits it —
+// and a file downloads from the button beside it. The person who posted it
+// also sees how sharing it with the channel went, and can retry a share that
+// failed.
+export function SharePointCard({ url, parent, currentUserId, nameOf, onContentHeightChange }: SharePointCardProps) {
   const { data: link } = useSharePointLink(parent, url);
   const retry = useRetrySharePointLink(parent, url);
-  const previewable = link?.file && !link.file.folder ? link.file : null;
-  const sources = useMemo(
-    () => [
-      {
-        key: 'file',
-        slide: previewable ? { sharePoint: { file: previewable, parent }, authorName, authorAvatarURL, postedAt } : null,
-      },
-    ],
-    [previewable, parent, authorName, authorAvatarURL, postedAt],
-  );
-  const { isOpenable, open, lightbox } = useAttachmentLightbox({ sources, postedIn });
   const mine = !!link && link.posterID === currentUserId;
   // Nothing to show anyone else about a link that failed before its file
   // was known.
@@ -91,34 +65,45 @@ export function SharePointCard({
   }, [visible, note, onContentHeightChange]);
   if (!visible) return null;
   const file = link.file;
-  function onOpen(e: MouseEvent) {
-    // A modified click keeps the link's own way: SharePoint, in a new tab.
-    if (!isOpenable('file') || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-    e.preventDefault();
-    open('file');
-  }
+  // From SharePoint, in a new tab (the browser there holds the Microsoft
+  // sign-in). A folder, or an item Microsoft 365 gave no ids, has none.
+  const download = file && !file.folder ? file.downloadURL : undefined;
   return (
     <div className="mt-1.5 max-w-md" data-testid="sharepoint-card">
-      <a
-        href={externalHref(sharePointOpenURL(file, url))}
-        target="_blank"
-        rel="noopener noreferrer"
-        onClick={onOpen}
-        data-testid="sharepoint-card-open"
-        className="flex h-16 items-center gap-3 overflow-hidden rounded-md border border-border bg-background p-2 dark:border-border-strong"
-      >
-        <FileTypeIcon
-          name={file?.name ?? ''}
-          mimeType={file?.mimeType}
-          folder={file?.folder}
-          className="h-12 w-12 rounded"
-          iconClassName="h-6 w-6"
-        />
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-sm font-semibold">{file?.name ?? 'SharePoint'}</span>
-          <span className="block truncate text-xs text-muted-foreground">{detail(link)}</span>
-        </span>
-      </a>
+      <div className="flex h-16 items-center gap-1 overflow-hidden rounded-md border border-border bg-background p-2 dark:border-border-strong">
+        <a
+          href={externalHref(sharePointOpenURL(file, url))}
+          target="_blank"
+          rel="noopener noreferrer"
+          data-testid="sharepoint-card-open"
+          className="flex min-w-0 flex-1 items-center gap-3"
+        >
+          <FileTypeIcon
+            name={file?.name ?? ''}
+            mimeType={file?.mimeType}
+            folder={file?.folder}
+            className="h-12 w-12 rounded"
+            iconClassName="h-6 w-6"
+          />
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-sm font-semibold">{file?.name ?? 'SharePoint'}</span>
+            <span className="block truncate text-xs text-muted-foreground">{detail(link)}</span>
+          </span>
+        </a>
+        {download && (
+          <a
+            href={externalHref(download)}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label={`Download ${file!.name}`}
+            title="Download"
+            data-testid="sharepoint-card-download"
+            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground mobile:h-10 mobile:w-10"
+          >
+            <Download className="h-4 w-4" />
+          </a>
+        )}
+      </div>
       {note && (
         <div
           role="status"
@@ -133,7 +118,6 @@ export function SharePointCard({
           )}
         </div>
       )}
-      {lightbox}
     </div>
   );
 }

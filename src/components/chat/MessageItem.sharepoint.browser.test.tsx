@@ -40,7 +40,7 @@ const LINK = 'https://contoso.sharepoint.com/:w:/s/team/Eabc';
 const SHOWN = 'contoso.sharepoint.com/:w:/s/team/Eabc';
 const EDIT = 'https://contoso.sharepoint.com/sites/team/_layouts/15/Doc.aspx?sourcedoc=%7Bu%7D&action=edit';
 // Stands in for the viewer's address: a test loads nothing from Microsoft.
-const VIEWER = 'about:blank#viewer';
+const DOWNLOAD = 'https://contoso.sharepoint.com/sites/team/_layouts/15/download.aspx?UniqueId=u';
 
 const sharePointCalls = () => apiFetchMock.mock.calls.filter(([path]) => String(path).startsWith('/api/v1/sharepoint/'));
 
@@ -73,14 +73,12 @@ beforeEach(() => {
   apiFetchMock.mockReset();
   unfurled.mockReset();
   apiFetchMock.mockImplementation(async (path: string) =>
-    path.startsWith('/api/v1/sharepoint/preview')
-      ? { url: VIEWER }
-      : path.startsWith('/api/v1/sharepoint/')
+    path.startsWith('/api/v1/sharepoint/')
       ? {
           url: LINK,
           status: 'shared',
           posterID: 'me',
-          file: { id: 'f', name: 'Plan.docx', size: 1024, webURL: 'https://contoso.sharepoint.com/Plan.docx', editURL: EDIT },
+          file: { id: 'f', name: 'Plan.docx', size: 1024, webURL: 'https://contoso.sharepoint.com/Plan.docx', editURL: EDIT, downloadURL: DOWNLOAD },
           sharedWith: 2,
           notShared: ['ann', 'ghost'],
         }
@@ -105,21 +103,28 @@ describe('MessageItem SharePoint links', () => {
     expect(sharePointCalls()[0][0]).toContain('/api/v1/sharepoint/link?parentType=channel&parentID=ch-1');
   });
 
-  it('opens the file in the lightbox as it is, with Edit beside it', async () => {
+  // No preview in the app (Office's viewer won't frame there): the card opens
+  // the file in SharePoint, in a new tab, and downloads it from beside it.
+  it('opens the file in SharePoint and downloads it from the card', async () => {
     const screen = await renderRow(`plan ${LINK}`, { hosts: ['*.sharepoint.com'] });
-    const text = (testId: string) => document.querySelector(`[data-testid="${testId}"]`)?.textContent;
     const card = screen.getByTestId('sharepoint-card-open');
-    await expect.poll(() => text('sharepoint-card-open')).toBe('Plan.docxSharePoint · 1.0 KB');
+    await expect.element(card).toHaveAttribute('target', '_blank');
     await expect.element(screen.getByTestId('file-type-icon')).toHaveAttribute('data-kind', 'document');
-    await card.click();
-    await expect.element(screen.getByTestId('sharepoint-preview')).toHaveAttribute('src', VIEWER);
-    expect(sharePointCalls().map(([path]) => path)).toContain('/api/v1/sharepoint/preview?parentType=channel&parentID=ch-1&fileID=f');
-    await expect.element(screen.getByTestId('image-lightbox-edit')).toHaveAttribute('href', EDIT);
-    await expect.poll(() => text('image-lightbox-toolbar')).toContain('Me');
-    // Closing it leaves the message as it was.
-    await screen.getByTestId('image-lightbox-close').click();
-    await expect.element(screen.getByTestId('sharepoint-preview')).not.toBeInTheDocument();
-    await expect.element(card).toBeVisible();
+    const download = screen.getByRole('link', { name: 'Download Plan.docx' });
+    await expect.element(download).toHaveAttribute('href', DOWNLOAD);
+    await expect.element(download).toHaveAttribute('target', '_blank');
+    expect(document.querySelector('[data-testid="image-lightbox"]')).toBeNull();
+  });
+
+  it('has nothing to download for a folder', async () => {
+    apiFetchMock.mockImplementation(async (path: string) =>
+      path.startsWith('/api/v1/sharepoint/')
+        ? { url: LINK, status: 'shared', posterID: 'me', file: { id: 'd', name: 'Plans', size: 0, folder: true, webURL: 'https://contoso.sharepoint.com/Plans', downloadURL: DOWNLOAD } }
+        : undefined,
+    );
+    await renderRow(`plans ${LINK}`, { hosts: ['*.sharepoint.com'] });
+    await expect.poll(() => document.querySelector('[data-testid="sharepoint-card-open"]')?.textContent).toBe('PlansSharePoint folder');
+    expect(document.querySelector('[data-testid="sharepoint-card-download"]')).toBeNull();
   });
 
   it('leaves links alone while SharePoint sharing is off', async () => {

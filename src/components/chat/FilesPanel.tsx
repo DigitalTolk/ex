@@ -105,22 +105,19 @@ export function FilesPanel({
   const loadMore = useEventCallback(() => void fetchNextPage());
 
   // Author + timestamp differ per row (same channel, many uploaders),
-  // so each slide carries its own header metadata. SharePoint files are
-  // slides too (a folder opens in SharePoint instead).
+  // so each slide carries its own header metadata. SharePoint files open in
+  // SharePoint instead.
   const sources = useMemo(
     () =>
       entries.map((e) => {
         const author = userMap[e.authorID];
-        const header = { authorName: author?.displayName ?? 'Unknown', authorAvatarURL: author?.avatarURL, postedAt: e.createdAt };
-        let slide: LightboxSlide | null = null;
-        if (e.sharePoint) {
-          if (!e.sharePoint.folder) slide = { ...header, sharePoint: { file: e.sharePoint, parent } };
-        } else if (e.attachment.url) {
-          slide = { ...header, attachment: e.attachment };
-        }
+        const slide: LightboxSlide | null =
+          !e.sharePoint && e.attachment.url
+            ? { authorName: author?.displayName ?? 'Unknown', authorAvatarURL: author?.avatarURL, postedAt: e.createdAt, attachment: e.attachment }
+            : null;
         return { key: rowKey(e), slide };
       }),
-    [entries, userMap, parent],
+    [entries, userMap],
   );
   const { isOpenable, open, lightbox } = useAttachmentLightbox({ sources, postedIn });
 
@@ -161,13 +158,7 @@ export function FilesPanel({
             const k = rowKey(e);
             if (e.sharePoint) {
               return (
-                <SharePointFileRow
-                  key={k}
-                  file={e.sharePoint}
-                  authorName={authorName}
-                  createdAt={e.createdAt}
-                  onOpen={isOpenable(k) ? () => open(k) : undefined}
-                />
+                <SharePointFileRow key={k} file={e.sharePoint} authorName={authorName} createdAt={e.createdAt} />
               );
             }
             const a = e.attachment;
@@ -259,13 +250,11 @@ interface SharePointFileRowProps {
   file: SharePointFile;
   authorName: string;
   createdAt: string;
-  // Opens the file in the lightbox; a folder has none and opens in
-  // SharePoint.
-  onOpen?: () => void;
 }
 
-// A SharePoint file a posted link shared.
-function SharePointFileRow({ file, authorName, createdAt, onOpen }: SharePointFileRowProps) {
+// A SharePoint file a posted link shared: it opens in SharePoint (for
+// editing, where Office for the web edits it).
+function SharePointFileRow({ file, authorName, createdAt }: SharePointFileRowProps) {
   const className =
     'flex flex-1 min-w-0 items-center gap-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50';
   const body = (
@@ -287,22 +276,16 @@ function SharePointFileRow({ file, authorName, createdAt, onOpen }: SharePointFi
   );
   return (
     <li data-testid="files-row" className="flex items-center gap-3 px-2 py-2">
-      {onOpen ? (
-        <button type="button" onClick={onOpen} aria-label={`Open ${file.name}`} data-testid="files-row-open" className={className}>
-          {body}
-        </button>
-      ) : (
-        <a
-          href={externalHref(sharePointOpenURL(file, file.webURL))}
-          target="_blank"
-          rel="noopener noreferrer"
-          aria-label={`Open ${file.name}`}
-          data-testid="files-row-open"
-          className={className}
-        >
-          {body}
-        </a>
-      )}
+      <a
+        href={externalHref(sharePointOpenURL(file, file.webURL))}
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label={`Open ${file.name}`}
+        data-testid="files-row-open"
+        className={className}
+      >
+        {body}
+      </a>
     </li>
   );
 }
