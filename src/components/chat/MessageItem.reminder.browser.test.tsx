@@ -7,6 +7,7 @@ import { MessageItem } from './MessageItem';
 import type { Message } from '@/types';
 import { hoverRow } from '@/test/hover';
 import { pickTomorrow, tomorrow } from '@/test/reminder-picker';
+import { wheelTo } from '@/test/wheel-time';
 
 // Browser-only surface: the desktop "Remind me" submenu (base-ui Submenu needs a
 // real browser) and its channel/conversation target computation + custom dialog.
@@ -76,15 +77,10 @@ beforeEach(() => { createReminderMutate.mockClear(); createReminderMutateAsync.m
 afterEach(() => cleanup());
 
 
-// A phone sets the time on the clock dial (no field to type into). Its
-// numbers let pointers through to the face, so they're pressed as buttons.
-async function dialMorning(hour: number) {
-  const press = (id: string) => (document.querySelector(`[data-testid="${id}"]`) as HTMLButtonElement).click();
-  press('reminder-dial-am');
-  await vi.waitFor(() => expect(document.querySelector(`[data-testid="reminder-dial-hour-${hour}"]`)).not.toBeNull());
-  press(`reminder-dial-hour-${hour}`);
-  await vi.waitFor(() => expect(document.querySelector('[data-testid="reminder-dial-minute-0"]')).not.toBeNull());
-  press('reminder-dial-minute-0');
+// Turns the time wheels to `hour`:00 by tapping their rows.
+async function wheelMorning(hour: number) {
+  await vi.waitFor(() => expect(document.querySelector('[data-testid="reminder-wheel-minute"]')).not.toBeNull());
+  wheelTo(hour, 0);
 }
 
 describe('MessageItem "Remind me"', () => {
@@ -169,7 +165,7 @@ describe('MessageItem "Remind me"', () => {
     await userEvent.click(screen.getByTestId('remind-me-trigger'));
     await userEvent.click(screen.getByTestId('remind-custom'));
         await pickTomorrow();
-    await dialMorning(9);
+    await wheelMorning(9);
     await userEvent.type(screen.getByTestId('reminder-note'), 'bring the numbers');
     await userEvent.click(screen.getByTestId('reminder-confirm'));
     await vi.waitFor(() => expect(createReminderMutateAsync).toHaveBeenCalledTimes(1));
@@ -202,7 +198,7 @@ describe('MessageItem "Remind me"', () => {
     await openMobileSheet();
     await userEvent.click(document.querySelector('[data-testid="mobile-remind"]') as HTMLButtonElement);
         await pickTomorrow();
-    await dialMorning(8);
+    await wheelMorning(8);
     // On mobile the confirm lives in the dialog's top-right header (the iOS
     // date wheel covers a bottom footer).
     await userEvent.click(document.querySelector('[data-slot="dialog-mobile-action"]') as HTMLButtonElement);
@@ -256,7 +252,7 @@ describe('MessageItem "Remind me" — self-DM parity', () => {
         await userEvent.click(screen.getByTestId('remind-me-trigger'));
         await userEvent.click(screen.getByTestId('remind-custom'));
         await pickTomorrow();
-        await dialMorning(9);
+        await wheelMorning(9);
         await userEvent.click(screen.getByTestId('reminder-confirm'));
         await vi.waitFor(() => expect(createReminderMutateAsync).toHaveBeenCalledTimes(1));
         expect(createReminderMutateAsync.mock.calls[0][0]).toMatchObject(target);
@@ -277,7 +273,7 @@ describe('MessageItem "Remind me" — self-DM parity', () => {
         await openMobileSheet();
         await userEvent.click(document.querySelector('[data-testid="mobile-remind"]') as HTMLButtonElement);
                 await pickTomorrow();
-        await dialMorning(8);
+        await wheelMorning(8);
         await userEvent.click(document.querySelector('[data-slot="dialog-mobile-action"]') as HTMLButtonElement);
         await vi.waitFor(() => expect(createReminderMutateAsync).toHaveBeenCalledTimes(1));
         expect(createReminderMutateAsync.mock.calls[0][0]).toMatchObject({

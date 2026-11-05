@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { TriangleAlert } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -8,7 +9,7 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Calendar, CalendarDayButton } from '@/components/ui/calendar';
-import { ClockDial } from '@/components/ui/clock-dial';
+import { TimeWheel } from '@/components/ui/time-wheel';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { combineDateAndClock, describeDelay, formatClockTime, hourCycleOf, parseClockTime, splitDateTimeSeed, type ClockTime } from '@/lib/clock-time';
 import { REMINDER_PRESETS, computeReminderTime } from '@/lib/reminder-times';
@@ -90,8 +91,8 @@ const HOUR_CYCLE = hourCycleOf(new Date(2024, 0, 1, 13).toLocaleTimeString(undef
 const dateOf = (date: string): Date | undefined => combineDateAndClock(date, { hour: 0, minute: 0 }) ?? undefined;
 
 // ReminderDialog is the "Custom…" picker for reminders and scheduled sends:
-// a calendar for the day, a clock dial for the time (tap or drag it, or type
-// into the time above it), a row of quick picks that fill both in one tap,
+// a calendar for the day, wheels for the time (spin, tap or type them, like a
+// phone's alarm), a row of quick picks that fill both in one tap,
 // and a preview line that reads the result back ("Sends Tomorrow at 9:00 AM ·
 // in 21 h"). Validated to a strictly-future instant before the caller
 // schedules it. Mount it fresh per open so the seed re-applies.
@@ -111,8 +112,9 @@ export function ReminderDialog({
   // The month the calendar shows; follows a quick pick, otherwise the reader's.
   const [month, setMonth] = useState<Date | undefined>(() => dateOf(splitDateTimeSeed(initialValue).date));
   // The preview compares against the clock, so it is worked out in the
-  // handlers (never during render) and kept as text.
-  const [preview, setPreview] = useState('');
+  // handlers (never during render) and kept as text — a warning, with the
+  // confirm held back, when the time picked has already gone.
+  const [preview, setPreview] = useState<{ text: string; past: boolean } | null>(null);
   const [error, setError] = useState('');
   const [pending, setPending] = useState(false);
   const isMobile = useIsMobile();
@@ -122,8 +124,11 @@ export function ReminderDialog({
     const time = parseClockTime(next.time);
     return time ? combineDateAndClock(next.date, time) : null;
   };
-  const describe = (when: Date | null, now: Date) =>
-    when && when.getTime() > now.getTime() ? `${copy.previewVerb} ${formatScheduleTime(when, now)} · ${describeDelay(when.getTime() - now.getTime())}` : '';
+  const describe = (when: Date | null, now: Date) => {
+    if (!when) return null;
+    if (when.getTime() <= now.getTime()) return { text: `${formatScheduleTime(when, now)} has already passed`, past: true };
+    return { text: `${copy.previewVerb} ${formatScheduleTime(when, now)} · ${describeDelay(when.getTime() - now.getTime())}`, past: false };
+  };
   const update = (next: { date: string; time: string }) => {
     setFields(next);
     setError('');
@@ -172,7 +177,7 @@ export function ReminderDialog({
         mobileCloseLabel="Cancel"
         mobileAction={
           isMobile
-            ? { label: pending ? copy.confirming : copy.confirm, onClick: () => void confirm(), disabled: pending }
+            ? { label: pending ? copy.confirming : copy.confirm, onClick: () => void confirm(), disabled: pending || !!preview?.past }
             : undefined
         }
       >
@@ -210,8 +215,8 @@ export function ReminderDialog({
                 DayButton: (props) => <CalendarDayButton {...props} data-testid={`reminder-day-${dayKey(props.day.date)}`} />,
               }}
             />
-            <div className="flex min-w-0 flex-1 flex-col items-center gap-3">
-              <ClockDial value={clock} onChange={setTime} onEnter={() => void confirm()} hourCycle={HOUR_CYCLE} testIdPrefix="reminder" />
+            <div className="flex min-w-0 flex-1 flex-col items-center justify-center gap-3 self-stretch">
+              <TimeWheel value={clock} onChange={setTime} onEnter={() => void confirm()} hourCycle={HOUR_CYCLE} testIdPrefix="reminder" />
             </div>
           </div>
           {people && (
@@ -233,8 +238,14 @@ export function ReminderDialog({
             </label>
           )}
           {preview && (
-            <p className="text-sm text-muted-foreground" data-testid="reminder-preview">
-              {preview}
+            <p
+              role={preview.past ? 'alert' : undefined}
+              data-past={preview.past || undefined}
+              className={`flex items-center gap-1.5 text-sm ${preview.past ? 'text-destructive' : 'text-muted-foreground'}`}
+              data-testid="reminder-preview"
+            >
+              {preview.past && <TriangleAlert className="h-4 w-4 shrink-0" aria-hidden />}
+              {preview.text}
             </p>
           )}
           {error && (
@@ -248,7 +259,7 @@ export function ReminderDialog({
             <Button variant="ghost" onClick={() => onOpenChange(false)} data-testid="reminder-cancel">
               Cancel
             </Button>
-            <Button onClick={confirm} disabled={pending} data-testid="reminder-confirm">
+            <Button onClick={confirm} disabled={pending || !!preview?.past} data-testid="reminder-confirm">
               {pending ? copy.confirming : copy.confirm}
             </Button>
           </DialogFooter>

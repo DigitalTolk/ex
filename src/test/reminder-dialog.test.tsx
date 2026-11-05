@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { ReminderDialog } from '@/components/chat/ReminderDialog';
+import { wheelTo } from '@/test/wheel-time';
 
 let mockIsMobile = false;
 vi.mock('@/hooks/useIsMobile', () => ({ useIsMobile: () => mockIsMobile }));
@@ -20,16 +21,10 @@ function setup(
   return { onConfirm: onConfirm as ReturnType<typeof vi.fn>, onOpenChange };
 }
 
-const hourInput = () => screen.getByTestId('reminder-dial-hour-input') as HTMLInputElement;
-const minuteInput = () => screen.getByTestId('reminder-dial-minute-input') as HTMLInputElement;
+const wheel = (part: 'hour' | 'minute') => screen.getByTestId(`reminder-wheel-${part}`);
 
-// Types a time into the hour and the minutes above the dial.
-function typeTime(hour: string, minute: string) {
-  fireEvent.focus(hourInput());
-  fireEvent.change(hourInput(), { target: { value: hour } });
-  fireEvent.focus(minuteInput());
-  fireEvent.change(minuteInput(), { target: { value: minute } });
-}
+// Turns the wheels to a time (hour 0–23) by tapping their rows.
+const turnTo = (hour: number, minute: number) => wheelTo(hour, minute, (el, key) => fireEvent.keyDown(el, { key }));
 
 describe('ReminderDialog', () => {
   it('confirms a future time and closes on success', async () => {
@@ -74,22 +69,20 @@ describe('ReminderDialog', () => {
 
   it('rejects an empty seed: no time, then no date', () => {
     const { onConfirm } = setup('');
-    expect(hourInput()).toHaveValue('');
     fireEvent.click(screen.getByTestId('reminder-confirm'));
     expect(screen.getByTestId('reminder-error')).toHaveTextContent('Pick a time.');
-    typeTime('9', '30');
+    turnTo(9, 30);
     fireEvent.click(screen.getByTestId('reminder-confirm'));
     expect(screen.getByTestId('reminder-error')).toHaveTextContent('Pick a date');
     expect(onConfirm).not.toHaveBeenCalled();
   });
 
-  it('picks a day on the calendar and a typed time, previews the result, then confirms it', async () => {
+  it('picks a day on the calendar and a time on the wheels, previews the result, then confirms it', async () => {
     const { onConfirm } = setup('2999-01-01T09:00');
     expect(screen.queryByTestId('reminder-preview')).toBeNull();
     // The calendar opens on the seed's month.
     fireEvent.click(screen.getByTestId('reminder-day-2999-01-15'));
-    // The time is typed where it's shown, above the dial.
-    typeTime('10', '30');
+    turnTo(10, 30);
     expect(screen.getByTestId('reminder-preview')).toHaveTextContent(/^Reminds you .*10:30/);
     fireEvent.click(screen.getByTestId('reminder-confirm'));
     await waitFor(() => expect(onConfirm).toHaveBeenCalled());
@@ -97,43 +90,19 @@ describe('ReminderDialog', () => {
     expect([when.getMonth(), when.getDate(), when.getHours(), when.getMinutes()]).toEqual([0, 15, 10, 30]);
   });
 
-  it('the dial and the time above it set each other, and arrow keys step it', () => {
+  it('the wheels open on the seed, turn to a tapped row, and step with the arrow keys', () => {
     setup('2999-01-01T09:00');
-    // The dial opens on the hours, with the seed's hour chosen.
-    expect(screen.getByTestId('reminder-dial-hour-9')).toHaveAttribute('aria-pressed', 'true');
-    fireEvent.click(screen.getByTestId('reminder-dial-pm'));
-    fireEvent.click(screen.getByTestId('reminder-dial-hour-14'));
-    // Picking the hour turns the dial to the minutes.
-    fireEvent.click(screen.getByTestId('reminder-dial-minute-15'));
-    expect(hourInput()).toHaveValue('2');
-    expect(minuteInput()).toHaveValue('15');
-    expect(screen.getByTestId('reminder-dial-minute-15')).toHaveAttribute('aria-pressed', 'true');
+    expect([wheel('hour'), wheel('minute')].map((w) => w.getAttribute('aria-valuetext'))).toEqual(['9', '00']);
+    expect(screen.getByTestId('reminder-wheel-period')).toHaveAttribute('aria-valuetext', 'AM');
+    turnTo(14, 15);
     expect(screen.getByTestId('reminder-preview')).toHaveTextContent(/2:15 PM/);
-    fireEvent.keyDown(minuteInput(), { key: 'ArrowDown' });
-    expect(minuteInput()).toHaveValue('14');
-    fireEvent.keyDown(hourInput(), { key: 'ArrowUp' });
+    fireEvent.keyDown(wheel('minute'), { key: 'ArrowDown' });
+    expect(wheel('minute')).toHaveAttribute('aria-valuetext', '14');
+    fireEvent.keyDown(wheel('hour'), { key: 'ArrowUp' });
     expect(screen.getByTestId('reminder-preview')).toHaveTextContent(/3:14 PM/);
     // Other keys pass through.
-    fireEvent.keyDown(hourInput(), { key: 'x' });
-    expect(hourInput()).toHaveValue('3');
-  });
-
-  it('takes digits only, and leaves a time that is out of range as it was', () => {
-    setup('2999-01-01T09:00');
-    fireEvent.focus(hourInput());
-    fireEvent.change(hourInput(), { target: { value: '1x3' } });
-    // "13" is no 12-hour hour: shown while typed, not applied, gone on leaving.
-    expect(hourInput()).toHaveValue('13');
-    expect(screen.queryByTestId('reminder-preview')).toBeNull();
-    fireEvent.blur(hourInput());
-    expect(hourInput()).toHaveValue('9');
-    fireEvent.focus(minuteInput());
-    fireEvent.change(minuteInput(), { target: { value: '75' } });
-    fireEvent.blur(minuteInput());
-    expect(minuteInput()).toHaveValue('00');
-    // Cleared, it waits for digits.
-    fireEvent.change(minuteInput(), { target: { value: '' } });
-    expect(minuteInput()).toHaveValue('');
+    fireEvent.keyDown(wheel('hour'), { key: 'x' });
+    expect(wheel('hour')).toHaveAttribute('aria-valuetext', '3');
   });
 
   // Late in the evening the seed is already tomorrow, so tapping tomorrow is
@@ -156,22 +125,28 @@ describe('ReminderDialog', () => {
     const { onConfirm } = setup('');
     fireEvent.click(screen.getByTestId('reminder-quick-tomorrow'));
     expect(document.querySelector('[data-testid^="reminder-day-"][data-selected-single="true"]')).not.toBeNull();
-    expect(hourInput()).toHaveValue('9');
-    expect(minuteInput()).toHaveValue('00');
+    expect([wheel('hour'), wheel('minute')].map((w) => w.getAttribute('aria-valuetext'))).toEqual(['9', '00']);
     expect(screen.getByTestId('reminder-preview')).toHaveTextContent(/^Reminds you Tomorrow at .*9:00 AM/);
-    fireEvent.keyDown(hourInput(), { key: 'p' });
+    fireEvent.keyDown(wheel('hour'), { key: 'p' });
     expect(screen.getByTestId('reminder-preview')).toHaveTextContent(/9:00 PM/);
-    fireEvent.keyDown(minuteInput(), { key: 'a' });
+    fireEvent.keyDown(wheel('minute'), { key: 'a' });
     expect(screen.getByTestId('reminder-preview')).toHaveTextContent(/9:00 AM/);
     expect(onConfirm).not.toHaveBeenCalled();
-    fireEvent.keyDown(minuteInput(), { key: 'Enter' });
+    fireEvent.keyDown(wheel('minute'), { key: 'Enter' });
     await waitFor(() => expect(onConfirm).toHaveBeenCalledTimes(1));
   });
 
-  it('shows no preview for a time already in the past', () => {
+  it('warns when the time picked has passed, and holds back Set until it is in the future', () => {
     setup('2000-01-01T09:00');
-    typeTime('10', '00');
-    expect(screen.queryByTestId('reminder-preview')).toBeNull();
+    turnTo(10, 0);
+    const warning = screen.getByTestId('reminder-preview');
+    expect(warning).toHaveTextContent(/10:00 AM has already passed$/);
+    expect(warning).toHaveAttribute('role', 'alert');
+    expect(screen.getByTestId('reminder-confirm')).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: /next month/i }));
+    fireEvent.click(screen.getByTestId('reminder-quick-tomorrow'));
+    expect(screen.getByTestId('reminder-preview')).not.toHaveAttribute('role');
+    expect(screen.getByTestId('reminder-confirm')).toBeEnabled();
   });
 
   it('cancels without confirming', () => {
@@ -190,15 +165,22 @@ describe('ReminderDialog', () => {
       return btn as HTMLButtonElement;
     }
 
-    it('picks the time on the dial alone, with no field to type into', async () => {
+    it('picks the time on the wheels, with no field to type into', async () => {
       mockIsMobile = true;
       const { onConfirm } = setup('2999-01-01T09:00');
-      fireEvent.click(screen.getByTestId('reminder-dial-hour-7'));
-      fireEvent.click(screen.getByTestId('reminder-dial-minute-45'));
+      expect(screen.queryByRole('textbox')).toBeNull();
+      turnTo(7, 45);
       fireEvent.click(mobileAction());
       await waitFor(() => expect(onConfirm).toHaveBeenCalledTimes(1));
       const when = onConfirm.mock.calls[0][0] as Date;
       expect([when.getHours(), when.getMinutes()]).toEqual([7, 45]);
+    });
+
+    it('holds back the header action for a time that has passed', () => {
+      mockIsMobile = true;
+      setup('2000-01-01T09:00');
+      turnTo(10, 0);
+      expect(mobileAction()).toBeDisabled();
     });
 
     it('moves Set reminder into the top header and drops the footer', () => {

@@ -4,6 +4,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import DraftsPage from '@/pages/DraftsPage';
 import { apiFetch } from '@/lib/api';
+import { wheelTo } from '@/test/wheel-time';
 import type { Reminder, User } from '@/types';
 
 vi.mock('@/lib/api', () => ({ apiFetch: vi.fn() }));
@@ -145,9 +146,7 @@ describe('Drafts page — Reminders tab', () => {
     expect(within(dialog).getByTestId('reminder-note')).toHaveValue('bring the Q3 numbers');
     fireEvent.change(within(dialog).getByTestId('reminder-note'), { target: { value: ' bring the deck too ' } });
 
-    fireEvent.keyDown(within(dialog).getByTestId('reminder-dial-hour-input'), { key: 'a' });
-    fireEvent.change(within(dialog).getByTestId('reminder-dial-hour-input'), { target: { value: '9' } });
-    fireEvent.change(within(dialog).getByTestId('reminder-dial-minute-input'), { target: { value: '30' } });
+    wheelTo(9, 30, (el, key) => fireEvent.keyDown(el, { key }));
     await act(async () => {
       fireEvent.click(within(dialog).getByTestId('reminder-confirm'));
     });
