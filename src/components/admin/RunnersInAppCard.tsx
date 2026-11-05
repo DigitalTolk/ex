@@ -38,6 +38,7 @@ export function RunnersInAppCard() {
                 allowedExtensions: data.allowedExtensions,
                 giphyAPIKey: data.giphyAPIKey,
                 runnersInApp: next,
+                userGroupManagers: data.userGroupManagers,
               })
             }
             data-testid="runners-in-app-switch"

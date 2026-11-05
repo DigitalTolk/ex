@@ -55,6 +55,7 @@ type UserService struct {
 	urlCache      *presignedURLCache
 	mediaCache    MediaURLCache
 	reminders     ReminderCanceller
+	userGroups    UserGroupMembershipRemover
 	automations   AutomationStopper
 	avatarObjects AvatarObjects
 	// avatarDecoding bounds the memory an avatar decode may take.
@@ -126,6 +127,15 @@ func (s *UserService) SetAvatarObjects(o AvatarObjects) { s.avatarObjects = o }
 // SetReminderCanceller wires reminder cleanup into deactivation, so an account
 // that can no longer sign in leaves no reminders queued to fire.
 func (s *UserService) SetReminderCanceller(r ReminderCanceller) { s.reminders = r }
+
+// UserGroupMembershipRemover takes a user out of every user group
+// (UserGroupService): a guest can't be in one.
+type UserGroupMembershipRemover interface {
+	RemoveUserFromAllGroups(ctx context.Context, userID string) error
+}
+
+// SetUserGroups wires the user-group cleanup a demotion to guest runs.
+func (s *UserService) SetUserGroups(r UserGroupMembershipRemover) { s.userGroups = r }
 
 // SetAutomationStopper wires agent-automation shutdown into deactivation, so
 // a deactivated account's watchers, schedules and runs stop with it.
@@ -834,6 +844,13 @@ func (s *UserService) UpdateRole(ctx context.Context, _, targetID string, role m
 	backfillAuthProvider(user)
 	if user.AuthProvider == model.AuthProviderGuest && role != model.SystemRoleGuest {
 		return nil, apperr.Invalid("user: guests cannot be promoted; member and admin roles are SSO-only")
+	}
+	// A guest can't be in a user group: leave them first, so a failure leaves
+	// the role unchanged rather than a guest still pinged through a group.
+	if role == model.SystemRoleGuest && s.userGroups != nil {
+		if err := s.userGroups.RemoveUserFromAllGroups(ctx, targetID); err != nil {
+			return nil, fmt.Errorf("user: leave user groups: %w", err)
+		}
 	}
 	now := time.Now()
 	if err := s.users.PatchUser(ctx, targetID, store.UserPatch{SystemRole: &role, UpdatedAt: now}); err != nil {

@@ -28,6 +28,11 @@ export interface RenderOpts {
     isSelf: boolean,
     pill: ReactNode,
   ) => ReactNode;
+  // renderUserGroupMention renders a user-group pill — typically through
+  // UserGroupMentionCard, which highlights it for the group's members
+  // (pill(true)) and shows the members on click. Unset, the pill renders
+  // plain.
+  renderUserGroupMention?: (groupId: string, handle: string, pill: (mine: boolean) => ReactNode) => ReactNode;
   // onTagClick turns `#tag` tokens into clickable buttons that surface
   // the tag-search side panel. Without it, hashtags render as plain text.
   onTagClick?: (tag: string) => void;

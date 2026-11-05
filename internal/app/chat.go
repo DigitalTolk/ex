@@ -36,6 +36,7 @@ type chat struct {
 	unfurl        *service.UnfurlService
 	webhooks      *service.IncomingWebhookService
 	bots          *service.BotService
+	userGroups    *service.UserGroupService
 	mattermost    *service.MattermostService
 	commands      *service.CommandService
 	// directorySync is nil without the Microsoft 365 integration.
@@ -183,7 +184,18 @@ func (a *App) buildChat(ctx context.Context) error {
 	// against Mattermost's REST API acts as a bot with one, through the same
 	// services the app uses (the webhooks' Mattermost markup translation
 	// included).
-	c.bots = service.NewBotService(store.NewBotStore(in.db), in.users, c.users, in.cache, in.pubsub)
+	botStore := store.NewBotStore(in.db)
+	c.bots = service.NewBotService(botStore, in.users, c.users, in.cache, in.pubsub)
+
+	// ------------------------------------------------------------- User groups
+	// "@oncall" pings every member who can see the message, as a direct
+	// @-mention: typed handles become group mentions on send, the fan-out
+	// expands them, pills and alert text show the current handle, and a
+	// demotion to guest leaves every group.
+	c.userGroups = service.NewUserGroupService(store.NewUserGroupStore(in.db), c.users, c.settings, botStore, in.pubsub)
+	c.messages.SetUserGroups(c.userGroups)
+	c.mentions.SetUserGroups(c.userGroups)
+	c.users.SetUserGroups(c.userGroups)
 	c.mattermost = service.NewMattermostService(c.channels, members, in.users, c.messages, c.conversations, c.webhooks)
 
 	// ------------------------------------------------------------- Microsoft 365 (Graph)

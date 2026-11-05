@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { NativeSelect } from '@/components/ui/native-select';
 import { PageContainer } from '@/components/layout/PageContainer';
 import { SearchAdminPanel } from '@/components/admin/SearchAdminPanel';
 import { EmailAdminPanel } from '@/components/admin/EmailAdminPanel';
@@ -28,6 +29,7 @@ export default function AdminPage() {
     data ? data.allowedExtensions.join(', ') : '',
   );
   const [giphyKey, setGiphyKey] = useState(() => data?.giphyAPIKey ?? '');
+  const [groupManagers, setGroupManagers] = useState(() => data?.userGroupManagers || 'admins');
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const lastDataRef = useRef<typeof data>(undefined);
 
@@ -37,6 +39,7 @@ export default function AdminPage() {
     setMaxMB(String(bytesToMib(data.maxUploadBytes)));
     setExtensions(data.allowedExtensions.join(', '));
     setGiphyKey(data.giphyAPIKey ?? '');
+    setGroupManagers(data.userGroupManagers || 'admins');
   }, [data]);
 
   if (!isAdmin(user?.systemRole)) {
@@ -61,6 +64,7 @@ export default function AdminPage() {
         maxUploadBytes: bytes,
         allowedExtensions: exts,
         giphyAPIKey: giphyKey.trim(),
+        userGroupManagers: groupManagers,
       },
       {
         onSuccess: () => setSavedAt(Date.now()),
@@ -167,6 +171,29 @@ export default function AdminPage() {
                 ? 'Giphy is enabled — members will see a GIF button next to the emoji picker.'
                 : 'Giphy is disabled. The GIF button is hidden from the composer.'}
             </p>
+          </div>
+        </section>
+
+        <section className="space-y-4 rounded-lg border bg-card p-5">
+          <div>
+            <h2 className="text-base font-semibold">User groups</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Who can create user groups like @oncall, edit them and change their members. Everyone except guests can
+              mention them.
+            </p>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="usergroup-managers">Who can create and edit user groups</Label>
+            <NativeSelect
+              id="usergroup-managers"
+              className="max-w-xs"
+              value={groupManagers}
+              onChange={(e) => setGroupManagers(e.target.value)}
+              disabled={isLoading}
+            >
+              <option value="admins">Admins only</option>
+              <option value="members">All members</option>
+            </NativeSelect>
           </div>
         </section>
 

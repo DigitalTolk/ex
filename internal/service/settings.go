@@ -91,6 +91,11 @@ func (s *SettingsService) Update(ctx context.Context, ws *model.WorkspaceSetting
 		ws.MaxUploadBytes = 0
 	}
 	ws.GiphyAPIKey = strings.TrimSpace(ws.GiphyAPIKey)
+	switch ws.UserGroupManagers {
+	case "", model.UserGroupManagersAdmins, model.UserGroupManagersMembers:
+	default:
+		return nil, apperr.Invalid("settings: userGroupManagers must be %q or %q", model.UserGroupManagersAdmins, model.UserGroupManagersMembers)
+	}
 
 	if err := s.store.PutSettings(ctx, ws); err != nil {
 		return nil, err

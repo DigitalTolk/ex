@@ -38,6 +38,7 @@ export const EventType = {
   SessionRenewed: wire.EventSessionRenewed,
   WebhookChanged: wire.EventWebhookChanged,
   BotChanged: wire.EventBotChanged,
+  UserGroupChanged: wire.EventUserGroupChanged,
   ProjectChanged: wire.EventProjectChanged,
   SettingsUpdated: wire.EventSettingsUpdated,
   RunnersChanged: wire.EventRunnersChanged,

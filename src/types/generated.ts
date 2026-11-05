@@ -58,6 +58,11 @@ export const MentionKindAll: MentionKind = "all"; // @all / @channel
 export const MentionKindHere: MentionKind = "here"; // @here
 export const MentionKindKeyword: MentionKind = "keyword"; // matched one of the user's notification keywords
 /**
+ * MentionKindUserGroup: mentioned through a user group they belong to
+ * (UserGroupID / UserGroupHandle name it).
+ */
+export const MentionKindUserGroup: MentionKind = "usergroup";
+/**
  * ActivityItem is one entry in a user's personal activity stream (Slack-style
  * Activity tab). It is a denormalized hint: it carries enough context (preview
  * + parent + message id) to render a row and deep-link to the source message
@@ -113,6 +118,12 @@ export interface ActivityItem {
    * MentionKind is set on ActivityMention items.
    */
   mentionKind?: MentionKind;
+  /**
+   * UserGroupID / UserGroupHandle name the group of a MentionKindUserGroup
+   * item; the handle is snapshotted so the row renders without a lookup.
+   */
+  userGroupID?: string;
+  userGroupHandle?: string;
 }
 /**
  * ActivityFeedItem is an ActivityItem as listed to its owner: the stored item
@@ -2440,6 +2451,11 @@ export interface WorkspaceSettings {
    * set up from the command line and the account menu's Runners dialog.
    */
   runnersInApp: boolean;
+  /**
+   * UserGroupManagers says who may create and edit user groups: admins
+   * (the default, also when empty) or every member.
+   */
+  userGroupManagers?: UserGroupManagers;
 }
 /**
  * DefaultMaxUploadBytes is the fallback ceiling when the workspace hasn't
@@ -2646,6 +2662,47 @@ export interface MarkUnreadResult {
   threadRootID?: string;
   seenAt?: string /* RFC3339 */;
 }
+
+//////////
+// source: usergroup.go
+
+/**
+ * UserGroupIDPrefix starts every user-group ID. A group is mentioned with the
+ * same "@[id|label]" token as a person, so the prefix is what tells a mention
+ * parser it names a group (ULID user IDs and "bot-" IDs never start with it).
+ */
+export const UserGroupIDPrefix = "group-";
+/**
+ * UserGroup is a named set of people mentioned together through its handle
+ * (Slack-style "@oncall"). A disabled group keeps its members and its handle
+ * but is not mentionable.
+ */
+export interface UserGroup {
+  id: string;
+  handle: string;
+  name: string;
+  description: string;
+  disabled: boolean;
+  memberCount: number /* int */;
+  createdBy: string;
+  createdAt: string /* RFC3339 */;
+  updatedAt: string /* RFC3339 */;
+}
+/**
+ * UserGroupDetail is a group with its member IDs. Version is the store's
+ * optimistic-concurrency counter: every write of a group expects the version
+ * it read, so two concurrent member edits can't overwrite each other or push
+ * a group past its cap.
+ */
+export interface UserGroupDetail extends UserGroup {
+  memberIds: string[];
+}
+/**
+ * UserGroupManagers says who may create and edit user groups.
+ */
+export type UserGroupManagers = string;
+export const UserGroupManagersAdmins: UserGroupManagers = "admins";
+export const UserGroupManagersMembers: UserGroupManagers = "members";
 
 //////////
 // source: webhook.go

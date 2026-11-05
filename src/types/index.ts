@@ -233,6 +233,9 @@ export interface WorkspaceSettings {
   // The Runners tab in the AI hub (set up, start and disconnect ex-runner
   // from the app). Off until an admin turns it on.
   runnersInApp?: boolean;
+  // Who may create and edit user groups: 'admins' (also when empty) or
+  // 'members'.
+  userGroupManagers?: string;
 }
 
 export interface IncomingWebhook {
@@ -375,7 +378,7 @@ export type ActivityType =
   | 'channel_added'
   | 'channel_message';
 
-export type MentionKind = 'user' | 'all' | 'here' | 'keyword';
+export type MentionKind = 'user' | 'all' | 'here' | 'keyword' | 'usergroup';
 
 export interface ActivityItem {
   id: string;
@@ -401,6 +404,9 @@ export interface ActivityItem {
   parentName?: string;
   // mention-only
   mentionKind?: MentionKind;
+  // usergroup mentions: the group that named the user.
+  userGroupID?: string;
+  userGroupHandle?: string;
   read?: boolean;
 }
 

@@ -25,6 +25,7 @@ import { NotSentMark } from '@/components/chat/MessageSendState';
 import { useMessageRowData, useProvidedMessageRowData, type MessageRowData } from '@/hooks/useMessageRowData';
 import { EmojiPicker } from '@/components/EmojiPicker';
 import { UserHoverCard } from '@/components/UserHoverCard';
+import { UserGroupMentionCard } from '@/components/UserGroupMentionCard';
 import { UserAvatar } from '@/components/UserAvatar';
 import { useEditMessage, useToggleReaction } from '@/hooks/useMessages';
 import { renderMarkdown } from '@/lib/markdown';
@@ -1462,6 +1463,16 @@ const MessageBody = memo(function MessageBody({
           >
             {pill}
           </UserHoverCard>
+        ),
+        renderUserGroupMention: (groupId, handle, pill) => (
+          <UserGroupMentionCard
+            key={`usergroup-${groupId}-${message.id}`}
+            groupId={groupId}
+            handle={handle}
+            currentUserId={currentUserId}
+          >
+            {pill}
+          </UserGroupMentionCard>
         ),
       })}
     </>

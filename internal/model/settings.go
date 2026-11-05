@@ -21,6 +21,9 @@ type WorkspaceSettings struct {
 	// it for them). Off by default: until an admin turns it on, runners are
 	// set up from the command line and the account menu's Runners dialog.
 	RunnersInApp bool `json:"runnersInApp" dynamodbav:"runnersInApp"`
+	// UserGroupManagers says who may create and edit user groups: admins
+	// (the default, also when empty) or every member.
+	UserGroupManagers UserGroupManagers `json:"userGroupManagers,omitempty" dynamodbav:"userGroupManagers,omitempty"`
 }
 
 // DefaultMaxUploadBytes is the fallback ceiling when the workspace hasn't

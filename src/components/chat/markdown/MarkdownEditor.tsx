@@ -180,6 +180,7 @@ export const MarkdownEditor = forwardRef<WysiwygEditorHandle, Props>(function Ma
             online: () => (cbRef.current.completionProviders ?? EMPTY_PROVIDERS).online(),
             memberIds: () => (cbRef.current.completionProviders ?? EMPTY_PROVIDERS).memberIds(),
             channels: () => (cbRef.current.completionProviders ?? EMPTY_PROVIDERS).channels(),
+            userGroups: () => (cbRef.current.completionProviders ?? EMPTY_PROVIDERS).userGroups?.() ?? [],
             customEmojis: () => (cbRef.current.completionProviders ?? EMPTY_PROVIDERS).customEmojis(),
             skinTone: () => (cbRef.current.completionProviders ?? EMPTY_PROVIDERS).skinTone(),
             commands: () => (cbRef.current.completionProviders ?? EMPTY_PROVIDERS).commands?.() ?? [],
