@@ -264,7 +264,7 @@ func TestReminderPeople_ReplyInAThread(t *testing.T) {
 		t.Fatalf("ProcessDue: %v", err)
 	}
 	p := r.poster.posts[0]
-	want := "⏰ Reminder for @[u-1|u-1] @[u-2|u-2]\nhttps://ex.example.com/channel/general?thread=root-1#msg-m-7"
+	want := "⏰ [Reminder](https://ex.example.com/channel/general?thread=root-1#msg-m-7) for @[u-1|u-1] @[u-2|u-2]"
 	if p.ParentMessageID != "root-1" || p.Body != want {
 		t.Fatalf("reply = %q in %q, want %q in root-1", p.Body, p.ParentMessageID, want)
 	}
@@ -309,23 +309,28 @@ func TestReminderNote_ScheduleAndUpdate(t *testing.T) {
 	}
 }
 
-// The note goes out with the reminder as a quote, line by line: in the bot's
-// reply, in its DM, and in the private alert when the bot can't post.
+// The note is what the reminder says — "Reminder: <note>" — in the bot's
+// reply and in its DM, where "Reminder" links the message; the private alert,
+// when the bot can't post, leads with it.
 func TestReminderNote_Delivered(t *testing.T) {
 	ctx := context.Background()
 	r := newPeopleRig(accessByUser{})
 	r.store.due = []*model.Reminder{
-		{ID: "r1", UserID: "u-1", MessageID: "m-1", ParentID: "ch-1", ParentType: ParentChannel, ChannelSlug: "general", UserIDs: []string{"u-2"}, Note: "bring the numbers\nand the deck"},
+		{ID: "r1", UserID: "u-1", MessageID: "m-1", ParentID: "ch-1", ParentType: ParentChannel, ChannelSlug: "general", UserIDs: []string{"u-2"}, Note: "bring the numbers"},
 		{ID: "r2", UserID: "u-1", MessageID: "m-1", ParentID: "conv-9", ParentType: ParentConversation, Note: "call back"},
+		{ID: "r4", UserID: "u-1", MessageID: "m-7", ParentMessageID: "root-1", ParentID: "ch-1", ParentType: ParentChannel, ChannelSlug: "general", UserIDs: []string{"u-2"}, Note: "see the deck"},
 	}
 	if _, err := r.svc.ProcessDue(ctx); err != nil {
 		t.Fatalf("ProcessDue: %v", err)
 	}
-	if want := "⏰ Reminder for @[u-1|Alice] @[u-2|Bob]\n> bring the numbers\n> and the deck"; r.poster.posts[0].Body != want {
-		t.Fatalf("reply = %q, want %q", r.poster.posts[0].Body, want)
-	}
-	if want := "⏰ You asked me to remind you about this message:\n> call back\nhttps://ex.example.com/conversation/conv-9#msg-m-1"; r.poster.posts[1].Body != want {
-		t.Fatalf("DM = %q, want %q", r.poster.posts[1].Body, want)
+	for i, want := range []string{
+		"⏰ Reminder for @[u-1|Alice] @[u-2|Bob]: bring the numbers",
+		"⏰ [Reminder](https://ex.example.com/conversation/conv-9#msg-m-1): call back",
+		"⏰ [Reminder](https://ex.example.com/channel/general?thread=root-1#msg-m-7) for @[u-1|Alice] @[u-2|Bob]: see the deck",
+	} {
+		if got := r.poster.posts[i].Body; got != want {
+			t.Errorf("post %d = %q, want %q", i, got, want)
+		}
 	}
 
 	r = newPeopleRig(accessByUser{})
@@ -357,7 +362,7 @@ func TestReminderPeople_PersonalReminderIsTheBotsDM(t *testing.T) {
 	if p.ParentID != "dm-bot-u-1" || p.ParentType != ParentConversation || p.AuthorID != bot || p.ParentMessageID != "" {
 		t.Fatalf("DM post = %+v", p)
 	}
-	if p.Body != "⏰ You asked me to remind you about this message:\nhttps://ex.example.com/conversation/conv-9#msg-m-1" {
+	if p.Body != "⏰ You asked me to remind you about [this message](https://ex.example.com/conversation/conv-9#msg-m-1)" {
 		t.Fatalf("DM body = %q", p.Body)
 	}
 	if len(r.notif.notifs) != 0 {

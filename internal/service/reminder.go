@@ -582,11 +582,12 @@ func (s *ReminderService) post(ctx context.Context, r *model.Reminder) error {
 	if root == "" {
 		root = r.MessageID
 	}
-	body := "⏰ Reminder for " + s.mentionList(ctx, r) + quoteNote(r.Note)
+	reminder := "Reminder"
 	if r.ParentMessageID != "" {
 		// A reply in a long thread: point at the very message.
-		body += "\n" + s.messageURL(r)
+		reminder = s.messageLink(r, reminder)
 	}
+	body := "⏰ " + reminder + " for " + s.mentionList(ctx, r) + withNote(r.Note)
 	_, err := s.poster.SendReminder(ctx, WebhookMessageInput{
 		ParentID:        r.ParentID,
 		ParentType:      r.ParentType,
@@ -609,11 +610,15 @@ func (s *ReminderService) dmOwner(ctx context.Context, r *model.Reminder) error 
 	if err != nil {
 		return fmt.Errorf("reminder: open DM: %w", err)
 	}
+	body := "⏰ You asked me to remind you about " + s.messageLink(r, "this message")
+	if r.Note != "" {
+		body = "⏰ " + s.messageLink(r, "Reminder") + withNote(r.Note)
+	}
 	_, err = s.poster.SendReminder(ctx, WebhookMessageInput{
 		ParentID:   conv.ID,
 		ParentType: ParentConversation,
 		AuthorID:   bot.ID,
-		Body:       "⏰ You asked me to remind you about this message:" + quoteNote(r.Note) + "\n" + s.messageURL(r),
+		Body:       body,
 		Username:   reminderBotName,
 		IconEmoji:  reminderBotEmoji,
 	})
@@ -642,13 +647,13 @@ func (s *ReminderService) mentionList(ctx context.Context, r *model.Reminder) st
 	return strings.Join(tags, " ")
 }
 
-// quoteNote is a reminder's note as a quote on the lines after the bot's
-// opening line; nothing without one.
-func quoteNote(note string) string {
+// withNote puts a reminder's note after its opening words, as what the
+// reminder is ("Reminder: bring the numbers"); nothing without one.
+func withNote(note string) string {
 	if note == "" {
 		return ""
 	}
-	return "\n> " + strings.ReplaceAll(note, "\n", "\n> ")
+	return ": " + note
 }
 
 // reminderMention writes the "@[id|Name]" mention, its name kept clear of
@@ -661,9 +666,11 @@ func reminderMention(id, name string) string {
 	return "@[" + id + "|" + name + "]"
 }
 
-// messageURL is the reminded message's absolute link.
-func (s *ReminderService) messageURL(r *model.Reminder) string {
-	return s.baseURL + reminderDeepLink(r)
+// messageLink is text linked to the reminded message: the link still shows
+// the message's preview card under the post, without its raw address in the
+// text.
+func (s *ReminderService) messageLink(r *model.Reminder, text string) string {
+	return "[" + text + "](" + s.baseURL + reminderDeepLink(r) + ")"
 }
 
 // firePrivate is the reminder as only its owner sees it: an activity-stream
