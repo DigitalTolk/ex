@@ -27,7 +27,7 @@ const reminderMaxHorizon = 365 * 24 * time.Hour
 const reminderClaimBatch = 100
 
 // maxReminderPeople caps how many people one reminder may tag besides its
-// owner.
+// owner — or leave out of one for everyone.
 const maxReminderPeople = 20
 
 // maxReminderNote caps a reminder's note, in characters.
@@ -113,6 +113,10 @@ type ReminderInput struct {
 	RemindAt    time.Time `json:"remindAt"`
 	// UserIDs are people to tag besides the owner when it comes due.
 	UserIDs []string `json:"userIDs"`
+	// Everyone reminds every member of the chat instead (UserIDs is then
+	// ignored), all but ExcludedUserIDs.
+	Everyone        bool     `json:"everyone"`
+	ExcludedUserIDs []string `json:"excludedUserIDs"`
 	// Note is optional context, shown with the reminder.
 	Note string `json:"note"`
 }
@@ -120,9 +124,11 @@ type ReminderInput struct {
 // ReminderUpdate is an edit of a pending reminder: its new time, people and
 // note.
 type ReminderUpdate struct {
-	RemindAt time.Time `json:"remindAt"`
-	UserIDs  []string  `json:"userIDs"`
-	Note     string    `json:"note"`
+	RemindAt        time.Time `json:"remindAt"`
+	UserIDs         []string  `json:"userIDs"`
+	Everyone        bool      `json:"everyone"`
+	ExcludedUserIDs []string  `json:"excludedUserIDs"`
+	Note            string    `json:"note"`
 }
 
 // ReminderService schedules per-message reminders and fires them at their due
@@ -301,7 +307,7 @@ func (s *ReminderService) Schedule(ctx context.Context, userID string, in Remind
 	if err := s.access.CheckAccess(ctx, userID, in.ParentID, in.ParentType); err != nil {
 		return nil, err
 	}
-	people, err := s.people(ctx, userID, in.ParentID, in.ParentType, in.UserIDs)
+	people, excluded, err := s.audience(ctx, userID, in.ParentID, in.ParentType, in.Everyone, in.UserIDs, in.ExcludedUserIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -326,6 +332,8 @@ func (s *ReminderService) Schedule(ctx context.Context, userID string, in Remind
 		ChannelSlug:     in.ChannelSlug,
 		MessagePreview:  messagePreview(ctx, s.mentions, msg),
 		UserIDs:         people,
+		Everyone:        in.Everyone,
+		ExcludedUserIDs: excluded,
 		Note:            note,
 		RemindAt:        in.RemindAt,
 		CreatedAt:       now,
@@ -357,12 +365,25 @@ func reminderNote(note string) (string, error) {
 	return note, nil
 }
 
-// people vets the people a reminder will tag: each once, never the owner, at
-// most maxReminderPeople, and each an active person (no bot, and no agent,
-// whom a mention would set to work) who can open the chat — a tag they could
-// not follow would only puzzle them.
-func (s *ReminderService) people(ctx context.Context, ownerID, parentID, parentType string, ids []string) ([]string, error) {
-	seen := map[string]bool{ownerID: true}
+// audience vets who a reminder is for: the people added (see people), or —
+// for everyone in the chat — only who is left out: each once, never the
+// owner, at most maxReminderPeople. The left-out aren't looked up: leaving
+// out someone who isn't there changes nothing.
+func (s *ReminderService) audience(ctx context.Context, ownerID, parentID, parentType string, everyone bool, userIDs, excludedIDs []string) (people, excluded []string, err error) {
+	if !everyone {
+		people, err = s.people(ctx, ownerID, parentID, parentType, userIDs)
+		return people, nil, err
+	}
+	excluded = distinctIDs(excludedIDs, ownerID)
+	if len(excluded) > maxReminderPeople {
+		return nil, nil, apperr.Invalid("reminder: at most %d people left out", maxReminderPeople)
+	}
+	return nil, excluded, nil
+}
+
+// distinctIDs is ids trimmed, each once, without blanks or `drop`.
+func distinctIDs(ids []string, drop string) []string {
+	seen := map[string]bool{drop: true}
 	var out []string
 	for _, id := range ids {
 		if id = strings.TrimSpace(id); id != "" && !seen[id] {
@@ -370,6 +391,15 @@ func (s *ReminderService) people(ctx context.Context, ownerID, parentID, parentT
 			out = append(out, id)
 		}
 	}
+	return out
+}
+
+// people vets the people a reminder will tag: each once, never the owner, at
+// most maxReminderPeople, and each an active person (no bot, and no agent,
+// whom a mention would set to work) who can open the chat — a tag they could
+// not follow would only puzzle them.
+func (s *ReminderService) people(ctx context.Context, ownerID, parentID, parentType string, ids []string) ([]string, error) {
+	out := distinctIDs(ids, ownerID)
 	if len(out) == 0 {
 		return nil, nil
 	}
@@ -414,12 +444,14 @@ func (s *ReminderService) Update(ctx context.Context, userID, id string, in Remi
 	if err != nil {
 		return nil, err
 	}
-	people, err := s.people(ctx, userID, r.ParentID, r.ParentType, in.UserIDs)
+	people, excluded, err := s.audience(ctx, userID, r.ParentID, r.ParentType, in.Everyone, in.UserIDs, in.ExcludedUserIDs)
 	if err != nil {
 		return nil, err
 	}
 	r.RemindAt = in.RemindAt
 	r.UserIDs = people
+	r.Everyone = in.Everyone
+	r.ExcludedUserIDs = excluded
 	r.Note = note
 	if err := s.store.RescheduleReminder(ctx, r); err != nil {
 		return nil, err
@@ -570,12 +602,14 @@ var errReminderBotUnwired = errors.New("reminder: bot not wired")
 
 // post delivers a reminder as the reminder bot. With people added, the bot
 // replies to the message tagging the owner and every one of them who can
-// still open the chat; without, it DMs the owner a link to the message.
+// still open the chat; for everyone, tagging the owner and @all, its
+// notifications skipping whoever was left out; without, it DMs the owner a
+// link to the message.
 func (s *ReminderService) post(ctx context.Context, r *model.Reminder) error {
 	if s.poster == nil {
 		return errReminderBotUnwired
 	}
-	if len(r.UserIDs) == 0 {
+	if len(r.UserIDs) == 0 && !r.Everyone {
 		return s.dmOwner(ctx, r)
 	}
 	root := r.ParentMessageID
@@ -588,14 +622,18 @@ func (s *ReminderService) post(ctx context.Context, r *model.Reminder) error {
 		reminder = s.messageLink(r, reminder)
 	}
 	body := "⏰ " + reminder + " for " + s.mentionList(ctx, r) + withNote(r.Note)
-	_, err := s.poster.SendReminder(ctx, WebhookMessageInput{
+	in := WebhookMessageInput{
 		ParentID:        r.ParentID,
 		ParentType:      r.ParentType,
 		Body:            body,
 		Username:        reminderBotName,
 		IconEmoji:       reminderBotEmoji,
 		ParentMessageID: root,
-	})
+	}
+	if r.Everyone {
+		in.NotifyExcept = r.ExcludedUserIDs
+	}
+	_, err := s.poster.SendReminder(ctx, in)
 	return err
 }
 
@@ -625,10 +663,15 @@ func (s *ReminderService) dmOwner(ctx context.Context, r *model.Reminder) error 
 	return err
 }
 
-// mentionList tags the owner, then each added person still active and able to
-// open the chat. A failed lookup tags everyone: a stray tag beats a lost one.
+// mentionList tags the owner, then — for everyone — @all, naming (never
+// tagging) whoever was left out; else each added person still active and
+// able to open the chat. A failed lookup tags everyone: a stray tag beats a
+// lost one.
 func (s *ReminderService) mentionList(ctx context.Context, r *model.Reminder) string {
 	ids := append([]string{r.UserID}, r.UserIDs...)
+	if r.Everyone {
+		ids = append([]string{r.UserID}, r.ExcludedUserIDs...)
+	}
 	names := map[string]string{}
 	inactive := map[string]bool{}
 	if users, err := s.owners.GetUsersByIDs(ctx, ids); err == nil {
@@ -636,6 +679,9 @@ func (s *ReminderService) mentionList(ctx context.Context, r *model.Reminder) st
 			names[u.ID] = u.DisplayName
 			inactive[u.ID] = u.Status == "deactivated"
 		}
+	}
+	if r.Everyone {
+		return reminderMention(r.UserID, names[r.UserID]) + " and @all" + leftOut(r.ExcludedUserIDs, names)
 	}
 	tags := make([]string, 0, len(ids))
 	for i, id := range ids {
@@ -645,6 +691,27 @@ func (s *ReminderService) mentionList(ctx context.Context, r *model.Reminder) st
 		tags = append(tags, reminderMention(id, names[id]))
 	}
 	return strings.Join(tags, " ")
+}
+
+// leftOut names the people a reminder for everyone leaves out — by count
+// when a name is missing — as plain text, so no tag reaches them.
+func leftOut(ids []string, names map[string]string) string {
+	if len(ids) == 0 {
+		return ""
+	}
+	named := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if names[id] != "" {
+			named = append(named, names[id])
+		}
+	}
+	if len(named) != len(ids) {
+		if len(ids) == 1 {
+			return " (except 1 person)"
+		}
+		return fmt.Sprintf(" (except %d people)", len(ids))
+	}
+	return " (except " + strings.Join(named, ", ") + ")"
 }
 
 // withNote puts a reminder's note after its opening words, as what the

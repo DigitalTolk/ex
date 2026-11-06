@@ -344,6 +344,97 @@ func TestReminderNote_Delivered(t *testing.T) {
 	}
 }
 
+// A reminder for everyone keeps no people, only who's left out — each once,
+// never the owner, at most maxReminderPeople, never looked up — and an edit
+// switches a reminder between the two.
+func TestReminderEveryone_ScheduleAndUpdate(t *testing.T) {
+	ctx := context.Background()
+	r := newPeopleRig(accessByUser{})
+	in := peopleInput("u-2")
+	in.Everyone = true
+	in.ExcludedUserIDs = []string{" u-3 ", "u-1", "", "u-3", "u-ghost"}
+	got, err := r.svc.Schedule(ctx, "u-1", in)
+	if err != nil {
+		t.Fatalf("Schedule: %v", err)
+	}
+	if !got.Everyone || got.UserIDs != nil || strings.Join(got.ExcludedUserIDs, ",") != "u-3,u-ghost" {
+		t.Fatalf("reminder = %+v", got)
+	}
+	if len(r.owners.asked) != 0 {
+		t.Fatalf("looked people up: %v", r.owners.asked)
+	}
+	many := make([]string, maxReminderPeople+1)
+	for i := range many {
+		many[i] = "p-" + string(rune('a'+i))
+	}
+	in.ExcludedUserIDs = many
+	if _, err := r.svc.Schedule(ctx, "u-1", in); !errors.Is(err, apperr.ErrValidation) {
+		t.Fatalf("too many left out = %v", err)
+	}
+
+	r.store.getR = &model.Reminder{ID: "r1", UserID: "u-1", ParentID: "ch-1", ParentType: ParentChannel, UserIDs: []string{"u-2"}, RemindAt: peopleBase.Add(time.Hour)}
+	later := peopleBase.Add(2 * time.Hour)
+	got, err = r.svc.Update(ctx, "u-1", "r1", ReminderUpdate{RemindAt: later, Everyone: true, UserIDs: []string{"u-3"}, ExcludedUserIDs: []string{"u-2"}})
+	if err != nil || !got.Everyone || got.UserIDs != nil || strings.Join(got.ExcludedUserIDs, ",") != "u-2" {
+		t.Fatalf("to everyone = %+v, %v", got, err)
+	}
+	got, err = r.svc.Update(ctx, "u-1", "r1", ReminderUpdate{RemindAt: later, UserIDs: []string{"u-3"}, ExcludedUserIDs: []string{"u-2"}})
+	if err != nil || got.Everyone || strings.Join(got.UserIDs, ",") != "u-3" || got.ExcludedUserIDs != nil {
+		t.Fatalf("back to people = %+v, %v", got, err)
+	}
+}
+
+// For everyone, the bot's reply tags the owner and @all — one tag the
+// fan-out spreads to every member — names (never tags) whoever was left out,
+// and has its notifications skip them. A DM's goes the same way.
+func TestReminderEveryone_FiresAsTheBotsReplyToAll(t *testing.T) {
+	ctx := context.Background()
+	r := newPeopleRig(accessByUser{})
+	r.store.due = []*model.Reminder{
+		{ID: "r1", UserID: "u-1", MessageID: "m-1", ParentID: "ch-1", ParentType: ParentChannel, ChannelSlug: "general", Everyone: true, ExcludedUserIDs: []string{"u-2", "u-3"}, Note: "standup moved"},
+		{ID: "r2", UserID: "u-1", MessageID: "m-1", ParentID: "conv-9", ParentType: ParentConversation, Everyone: true},
+	}
+	if _, err := r.svc.ProcessDue(ctx); err != nil {
+		t.Fatalf("ProcessDue: %v", err)
+	}
+	if len(r.poster.posts) != 2 {
+		t.Fatalf("posts = %+v, want two replies", r.poster.posts)
+	}
+	reply := r.poster.posts[0]
+	if reply.Body != "⏰ Reminder for @[u-1|Alice] and @all (except Bob, Carol): standup moved" || reply.ParentMessageID != "m-1" {
+		t.Fatalf("reply = %+v", reply)
+	}
+	if strings.Join(reply.NotifyExcept, ",") != "u-2,u-3" {
+		t.Fatalf("notifications skip %v, want u-2,u-3", reply.NotifyExcept)
+	}
+	dm := r.poster.posts[1]
+	if dm.Body != "⏰ Reminder for @[u-1|Alice] and @all" || dm.ParentID != "conv-9" || dm.ParentMessageID != "m-1" || dm.NotifyExcept != nil || dm.AuthorID != "" {
+		t.Fatalf("conversation reply = %+v", dm)
+	}
+	if len(r.dms.pairs) != 0 || len(r.notif.notifs) != 0 {
+		t.Fatalf("DMed or alerted privately: %v %v", r.dms.pairs, r.notif.notifs)
+	}
+
+	// Names unknown (a failed lookup): the left-out are counted, not named.
+	for _, c := range []struct {
+		excluded []string
+		want     string
+	}{
+		{[]string{"u-2"}, "⏰ Reminder for @[u-1|u-1] and @all (except 1 person)"},
+		{[]string{"u-2", "u-3"}, "⏰ Reminder for @[u-1|u-1] and @all (except 2 people)"},
+	} {
+		r := newPeopleRig(accessByUser{})
+		r.owners.err = errors.New("dynamo down")
+		r.store.due = []*model.Reminder{{ID: "r3", UserID: "u-1", MessageID: "m-1", ParentID: "ch-1", ParentType: ParentChannel, Everyone: true, ExcludedUserIDs: c.excluded}}
+		if _, err := r.svc.ProcessDue(ctx); err != nil {
+			t.Fatalf("ProcessDue: %v", err)
+		}
+		if got := r.poster.posts[0].Body; got != c.want {
+			t.Errorf("body = %q, want %q", got, c.want)
+		}
+	}
+}
+
 // A personal reminder is the bot's DM to its owner, linking the message.
 func TestReminderPeople_PersonalReminderIsTheBotsDM(t *testing.T) {
 	r := newPeopleRig(accessByUser{})

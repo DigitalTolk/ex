@@ -144,6 +144,11 @@ type Reminder struct {
 	// bot replies to the message tagging the owner and them. Without any, the
 	// bot DMs the owner alone.
 	UserIDs []string `json:"userIDs,omitempty"`
+	// Everyone: the reminder is for every member of the chat (UserIDs is then
+	// empty) but ExcludedUserIDs, the few the owner left out. The bot's reply
+	// tags @all, and its notifications skip them.
+	Everyone        bool     `json:"everyone,omitempty"`
+	ExcludedUserIDs []string `json:"excludedUserIDs,omitempty"`
 	// Note is the owner's own words for context, shown with the reminder
 	// when it comes due.
 	Note      string    `json:"note,omitempty"`

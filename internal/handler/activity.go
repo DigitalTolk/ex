@@ -139,6 +139,8 @@ func (h *ActivityHandler) CreateReminder(w http.ResponseWriter, r *http.Request)
 		ChannelSlug string    `json:"channelSlug"`
 		RemindAt    time.Time `json:"remindAt"`
 		UserIDs     []string  `json:"userIDs"`
+		Everyone    bool      `json:"everyone"`
+		Excluded    []string  `json:"excludedUserIDs"`
 		Note        string    `json:"note"`
 	}
 	if err := readJSON(r, &body); err != nil {
@@ -146,13 +148,15 @@ func (h *ActivityHandler) CreateReminder(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	reminder, err := h.reminder.Schedule(r.Context(), userID, service.ReminderInput{
-		MessageID:   body.MessageID,
-		ParentID:    body.ParentID,
-		ParentType:  body.ParentType,
-		ChannelSlug: body.ChannelSlug,
-		RemindAt:    body.RemindAt,
-		UserIDs:     body.UserIDs,
-		Note:        body.Note,
+		MessageID:       body.MessageID,
+		ParentID:        body.ParentID,
+		ParentType:      body.ParentType,
+		ChannelSlug:     body.ChannelSlug,
+		RemindAt:        body.RemindAt,
+		UserIDs:         body.UserIDs,
+		Everyone:        body.Everyone,
+		ExcludedUserIDs: body.Excluded,
+		Note:            body.Note,
 	})
 	if err != nil {
 		writeServiceError(w, r, err)

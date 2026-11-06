@@ -25,19 +25,13 @@ const wheel = (part: string) => document.querySelector<HTMLElement>(`[data-testi
 // offsetHeight: the row's layout height, untilted by the drum.
 const rowHeight = () => wheel('minute').querySelector<HTMLElement>('[data-row]')!.offsetHeight;
 
-// Spins a wheel by `rows` (down the list for positive) the way a swipe or a
-// mouse wheel scrolls it — a few rows a frame — and waits for it to settle.
+// Spins a wheel by `rows` (down the list for positive), as a fling that ends
+// there would, and waits for it to settle where that lands. One move: spread
+// over frames, WebKit settled (and re-homed) between them and lost rows.
 async function spin(part: string, rows: number) {
   const el = wheel(part);
   const value = el.getAttribute('aria-valuenow');
-  for (let left = rows; left !== 0; ) {
-    const step = Math.sign(left) * Math.min(5, Math.abs(left));
-    el.scrollBy({ top: step * rowHeight(), behavior: 'instant' });
-    left -= step;
-    await new Promise((r) => requestAnimationFrame(r));
-  }
-  // (WebKit takes each step for a scroll of its own, settling between them:
-  // wait for where the whole spin lands, not the first value it passes.)
+  el.scrollBy({ top: rows * rowHeight(), behavior: 'instant' });
   const n = Number(el.getAttribute('aria-valuemax')) + 1;
   const lands = String((((Number(value) + rows) % n) + n) % n);
   await vi.waitFor(() => expect(el.getAttribute('aria-valuenow')).toBe(lands));

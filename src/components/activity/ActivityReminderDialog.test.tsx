@@ -59,6 +59,9 @@ describe('ActivityReminderDialog', () => {
     );
     const body = JSON.parse(vi.mocked(apiFetch).mock.calls[0][1]!.body as string);
     expect(body).toMatchObject({ parentID: 'ch-1', parentType: 'channel', channelSlug: 'general', note: 'reply to Bob' });
+    // No people picker here: for you alone.
+    expect(body.everyone).toBeUndefined();
+    expect(body.userIDs).toBeUndefined();
     await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
 

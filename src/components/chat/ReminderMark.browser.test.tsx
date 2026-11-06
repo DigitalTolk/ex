@@ -7,7 +7,7 @@ import { ReminderMark } from './ReminderMark';
 import { queryKeys } from '@/lib/query-keys';
 import type { Reminder } from '@/types';
 
-const reminder = (userIDs?: string[]): Reminder => ({
+const reminder = (userIDs?: string[], more: Partial<Reminder> = {}): Reminder => ({
   id: 'r-1',
   userID: 'u-1',
   messageID: 'm-1',
@@ -16,6 +16,7 @@ const reminder = (userIDs?: string[]): Reminder => ({
   remindAt: '2099-03-04T09:30:00',
   createdAt: '',
   userIDs,
+  ...more,
 });
 
 async function renderMark(r: Reminder) {
@@ -42,6 +43,19 @@ describe('the reminder mark on a message', () => {
     await userEvent.hover(mark());
     await expect.poll(() => document.body.textContent).toContain('With Bob, Someone');
     expect(document.body.textContent).toMatch(/Reminder · .*9:30/);
+  });
+
+  it('says a reminder is for everyone, minus whoever is left out', async () => {
+    await renderMark(reminder(undefined, { everyone: true, excludedUserIDs: ['u-2', 'u-gone'] }));
+    await userEvent.hover(mark());
+    await expect.poll(() => document.body.textContent).toContain('With everyone except Bob, Someone');
+  });
+
+  it('says a reminder is for everyone', async () => {
+    await renderMark(reminder(undefined, { everyone: true }));
+    await userEvent.hover(mark());
+    await expect.poll(() => document.body.textContent).toContain('With everyone');
+    expect(document.body.textContent).not.toContain('except');
   });
 
   it('names no one on a personal reminder, and opens the Reminders tab', async () => {

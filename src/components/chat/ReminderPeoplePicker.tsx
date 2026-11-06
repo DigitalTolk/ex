@@ -1,36 +1,51 @@
 import { useMemo, useState } from 'react';
-import { X } from 'lucide-react';
-import { UserPickerRow } from '@/components/UserPickerRow';
+import { Popover } from '@base-ui/react/popover';
+import { ChevronDown, Users } from 'lucide-react';
+import { UserAvatar } from '@/components/UserAvatar';
 import { useOptionalAuth } from '@/context/AuthContext';
 import { useChannelMembers } from '@/hooks/useChannels';
 import { useConversation } from '@/hooks/useConversations';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
+import type { ReminderAudience } from '@/lib/reminder-audience';
 import type { User } from '@/types';
 
-// How many matches the list offers at once.
-const MAX_MATCHES = 8;
+// How many people a reminder adds or leaves out, as the server caps it
+// (service.maxReminderPeople).
+export const MAX_REMINDER_PEOPLE = 20;
 
 const NO_IDS: string[] = [];
 
 interface ReminderPeoplePickerProps {
   parentID: string;
   parentType: 'channel' | 'conversation';
-  value: string[];
-  onChange: (ids: string[]) => void;
+  value: ReminderAudience;
+  onChange: (audience: ReminderAudience) => void;
 }
 
-// ReminderPeoplePicker adds people to a reminder: when it comes due the
-// reminder bot replies to the message tagging them and you. It offers the
-// chat's own people — the channel's members or the conversation's
-// participants — since a tag elsewhere would point at a message they can't
-// open, and never bots or agents (a tag would set an agent to work).
+// "Bob", "Bob and Carol", "Bob, Carol and 3 others".
+function listNames(names: string[]): string {
+  if (names.length <= 2) return names.join(' and ');
+  if (names.length === 3) return `${names[0]}, ${names[1]} and ${names[2]}`;
+  return `${names[0]}, ${names[1]} and ${names.length - 2} others`;
+}
+
+// ReminderPeoplePicker says who a reminder is for: one line under the
+// dialog's title ("Just you", "Everyone except Bob") that opens a list of the
+// chat's people to tick. Its first box is "Everyone here": ticked, the
+// reminder tags @all and unticking someone leaves them out; unticked, it
+// reminds you and whoever is ticked. No names to type — the search only
+// narrows a long list. It offers the chat's own people (a tag elsewhere would
+// point at a message they can't open), never bots or agents (a tag would set
+// an agent to work), and the list only loads while it is open.
 export function ReminderPeoplePicker({ parentID, parentType, value, onChange }: ReminderPeoplePickerProps) {
   const me = useOptionalAuth()?.user;
+  const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const { data: members } = useChannelMembers(parentType === 'channel' ? parentID : undefined);
   const { data: conversation } = useConversation(parentType === 'conversation' ? parentID : undefined);
 
-  // The chat's people as id → name, without you.
+  // The chat's people as id → name, without you. A conversation's
+  // participants have no names until their records load.
   const candidates = useMemo(() => {
     const names = new Map<string, string>();
     for (const m of members ?? []) names.set(m.userID, m.displayName);
@@ -38,100 +53,132 @@ export function ReminderPeoplePicker({ parentID, parentType, value, onChange }: 
     names.delete(me?.id ?? '');
     return names;
   }, [members, conversation, me?.id]);
-
-  const term = query.trim().toLowerCase();
-  // A conversation's participants have no names until their records load, so
-  // its matches come from those; a channel's from its member list.
-  const participantIDs = conversation?.participantIDs ?? NO_IDS;
-  const matchIDs = useMemo(() => {
-    if (!term) return NO_IDS;
-    const out: string[] = [];
-    for (const [id, name] of candidates) {
-      if (!value.includes(id) && (name === '' || name.toLowerCase().includes(term))) out.push(id);
-    }
-    return out;
-  }, [term, candidates, value]);
-
-  const { data: users } = useUsersBatch(useMemo(() => [...value, ...matchIDs.slice(0, 50), ...participantIDs], [value, matchIDs, participantIDs]));
+  // The list in hand: the people added, or the people left out of everyone.
+  const picked = value.everyone ? value.excludedUserIDs : value.userIDs;
+  const { data: users } = useUsersBatch(useMemo(() => (open ? [...picked, ...candidates.keys()] : picked), [open, picked, candidates]));
   const byID = useMemo(() => new Map((users ?? []).map((u) => [u.id, u])), [users]);
   const nameOf = (id: string) => byID.get(id)?.displayName || candidates.get(id) || 'Someone';
   // Only someone whose record has loaded, so a bot or agent never flashes in
   // the list before its record says what it is.
   const taggable = (u: User | undefined) => !!u && !u.isBot && u.kind !== 'agent';
 
-  const matches = matchIDs
-    .filter((id) => taggable(byID.get(id)) && nameOf(id).toLowerCase().includes(term))
-    .slice(0, MAX_MATCHES);
+  const term = query.trim().toLowerCase();
+  const roster = open
+    ? [...candidates.keys()]
+        .filter((id) => taggable(byID.get(id)) && (!term || nameOf(id).toLowerCase().includes(term)))
+        .sort((a, b) => nameOf(a).localeCompare(nameOf(b)))
+    : NO_IDS;
 
-  const add = (id: string) => {
-    onChange([...value, id]);
-    setQuery('');
+  // How many the chat has, you included, once its people are known.
+  const headcount = parentType === 'channel' ? members?.length : conversation?.participantIDs?.length;
+  const full = picked.length >= MAX_REMINDER_PEOPLE;
+  const reminded = (id: string) => (value.everyone ? !picked.includes(id) : picked.includes(id));
+  const toggle = (id: string) => {
+    const next = picked.includes(id) ? picked.filter((v) => v !== id) : [...picked, id];
+    onChange(value.everyone ? { ...value, excludedUserIDs: next } : { ...value, userIDs: next });
   };
+  // "Everyone here" starts from everyone ticked, and back off from nobody.
+  const setEveryone = (everyone: boolean) =>
+    onChange(everyone ? { ...value, everyone, excludedUserIDs: [] } : { ...value, everyone, userIDs: [] });
+
+  const names = picked.map(nameOf);
+  const summary = value.everyone
+    ? picked.length
+      ? `Everyone except ${listNames(names)}`
+      : `Everyone here${headcount ? ` · ${headcount} people` : ''}`
+    : picked.length
+      ? `You, ${listNames(names)}`
+      : 'Just you';
 
   return (
-    <div className="space-y-2" data-testid="reminder-people">
-      <label htmlFor="reminder-people-input" className="text-sm font-medium">
-        Also remind
-      </label>
-      {value.length > 0 && (
-        <ul className="flex flex-wrap gap-1.5" aria-label="People to remind">
-          {value.map((id) => (
-            <li
-              key={id}
-              className="flex items-center gap-1 rounded-full border border-border py-0.5 pl-2.5 pr-1 text-sm"
-              data-testid={`reminder-person-${id}`}
-            >
-              {nameOf(id)}
-              <button
-                type="button"
-                onClick={() => onChange(value.filter((v) => v !== id))}
-                aria-label={`Remove ${nameOf(id)}`}
-                className="flex h-5 w-5 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-      <input
-        id="reminder-people-input"
-        type="text"
-        autoComplete="off"
-        placeholder="Add people from this conversation"
-        data-testid="reminder-people-input"
-        className="w-full rounded-md border border-border bg-background px-3 py-2 text-base md:text-sm mobile:h-11"
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' && matches.length > 0) {
-            // Enter picks the top match rather than setting the reminder.
-            e.preventDefault();
-            e.stopPropagation();
-            add(matches[0]);
-          }
-        }}
-      />
-      {term && (
-        <div className="max-h-48 overflow-y-auto rounded-md border border-border" role="listbox" aria-label="Matching people">
-          {matches.length === 0 ? (
-            <p className="px-3 py-2 text-sm text-muted-foreground" data-testid="reminder-people-empty">
-              No one in this conversation matches.
-            </p>
-          ) : (
-            matches.map((id) => (
-              <UserPickerRow
-                key={id}
-                displayName={nameOf(id)}
-                avatarURL={byID.get(id)?.avatarURL}
-                userStatus={byID.get(id)?.userStatus}
-                testID={`reminder-people-option-${id}`}
-                onSelect={() => add(id)}
+    <Popover.Root
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) setQuery('');
+      }}
+    >
+      <Popover.Trigger
+        nativeButton
+        data-testid="reminder-who"
+        aria-label={`Who to remind: ${summary}`}
+        className="flex w-full items-center gap-2 rounded-md border border-border bg-background px-3 py-2 text-left text-sm transition-colors hover:bg-muted mobile:h-11"
+      >
+        <Users className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+        <span className="min-w-0 flex-1 truncate" data-testid="reminder-who-summary">
+          {summary}
+        </span>
+        <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Positioner side="bottom" align="start" sideOffset={4} className="isolate z-50">
+          <Popover.Popup
+            data-testid="reminder-people"
+            aria-label="Who to remind"
+            className="flex w-(--anchor-width) max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-lg bg-popover text-popover-foreground shadow-md ring-1 ring-foreground/10 outline-none"
+          >
+            <div className="border-b border-border p-2">
+              <input
+                type="text"
+                autoComplete="off"
+                aria-label="Find someone"
+                placeholder="Find someone"
+                data-testid="reminder-people-input"
+                className="w-full rounded-md border border-border bg-background px-3 py-1.5 text-base md:text-sm mobile:h-10"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
               />
-            ))
-          )}
-        </div>
-      )}
-    </div>
+            </div>
+            <label className="flex cursor-pointer items-center gap-2.5 border-b border-border px-3 py-2 text-sm font-medium hover:bg-muted mobile:py-3">
+              <input
+                type="checkbox"
+                checked={value.everyone}
+                onChange={(e) => setEveryone(e.target.checked)}
+                data-testid="reminder-everyone"
+                className="h-4 w-4 accent-foreground"
+              />
+              <span className="flex-1">Everyone here</span>
+              {headcount ? <span className="text-xs font-normal text-muted-foreground">{headcount} people</span> : null}
+            </label>
+            <div className="max-h-60 overflow-y-auto py-1" data-testid="reminder-roster">
+              {roster.length === 0 ? (
+                <p className="px-3 py-2 text-sm text-muted-foreground" data-testid="reminder-people-empty">
+                  {term ? 'No one here matches.' : 'Loading people…'}
+                </p>
+              ) : (
+                roster.map((id) => {
+                  const on = reminded(id);
+                  // At the cap, only what's already picked can change.
+                  const locked = full && !picked.includes(id);
+                  return (
+                    <label
+                      key={id}
+                      className="flex cursor-pointer items-center gap-2.5 px-3 py-1.5 text-sm hover:bg-muted has-disabled:cursor-default has-disabled:opacity-50 mobile:py-2.5"
+                      data-testid={`reminder-person-${id}`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={on}
+                        disabled={locked}
+                        onChange={() => toggle(id)}
+                        aria-label={`Remind ${nameOf(id)}`}
+                        className="h-4 w-4 accent-foreground"
+                      />
+                      <UserAvatar displayName={nameOf(id)} avatarURL={byID.get(id)?.avatarURL} className="h-6 w-6" maxInitials={1} />
+                      <span className="truncate">{nameOf(id)}</span>
+                    </label>
+                  );
+                })
+              )}
+            </div>
+            {full && (
+              <p className="border-t border-border px-3 py-2 text-xs text-muted-foreground" data-testid="reminder-people-full">
+                {value.everyone ? `Up to ${MAX_REMINDER_PEOPLE} people can be left out.` : `Up to ${MAX_REMINDER_PEOPLE} people can be added.`}
+              </p>
+            )}
+          </Popover.Popup>
+        </Popover.Positioner>
+      </Popover.Portal>
+    </Popover.Root>
   );
 }
