@@ -41,8 +41,8 @@ describe('ReminderDialog', () => {
   it('has a note field only when asked for one, and passes it on trimmed', async () => {
     setup('2999-01-01T09:00');
     expect(screen.queryByTestId('reminder-note')).toBeNull();
-    // Nor tabs without people to choose: a scheduled send is the time alone.
-    expect(screen.queryByTestId('reminder-tab-who')).toBeNull();
+    // Nor a Who line without people to choose: a scheduled send is the time alone.
+    expect(screen.queryByTestId('reminder-who')).toBeNull();
     cleanup();
 
     const onConfirm = vi.fn((_when: Date, _audience: ReminderAudience, _note: string) => Promise.resolve());

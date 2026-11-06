@@ -114,14 +114,18 @@ export function ReminderDialog({
 }: ReminderDialogProps) {
   const [fields, setFields] = useState(() => splitDateTimeSeed(initialValue));
   const [audience, setAudience] = useState<ReminderAudience>(() => people?.initial ?? NOBODY_ELSE);
+  // The wording follows who it's for: a reminder's preview names everyone,
+  // or how many others, whatever the title.
+  const base = copyProp ?? (audience.everyone ? REMIND_ALL_COPY : REMINDER_COPY);
   const added = audience.userIDs.length;
-  const copy =
-    copyProp ??
-    (audience.everyone
-      ? REMIND_ALL_COPY
+  const previewVerb = !people
+    ? base.previewVerb
+    : audience.everyone
+      ? REMIND_ALL_COPY.previewVerb
       : added
-        ? { ...REMINDER_COPY, previewVerb: `Reminds you and ${added === 1 ? '1 other' : `${added} others`}` }
-        : REMINDER_COPY);
+        ? `Reminds you and ${added === 1 ? '1 other' : `${added} others`}`
+        : base.previewVerb;
+  const copy = { ...base, previewVerb };
   const [note, setNote] = useState(initialNote ?? '');
   // The month the calendar shows; follows a quick pick, otherwise the reader's.
   const [month, setMonth] = useState<Date | undefined>(() => dateOf(splitDateTimeSeed(initialValue).date));
