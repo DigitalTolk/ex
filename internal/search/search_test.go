@@ -492,7 +492,7 @@ func TestService_Messages_NoiceeeeMatchesNoice(t *testing.T) {
 	// to match. We verify two things:
 	//   1. The query string sent has been normalized to "Noice" so a
 	//      doc storing "Noice" is reachable via standard analysis.
-	//   2. fuzziness=AUTO is set so 1–2 edit typos also match.
+	//   2. typoFuzziness is set so typos in longer words also match.
 	r := &stubRunner{}
 	svc := &Service{r: r}
 	if _, err := svc.Messages(context.Background(), MessageQuery{
@@ -506,8 +506,8 @@ func TestService_Messages_NoiceeeeMatchesNoice(t *testing.T) {
 	if match["query"] != "Noice" {
 		t.Errorf("normalized query = %v, want %q", match["query"], "Noice")
 	}
-	if match["fuzziness"] != "AUTO" {
-		t.Errorf("fuzziness = %v, want AUTO", match["fuzziness"])
+	if match["fuzziness"] != typoFuzziness {
+		t.Errorf("fuzziness = %v, want %v", match["fuzziness"], typoFuzziness)
 	}
 }
 
@@ -522,8 +522,8 @@ func TestService_Users_FuzzyMatchEmitsAutoFuzziness(t *testing.T) {
 	if mm["query"] != "alice" {
 		t.Errorf("normalized query = %v, want %q", mm["query"], "alice")
 	}
-	if mm["fuzziness"] != "AUTO" {
-		t.Errorf("fuzziness = %v, want AUTO", mm["fuzziness"])
+	if mm["fuzziness"] != typoFuzziness {
+		t.Errorf("fuzziness = %v, want %v", mm["fuzziness"], typoFuzziness)
 	}
 }
 
@@ -539,8 +539,8 @@ func TestService_Channels_FuzzyMatchEmitsAutoFuzziness(t *testing.T) {
 	if mm["query"] != "general" {
 		t.Errorf("normalized query = %v, want %q", mm["query"], "general")
 	}
-	if mm["fuzziness"] != "AUTO" {
-		t.Errorf("fuzziness = %v, want AUTO", mm["fuzziness"])
+	if mm["fuzziness"] != typoFuzziness {
+		t.Errorf("fuzziness = %v, want %v", mm["fuzziness"], typoFuzziness)
 	}
 	// The channel autocomplete clause targets the single name.autocomplete
 	// subfield via a `match` (not multi_match).
@@ -564,8 +564,8 @@ func TestService_Files_FuzzyFilenameMatch(t *testing.T) {
 	if match["query"] != "report" {
 		t.Errorf("normalized filename query = %v, want %q", match["query"], "report")
 	}
-	if match["fuzziness"] != "AUTO" {
-		t.Errorf("fuzziness = %v, want AUTO", match["fuzziness"])
+	if match["fuzziness"] != typoFuzziness {
+		t.Errorf("fuzziness = %v, want %v", match["fuzziness"], typoFuzziness)
 	}
 }
 
@@ -727,7 +727,7 @@ func TestService_Messages_HashtagBranchKeepsExactTagButFuzzyBody(t *testing.T) {
 	if bodyMatch["query"] != "#bug fix" {
 		t.Errorf("normalized body query = %v, want %q", bodyMatch["query"], "#bug fix")
 	}
-	if bodyMatch["fuzziness"] != "AUTO" {
-		t.Errorf("fuzziness = %v, want AUTO", bodyMatch["fuzziness"])
+	if bodyMatch["fuzziness"] != typoFuzziness {
+		t.Errorf("fuzziness = %v, want %v", bodyMatch["fuzziness"], typoFuzziness)
 	}
 }
