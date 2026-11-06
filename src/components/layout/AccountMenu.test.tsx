@@ -159,7 +159,7 @@ describe('AccountMenu', () => {
     expect(screen.getByTestId('user-menu-about')).toBeInTheDocument();
     expect(screen.getByTestId('user-menu-signout')).toBeInTheDocument();
     expect(screen.getByTestId('user-menu-admin')).toBeInTheDocument();
-    expect(screen.getByTestId('user-menu-webhooks')).toBeInTheDocument();
+    expect(screen.getByTestId('user-menu-webhooks')).toHaveTextContent(/^Webhooks$/);
     expect(screen.getByTestId('user-menu-invite')).toBeInTheDocument();
     expect(screen.getByTestId('user-menu-emojis')).toBeInTheDocument();
     // Theme switching lives in Settings → Appearance, not the dropdown.
@@ -177,7 +177,7 @@ describe('AccountMenu', () => {
     expect(screen.getByTestId('user-menu-webhooks')).toBeInTheDocument();
   });
 
-  it('hides Custom emojis and Incoming webhooks for guests', () => {
+  it('hides Custom emojis and Webhooks for guests', () => {
     mockSystemRole = 'guest';
     renderMenu();
     fireEvent.click(screen.getByTestId('account-menu-trigger'));

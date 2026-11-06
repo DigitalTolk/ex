@@ -42,6 +42,15 @@ export function useUpdateBot() {
   });
 }
 
+// useDeleteBot deletes a bot for good; its messages keep their author.
+export function useDeleteBot() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => apiFetch<void>(botPath(id), { method: 'DELETE' }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.bots() }),
+  });
+}
+
 export function useSetBotEnabled() {
   const qc = useQueryClient();
   return useMutation({

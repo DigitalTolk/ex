@@ -398,9 +398,6 @@ function MessageItemImpl({
   // integration's own avatar (override URL or initials of its username),
   // never the creator's profile image.
   const displayAuthorAvatarURL = isWebhook ? message.webhookAvatarURL : authorAvatarURL;
-  // For webhook posts the profile dropdown is the minimal integration card
-  // attributed to the creator (authorName resolves to the creator).
-  const integrationOwnerName = isWebhook ? authorName : undefined;
   const isMobile = useIsMobile();
   // A touch SCREEN keeps the long-press gestures armed at every width, even
   // when a trackpad is attached — an iPad user reaches for the screen anyway.
@@ -862,7 +859,8 @@ function MessageItemImpl({
           online={authorOnline}
           currentUserId={currentUserId}
           showInlineStatus={false}
-          integrationOwnerName={integrationOwnerName}
+          integration={isWebhook}
+          integrationOwnerID={message.webhookOwnerID}
           // The avatar's own width, matching the grouped rows' time column
           // (w-9) so the text lines up on every row; its top is level with
           // the name line's.
@@ -923,7 +921,8 @@ function MessageItemImpl({
             userStatus={authorUserStatus}
             online={authorOnline}
             currentUserId={currentUserId}
-            integrationOwnerName={integrationOwnerName}
+            integration={isWebhook}
+            integrationOwnerID={message.webhookOwnerID}
             // min-w-0 lets the trigger shrink inside the header row so the
             // name truncates; the default inline-flex trigger has
             // min-width:auto and would push timestamp/badges off-screen on a

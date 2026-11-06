@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { ChevronLeft, ChevronRight, Download, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { getInitials, formatLongDateTime, formatBytes } from '@/lib/format';
-import { iconForAttachment, isImageContentType, isPdfAttachment, isVideoAttachment } from '@/lib/file-helpers';
+import { iconForAttachment, isPdfAttachment, isShownAsImage, isVideoAttachment } from '@/lib/file-helpers';
 import { VideoPreview } from './VideoPreview';
 import { useTransientOverlayCleanup } from '@/hooks/useTransientOverlayCleanup';
 import { useIsMobile } from '@/hooks/useIsMobile';
@@ -71,7 +71,7 @@ export function ImageLightbox({
   useMobileBackClose(open, onClose);
   const safeIndex = total === 0 ? 0 : ((index % total) + total) % total;
   const current = images[safeIndex];
-  const isImage = current ? isImageContentType(current.contentType) : false;
+  const isImage = current ? isShownAsImage(current.contentType, current.thumbnailURL) : false;
   const isPdf = !!current && !isImage && isPdfAttachment(current.contentType, current.filename);
   const lightboxRef = useRef<HTMLDivElement>(null);
   const imageKey = current ? `${current.url}\u0000${safeIndex}` : '';

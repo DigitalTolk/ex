@@ -181,6 +181,72 @@ func TestBotStore_UpdateBotRefusesATakenUsernameOrAMissingBot(t *testing.T) {
 	}
 }
 
+// A deleted bot keeps its row (its messages keep their author) and lets its
+// username go.
+func TestBotStore_DeleteBotKeepsTheRowAndFreesTheUsername(t *testing.T) {
+	db := setupDynamoDB(t)
+	ctx := context.Background()
+	s := NewBotStore(db)
+	users := NewUserStore(db)
+	if err := s.CreateBot(ctx, newTestBot("b-1", "incident-bot")); err != nil {
+		t.Fatal(err)
+	}
+	at := time.Now().Truncate(time.Millisecond)
+	if err := s.DeleteBot(ctx, "b-1", "incident-bot", at); err != nil {
+		t.Fatalf("DeleteBot: %v", err)
+	}
+	got, err := users.GetUser(ctx, "b-1")
+	if err != nil {
+		t.Fatalf("GetUser: %v", err)
+	}
+	if got.BotDeletedAt == nil || !got.BotDeletedAt.Equal(at) || got.Username != "" || got.DisplayName != "Incident Bot" || !got.UpdatedAt.Equal(at) {
+		t.Fatalf("deleted bot = %+v", got)
+	}
+	if _, err := s.UsernameOwner(ctx, "incident-bot"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("UsernameOwner after delete = %v, want not found", err)
+	}
+	if err := s.CreateBot(ctx, newTestBot("b-2", "incident-bot")); err != nil {
+		t.Fatalf("a new bot taking the freed username: %v", err)
+	}
+}
+
+// A migrated bot may have a username but no claim, or no username at all.
+func TestBotStore_DeleteBotOfAMigratedBot(t *testing.T) {
+	db := setupDynamoDB(t)
+	ctx := context.Background()
+	s := NewBotStore(db)
+	for _, username := range []string{"alerts", ""} {
+		migrated := newTestBot("b-old-"+username, username)
+		if err := NewUserStore(db).CreateUser(ctx, migrated); err != nil {
+			t.Fatalf("CreateUser: %v", err)
+		}
+		if err := s.DeleteBot(ctx, migrated.ID, username, time.Now()); err != nil {
+			t.Fatalf("DeleteBot(%q): %v", username, err)
+		}
+	}
+}
+
+func TestBotStore_DeleteBotRefusesAMissingBotOrAnotherBotsUsername(t *testing.T) {
+	db := setupDynamoDB(t)
+	ctx := context.Background()
+	s := NewBotStore(db)
+	if err := s.DeleteBot(ctx, "b-missing", "", time.Now()); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("DeleteBot of a missing bot = %v, want not found", err)
+	}
+	if err := s.CreateBot(ctx, newTestBot("b-1", "incident-bot")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateBot(ctx, newTestBot("b-2", "other-bot")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteBot(ctx, "b-2", "incident-bot", time.Now()); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("DeleteBot letting go of another bot's username = %v, want not found", err)
+	}
+	if owner, err := s.UsernameOwner(ctx, "incident-bot"); err != nil || owner != "b-1" {
+		t.Fatalf("username owner = %q, %v; want b-1 untouched", owner, err)
+	}
+}
+
 func TestBotStore_Tokens(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
@@ -233,6 +299,7 @@ func TestBotStore_ErrorArms(t *testing.T) {
 		"UpdateBot":      failing(func(f *faultClient) { f.failTransactWriteItems = true }).UpdateBot(ctx, newTestBot("b-1", "x"), "x"),
 		"PutBotToken":    failing(func(f *faultClient) { f.failPutItem = true }).PutBotToken(ctx, tok),
 		"DeleteBotToken": failing(func(f *faultClient) { f.failDeleteItem = true }).DeleteBotToken(ctx, "hash-1"),
+		"DeleteBot":      failing(func(f *faultClient) { f.failTransactWriteItems = true }).DeleteBot(ctx, "b-1", "x", time.Now()),
 	} {
 		if !errors.Is(err, errInjected) {
 			t.Errorf("%s = %v, want errInjected", name, err)

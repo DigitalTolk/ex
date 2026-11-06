@@ -2162,6 +2162,13 @@ export interface Message {
   webhookIconEmoji?: string; // emoji name (no colons) from icon_emoji; rendered as the avatar
   messageAttachments?: MessageAttachment[];
   /**
+   * WebhookOwnerID is the person who set up the webhook that posted the
+   * message: the integration card names them. The author can't, being the
+   * "webhook" sentinel (or the webhook's bot, in a DM). Empty on posts from
+   * before it was recorded.
+   */
+  webhookOwnerID?: string;
+  /**
    * AgentInvokerID attributes an agent-authored message to the human whose
    * invocation produced it. Agents are shared ("gg" belongs to no one), so
    * a reader — human or another agent's context bundle — needs this to say

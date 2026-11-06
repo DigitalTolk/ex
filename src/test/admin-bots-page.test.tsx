@@ -12,14 +12,14 @@ vi.mock('@/hooks/useUsersBatch', () => ({
   useUsersBatch: () => ({ map: new Map([['u-admin', { id: 'u-admin', displayName: 'Ada Admin' }]]) }),
 }));
 
-// A stand-in for the confirm dialog: it renders while open, and keeps its
-// props so the arms the real dialog never fires can be reached.
-const confirmProps = vi.hoisted(() => ({
-  current: null as null | { open: boolean; title: string; onOpenChange: (o: boolean) => void; onConfirm: () => void },
-}));
+// A stand-in for the confirm dialog: it renders while open, and keeps each
+// dialog's props (by its confirm label) so the arms the real dialog never
+// fires can be reached.
+type ConfirmProps = { open: boolean; title: string; confirmLabel: string; onOpenChange: (o: boolean) => void; onConfirm: () => void };
+const confirmProps = vi.hoisted(() => ({ byLabel: {} as Record<string, ConfirmProps> }));
 vi.mock('@/components/ui/confirm-dialog', () => ({
-  ConfirmDialog: (props: { open: boolean; title: string; confirmLabel: string; onOpenChange: (o: boolean) => void; onConfirm: () => void }) => {
-    confirmProps.current = props;
+  ConfirmDialog: (props: ConfirmProps) => {
+    confirmProps.byLabel[props.confirmLabel] = props;
     if (!props.open) return null;
     return (
       <div role="dialog" aria-label={props.title}>
@@ -73,7 +73,7 @@ const input = (label: string) => screen.getByLabelText(label) as HTMLInputElemen
 
 beforeEach(() => {
   mockApiFetch.mockReset();
-  confirmProps.current = null;
+  confirmProps.byLabel = {};
 });
 
 describe('AdminBotsPage', () => {
@@ -129,29 +129,37 @@ describe('AdminBotsPage', () => {
     expect(input('Username').value).toBe('incident-bot');
   });
 
-  it('edits a bot, and cancels an edit', async () => {
+  it('edits a bot in its card, and cancels an edit', async () => {
     let finish: (v: unknown) => void = () => {};
     routeApi({ 'PATCH /api/v1/admin/bots/b-2': () => new Promise((resolve) => (finish = resolve)) });
     renderPage();
     await screen.findByText('Incident Bot');
+    const usernames = () => screen.getAllByLabelText('Username').map((el) => (el as HTMLInputElement).value);
 
     fireEvent.click(screen.getByRole('button', { name: 'Edit Incident Bot' }));
-    expect(input('Username').value).toBe('incident-bot');
-    expect(input('Display name').value).toBe('Incident Bot');
-    expect(input('Description').value).toBe('Opens incident channels');
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-    expect(input('Username').value).toBe('');
-    expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
+    const editing = within(card('b-1'));
+    expect((editing.getByLabelText('Username') as HTMLInputElement).value).toBe('incident-bot');
+    expect((editing.getByLabelText('Display name') as HTMLInputElement).value).toBe('Incident Bot');
+    expect((editing.getByLabelText('Description') as HTMLInputElement).value).toBe('Opens incident channels');
+    // The form for a new bot stays as it was.
+    expect(usernames()).toEqual(['', 'incident-bot']);
+    expect(screen.getByRole('button', { name: 'Create bot' })).toBeInTheDocument();
+    fireEvent.click(editing.getByRole('button', { name: 'Cancel' }));
+    expect(usernames()).toEqual(['']);
+    expect(screen.getByRole('button', { name: 'Edit Incident Bot' })).toBeInTheDocument();
 
     // A migrated bot gets its username here.
     fireEvent.click(screen.getByRole('button', { name: 'Edit Alerts' }));
-    expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
-    fireEvent.change(input('Username'), { target: { value: 'alerts' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
-    expect(await screen.findByRole('button', { name: 'Saving...' })).toBeDisabled();
+    const alerts = within(card('b-2'));
+    expect(alerts.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+    fireEvent.change(alerts.getByLabelText('Username'), { target: { value: 'alerts' } });
+    fireEvent.click(alerts.getByRole('button', { name: 'Save changes' }));
+    expect(await alerts.findByRole('button', { name: 'Saving...' })).toBeDisabled();
+    expect(alerts.getByRole('button', { name: 'Cancel' })).toBeDisabled();
     expect(JSON.parse(calls('PATCH /api/v1/admin/bots/b-2')[0][1].body)).toEqual({ username: 'alerts', displayName: 'Alerts', description: '' });
     finish({});
-    await waitFor(() => expect(input('Username').value).toBe(''));
+    await waitFor(() => expect(usernames()).toEqual(['']));
+    expect(screen.getByRole('button', { name: 'Edit Alerts' })).toBeInTheDocument();
   });
 
   it('saves an edit to the bot being edited', async () => {
@@ -159,15 +167,28 @@ describe('AdminBotsPage', () => {
     renderPage();
     await screen.findByText('Incident Bot');
     fireEvent.click(screen.getByRole('button', { name: 'Edit Incident Bot' }));
-    fireEvent.change(input('Display name'), { target: { value: 'Incidents' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    const editing = within(card('b-1'));
+    fireEvent.change(editing.getByLabelText('Display name'), { target: { value: 'Incidents' } });
+    fireEvent.click(editing.getByRole('button', { name: 'Save changes' }));
     await waitFor(() => expect(calls('PATCH /api/v1/admin/bots/b-1')).toHaveLength(1));
     expect(JSON.parse(calls('PATCH /api/v1/admin/bots/b-1')[0][1].body)).toEqual({
       username: 'incident-bot',
       displayName: 'Incidents',
       description: 'Opens incident channels',
     });
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Create bot' })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByLabelText('Username')).toHaveLength(1));
+  });
+
+  it('says in the card why an edit could not be saved, and keeps it open', async () => {
+    routeApi({ 'PATCH /api/v1/admin/bots/b-1': () => Promise.reject(new Error('that username is taken')) });
+    renderPage();
+    await screen.findByText('Incident Bot');
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Incident Bot' }));
+    const editing = within(card('b-1'));
+    fireEvent.change(editing.getByLabelText('Username'), { target: { value: 'general-bot' } });
+    fireEvent.click(editing.getByRole('button', { name: 'Save changes' }));
+    expect(await editing.findByRole('alert')).toHaveTextContent('that username is taken');
+    expect((editing.getByLabelText('Username') as HTMLInputElement).value).toBe('general-bot');
   });
 
   it('disables and enables bots, and says when that fails', async () => {
@@ -182,6 +203,37 @@ describe('AdminBotsPage', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Request failed');
   });
 
+  it('deletes a bot after asking', async () => {
+    routeApi();
+    renderPage();
+    await screen.findByText('Incident Bot');
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Incident Bot' }));
+    const dialog = screen.getByRole('dialog', { name: 'Delete "Incident Bot"?' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(calls('DELETE /api/v1/admin/bots/b-1')).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Incident Bot' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete bot' }));
+    await waitFor(() => expect(calls('DELETE /api/v1/admin/bots/b-1')).toHaveLength(1));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    // The list is asked for again.
+    await waitFor(() => expect(calls('GET /api/v1/admin/bots')).toHaveLength(2));
+
+    // Confirming with nothing picked (the dialog closed meanwhile) deletes nothing.
+    act(() => confirmProps.byLabel['Delete bot'].onConfirm());
+    expect(calls('DELETE /api/v1/admin/bots/b-1')).toHaveLength(1);
+  });
+
+  it('says why a bot could not be deleted', async () => {
+    routeApi({ 'DELETE /api/v1/admin/bots/b-1': () => Promise.reject(new Error('bot: no such bot')) });
+    renderPage();
+    await screen.findByText('Incident Bot');
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Incident Bot' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete bot' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('bot: no such bot');
+  });
+
   it("lists a bot's tokens, makes one and shows its secret once", async () => {
     routeApi({
       'POST /api/v1/admin/bots/b-1/tokens': () =>
@@ -189,7 +241,7 @@ describe('AdminBotsPage', () => {
     });
     renderPage();
     await screen.findByText('Incident Bot');
-    const toggle = screen.getByRole('button', { name: 'Tokens for Incident Bot' });
+    const toggle = screen.getByRole('button', { name: 'Access tokens for Incident Bot' });
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
     fireEvent.click(toggle);
     expect(toggle).toHaveAttribute('aria-expanded', 'true');
@@ -214,7 +266,7 @@ describe('AdminBotsPage', () => {
     routeApi({ 'GET /api/v1/admin/bots/b-1/tokens': () => Promise.resolve(null) });
     renderPage();
     await screen.findByText('Incident Bot');
-    fireEvent.click(screen.getByRole('button', { name: 'Tokens for Incident Bot' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Access tokens for Incident Bot' }));
     await waitFor(() => expect(calls('GET /api/v1/admin/bots/b-1/tokens')).toHaveLength(1));
     expect(screen.queryByTestId(/^bot-token-t-/)).not.toBeInTheDocument();
   });
@@ -223,7 +275,7 @@ describe('AdminBotsPage', () => {
     routeApi();
     renderPage();
     await screen.findByText('Incident Bot');
-    fireEvent.click(screen.getByRole('button', { name: 'Tokens for Incident Bot' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Access tokens for Incident Bot' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Revoke CliffHub' }));
     const dialog = screen.getByRole('dialog', { name: 'Revoke "CliffHub"?' });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
@@ -236,7 +288,7 @@ describe('AdminBotsPage', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
 
     // Confirming with nothing picked (the dialog closed meanwhile) revokes nothing.
-    act(() => confirmProps.current?.onConfirm());
+    act(() => confirmProps.byLabel['Revoke token'].onConfirm());
     expect(calls('DELETE /api/v1/admin/bots/b-1/tokens/t-1')).toHaveLength(1);
   });
 
@@ -247,7 +299,7 @@ describe('AdminBotsPage', () => {
     });
     renderPage();
     await screen.findByText('Incident Bot');
-    fireEvent.click(screen.getByRole('button', { name: 'Tokens for Incident Bot' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Access tokens for Incident Bot' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Revoke CliffHub' }));
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Revoke token' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('bot: no such token');

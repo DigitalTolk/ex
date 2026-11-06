@@ -62,6 +62,10 @@ type User struct {
 	BotDescription string `json:"botDescription,omitempty" dynamodbav:"botDescription,omitempty"`
 	// BotOwnerID is the admin who created the bot (Mattermost's owner_id).
 	BotOwnerID string `json:"-" dynamodbav:"botOwnerID,omitempty"`
+	// BotDeletedAt is when an admin deleted the bot. The row stays so its
+	// messages keep their author; the bot itself is gone from the bot list,
+	// deactivated, tokenless, and its username free for another bot.
+	BotDeletedAt *time.Time `json:"-" dynamodbav:"botDeletedAt,omitempty"`
 
 	// Phone and Manager are directory attributes synced from Microsoft 365
 	// at SSO login when the Graph integration is enabled. They are owned by

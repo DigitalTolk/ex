@@ -407,6 +407,35 @@ describe('ImageLightbox browser behavior', () => {
     expect(stage!.style.transform).not.toContain('translate3d');
   });
 
+  // A HEIC's url is the WebP copy the server made of it, which comes with its
+  // thumbnails; one without (too large to convert) is offered as its file.
+  it('shows a HEIC photo through its viewing copy', async () => {
+    await render(lightbox({
+      images: [{ url: imageURL, thumbnailURL: imageURL, filename: 'IMG_0001.HEIC', contentType: 'image/heic', size: 2048 }],
+    }));
+    const image = document.querySelector('[data-testid="image-lightbox-image"]') as HTMLImageElement | null;
+    expect(image).not.toBeNull();
+    await expect.element(image!).toBeVisible();
+    expect(image!.src).toBe(imageURL);
+  });
+
+  it('offers a HEIC photo without a viewing copy as a download', async () => {
+    await render(lightbox({
+      images: [{
+        url: 'https://cdn.example.test/IMG_0002.HEIC',
+        downloadURL: 'https://download.example.test/IMG_0002.HEIC',
+        filename: 'IMG_0002.HEIC',
+        contentType: 'image/heic',
+        size: 4096,
+      }],
+    }));
+    expect(document.querySelector('[data-testid="image-lightbox-image"]')).toBeNull();
+    const download = document.querySelector('[data-testid="image-lightbox-file-download"]') as HTMLAnchorElement | null;
+    expect(download).not.toBeNull();
+    await expect.element(download!).toBeVisible();
+    expect(download!.href).toBe('https://download.example.test/IMG_0002.HEIC');
+  });
+
   const twoImages = [
     { url: imageURL, filename: 'a.png', contentType: 'image/png', size: 2048 },
     { url: nextImageURL, filename: 'b.png', contentType: 'image/png', size: 2048 },

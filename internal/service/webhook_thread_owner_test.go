@@ -17,7 +17,7 @@ func TestIncomingWebhookService_ExecuteMessageRejectsAnotherWebhooksRoot(t *test
 	ctx := context.Background()
 	svc, messages, _ := newWebhookThreadFixture()
 	webhooks := svc.store.(*fakeWebhookStore)
-	webhooks.items["wh-other"] = &model.IncomingWebhook{ID: "wh-other", ChannelID: "ch-1", LockToChannel: true, Username: "other-bot", CreatedAt: time.Now()}
+	webhooks.items["wh-other"] = &model.IncomingWebhook{ID: "wh-other", ChannelID: "ch-1", LockToChannel: true, Username: "other-bot", CreatedBy: "u-owner", CreatedAt: time.Now()}
 
 	foreign, err := svc.ExecuteMessage(ctx, "wh-other", IncomingWebhookPayload{Text: "another integration's alert"})
 	if err != nil {
@@ -25,6 +25,10 @@ func TestIncomingWebhookService_ExecuteMessageRejectsAnotherWebhooksRoot(t *test
 	}
 	if foreign.WebhookID != "wh-other" {
 		t.Fatalf("root WebhookID = %q, want the posting webhook's id", foreign.WebhookID)
+	}
+	// The author is the sentinel, so the post names who set the webhook up.
+	if foreign.AuthorID != WebhookAuthorID || foreign.WebhookOwnerID != "u-owner" {
+		t.Fatalf("root author %q, owner %q; want the sentinel and u-owner", foreign.AuthorID, foreign.WebhookOwnerID)
 	}
 	before := len(messages.messages)
 
