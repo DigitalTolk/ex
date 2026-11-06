@@ -12,14 +12,11 @@ import {
   useLinkPreview,
   useLinkUserGroup,
   useSyncUserGroup,
-  useUnlinkUserGroup,
   useUserGroupPermissions,
   checkUserGroupHandle,
-  useAddUserGroupMembers,
   useCanManageUserGroups,
   useCreateUserGroup,
   useMyUserGroupIds,
-  useRemoveUserGroupMember,
   useSetUserGroupEnabled,
   useUpdateUserGroup,
   useUserGroup,
@@ -110,29 +107,23 @@ describe('user-group mutations', () => {
       () => ({
         create: useCreateUserGroup(),
         update: useUpdateUserGroup(),
-        add: useAddUserGroupMembers(),
-        remove: useRemoveUserGroupMember(),
         setEnabled: useSetUserGroupEnabled(),
       }),
       { wrapper },
     );
     await act(async () => {
-      await result.current.create.mutateAsync({ handle: 'oncall', name: 'On-call', description: '', memberIds: ['u-1'] });
+      await result.current.create.mutateAsync({ handle: 'oncall', name: 'On-call', description: '', entraGroupId: 'e-1' });
       await result.current.update.mutateAsync({ id: 'group-1', patch: { name: 'Pager' } });
-      await result.current.add.mutateAsync({ id: 'group-1', userIds: ['u-2'] });
-      await result.current.remove.mutateAsync({ id: 'group-1', userId: 'u-2' });
       await result.current.setEnabled.mutateAsync({ id: 'group-1', enabled: false });
       await result.current.setEnabled.mutateAsync({ id: 'group-1', enabled: true });
     });
     expect(mockApiFetch.mock.calls).toEqual([
-      ['/api/v1/usergroups', { method: 'POST', body: JSON.stringify({ handle: 'oncall', name: 'On-call', description: '', memberIds: ['u-1'] }) }],
+      ['/api/v1/usergroups', { method: 'POST', body: JSON.stringify({ handle: 'oncall', name: 'On-call', description: '', entraGroupId: 'e-1' }) }],
       ['/api/v1/usergroups/group-1', { method: 'PATCH', body: JSON.stringify({ name: 'Pager' }) }],
-      ['/api/v1/usergroups/group-1/members', { method: 'POST', body: JSON.stringify({ userIds: ['u-2'] }) }],
-      ['/api/v1/usergroups/group-1/members/u-2', { method: 'DELETE' }],
       ['/api/v1/usergroups/group-1/disable', { method: 'POST' }],
       ['/api/v1/usergroups/group-1/enable', { method: 'POST' }],
     ]);
-    expect(spy).toHaveBeenCalledTimes(6);
+    expect(spy).toHaveBeenCalledTimes(4);
     expect(spy).toHaveBeenCalledWith({ queryKey: queryKeys.userGroupsAll() });
   });
 });
@@ -158,7 +149,7 @@ describe('Microsoft 365 links', () => {
   it('previews a link for a new or an existing group', async () => {
     const none = renderHook(() => useLinkPreview(undefined), { wrapper });
     expect(none.result.current.fetchStatus).toBe('idle');
-    mockApiFetch.mockResolvedValue({ users: 1, toAdd: 1, toRemove: 0, skipped: 0, overLimit: false });
+    mockApiFetch.mockResolvedValue({ users: 1, toAdd: 1, toRemove: 0, skipped: 0 });
     const fresh = renderHook(() => useLinkPreview('e 1'), { wrapper });
     await waitFor(() => expect(fresh.result.current.data?.toAdd).toBe(1));
     expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/usergroup-sources/microsoft/e%201/preview');
@@ -167,17 +158,15 @@ describe('Microsoft 365 links', () => {
     expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/usergroup-sources/microsoft/e-1/preview?groupId=group%201');
   });
 
-  it('links, unlinks and syncs', async () => {
+  it('changes the Microsoft 365 group and syncs', async () => {
     mockApiFetch.mockResolvedValue(ONCALL);
-    const { result } = renderHook(() => ({ link: useLinkUserGroup(), unlink: useUnlinkUserGroup(), sync: useSyncUserGroup() }), { wrapper });
+    const { result } = renderHook(() => ({ link: useLinkUserGroup(), sync: useSyncUserGroup() }), { wrapper });
     await act(async () => {
       await result.current.link.mutateAsync({ id: 'group-1', entraGroupId: 'e-1' });
-      await result.current.unlink.mutateAsync('group-1');
       await result.current.sync.mutateAsync({ id: 'group-1', applyRemovals: true });
     });
     expect(mockApiFetch.mock.calls).toEqual([
       ['/api/v1/usergroups/group-1/link', { method: 'POST', body: JSON.stringify({ entraGroupId: 'e-1' }) }],
-      ['/api/v1/usergroups/group-1/unlink', { method: 'POST' }],
       ['/api/v1/usergroups/group-1/sync', { method: 'POST', body: JSON.stringify({ applyRemovals: true }) }],
     ]);
   });

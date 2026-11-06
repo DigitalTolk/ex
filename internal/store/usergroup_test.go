@@ -13,14 +13,15 @@ import (
 	"github.com/DigitalTolk/ex/internal/model"
 )
 
-func newTestUserGroup(id, handle string, members ...string) *model.UserGroupDetail {
+func newTestUserGroup(id, handle string) *model.UserGroupDetail {
 	now := time.Now().Truncate(time.Millisecond)
 	return &model.UserGroupDetail{
 		UserGroup: model.UserGroup{
 			ID: id, Handle: handle, Name: "Group " + handle, Description: "desc",
-			MemberCount: len(members), CreatedBy: "u-admin", CreatedAt: now, UpdatedAt: now,
+			MemberCount: 2, CreatedBy: "u-admin", CreatedAt: now, UpdatedAt: now,
 		},
-		MemberIDs: members,
+		// Members are rows of their own: never written with the group's row.
+		MemberIDs: []string{"u-ignored"},
 	}
 }
 
@@ -34,7 +35,7 @@ func TestUserGroupStore_CreateGetListAndHandles(t *testing.T) {
 	ctx := context.Background()
 	s := NewUserGroupStore(db)
 
-	oncall := newTestUserGroup("group-1", "oncall", "u-1", "u-2")
+	oncall := newTestUserGroup("group-1", "oncall")
 	if err := s.CreateUserGroup(ctx, oncall); err != nil {
 		t.Fatalf("CreateUserGroup: %v", err)
 	}
@@ -46,7 +47,7 @@ func TestUserGroupStore_CreateGetListAndHandles(t *testing.T) {
 	}
 
 	got, err := s.GetUserGroup(ctx, "group-1")
-	if err != nil || got.Handle != "oncall" || !slices.Equal(got.MemberIDs, []string{"u-1", "u-2"}) || got.Version != 1 || got.MemberCount != 2 {
+	if err != nil || got.Handle != "oncall" || got.MemberIDs != nil || got.Version != 1 || got.MemberCount != 2 {
 		t.Fatalf("GetUserGroup = %+v, %v", got, err)
 	}
 	if _, err := s.GetUserGroup(ctx, "group-nope"); !errors.Is(err, ErrNotFound) {
@@ -113,7 +114,7 @@ func TestUserGroupStore_UpdateIsVersionedAndMovesTheHandleClaim(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
 	s := NewUserGroupStore(db)
-	g := newTestUserGroup("group-1", "oncall", "u-1")
+	g := newTestUserGroup("group-1", "oncall")
 	if err := s.CreateUserGroup(ctx, g); err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +122,7 @@ func TestUserGroupStore_UpdateIsVersionedAndMovesTheHandleClaim(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	g.Handle, g.MemberIDs, g.MemberCount = "on-call", []string{"u-1", "u-2"}, 2
+	g.Handle, g.MemberCount = "on-call", 5
 	if err := s.UpdateUserGroup(ctx, g, prior("oncall", 1)); err != nil {
 		t.Fatalf("UpdateUserGroup: %v", err)
 	}
@@ -129,7 +130,7 @@ func TestUserGroupStore_UpdateIsVersionedAndMovesTheHandleClaim(t *testing.T) {
 		t.Fatalf("Version = %d, want 2", g.Version)
 	}
 	got, _ := s.GetUserGroup(ctx, "group-1")
-	if got.Handle != "on-call" || !slices.Equal(got.MemberIDs, []string{"u-1", "u-2"}) || got.Version != 2 {
+	if got.Handle != "on-call" || got.MemberCount != 5 || got.Version != 2 {
 		t.Fatalf("stored = %+v", got)
 	}
 	if _, err := s.UserGroupHandleOwner(ctx, "oncall"); !errors.Is(err, ErrNotFound) {
@@ -144,19 +145,18 @@ func TestUserGroupStore_UpdateIsVersionedAndMovesTheHandleClaim(t *testing.T) {
 	}
 
 	// A stale version loses, and leaves the group as it was.
-	g.MemberIDs = []string{"u-9"}
+	g.MemberCount = 9
 	if err := s.UpdateUserGroup(ctx, g, prior("on-call", 1)); !errors.Is(err, ErrUserGroupChanged) {
 		t.Fatalf("stale update = %v, want ErrUserGroupChanged", err)
 	}
 	if g.Version != 1 {
 		t.Fatalf("a failed update left Version = %d, want the expected version back", g.Version)
 	}
-	if got, _ := s.GetUserGroup(ctx, "group-1"); !slices.Equal(got.MemberIDs, []string{"u-1", "u-2"}) {
-		t.Fatalf("stale update applied: %v", got.MemberIDs)
+	if got, _ := s.GetUserGroup(ctx, "group-1"); got.MemberCount != 5 {
+		t.Fatalf("stale update applied: %d", got.MemberCount)
 	}
 
 	// Taking another group's handle fails as a taken handle.
-	g.MemberIDs = []string{"u-1"}
 	g.Handle = "sre"
 	if err := s.UpdateUserGroup(ctx, g, prior("on-call", 2)); !errors.Is(err, ErrAlreadyExists) {
 		t.Fatalf("update to a taken handle = %v, want ErrAlreadyExists", err)
@@ -181,12 +181,14 @@ func TestUserGroupStore_FaultArms(t *testing.T) {
 		f.failGetItem, f.failQuery, f.failBatchGetItem, f.failTransactWriteItems = true, true, true, true
 	}))
 	for name, err := range map[string]error{
-		"create": failing.CreateUserGroup(ctx, newTestUserGroup("group-2", "x2")),
-		"update": failing.UpdateUserGroup(ctx, g, prior("oncall", 1)),
-		"get":    func() error { _, err := failing.GetUserGroup(ctx, "group-1"); return err }(),
-		"batch":  func() error { _, err := failing.GetUserGroups(ctx, []string{"group-1"}); return err }(),
-		"list":   func() error { _, err := failing.ListUserGroups(ctx); return err }(),
-		"owner":  func() error { _, err := failing.UserGroupHandleOwner(ctx, "oncall"); return err }(),
+		"create":  failing.CreateUserGroup(ctx, newTestUserGroup("group-2", "x2")),
+		"update":  failing.UpdateUserGroup(ctx, g, prior("oncall", 1)),
+		"get":     func() error { _, err := failing.GetUserGroup(ctx, "group-1"); return err }(),
+		"batch":   func() error { _, err := failing.GetUserGroups(ctx, []string{"group-1"}); return err }(),
+		"list":    func() error { _, err := failing.ListUserGroups(ctx); return err }(),
+		"owner":   func() error { _, err := failing.UserGroupHandleOwner(ctx, "oncall"); return err }(),
+		"members": func() error { _, err := failing.UserGroupMemberIDs(ctx, "group-1"); return err }(),
+		"groups":  func() error { _, err := failing.UserGroupIDsForUser(ctx, "u-1"); return err }(),
 	} {
 		if !errors.Is(err, errInjected) {
 			t.Errorf("%s: err = %v, want the injected fault", name, err)
@@ -206,6 +208,18 @@ func TestUserGroupStore_FaultArms(t *testing.T) {
 	assertUnmarshalErr(t, listErr, "user group list")
 	_, batchErr := corrupt.GetUserGroups(ctx, []string{"group-1"})
 	assertUnmarshalErr(t, batchErr, "user group batch")
+	_, membersErr := corrupt.UserGroupMemberIDs(ctx, "group-1")
+	assertUnmarshalErr(t, membersErr, "user group members")
+	_, groupsErr := corrupt.UserGroupIDsForUser(ctx, "u-1")
+	assertUnmarshalErr(t, groupsErr, "user's groups")
+
+	writes := NewUserGroupStore(withFault(db, func(f *faultClient) { f.failBatchWriteItem = true }))
+	if err := writes.ApplyUserGroupMembers(ctx, "group-1", []string{"u-1"}, nil); !errors.Is(err, errInjected) {
+		t.Errorf("add members: err = %v, want the injected fault", err)
+	}
+	if err := writes.ApplyUserGroupMembers(ctx, "group-1", nil, []string{"u-1"}); !errors.Is(err, errInjected) {
+		t.Errorf("remove members: err = %v, want the injected fault", err)
+	}
 }
 
 func TestUserGroupStore_EntraClaimIsUniqueAndMoves(t *testing.T) {
@@ -213,7 +227,7 @@ func TestUserGroupStore_EntraClaimIsUniqueAndMoves(t *testing.T) {
 	ctx := context.Background()
 	s := NewUserGroupStore(db)
 
-	linked := newTestUserGroup("group-1", "oncall", "u-1")
+	linked := newTestUserGroup("group-1", "oncall")
 	linked.EntraGroupID = "entra-A"
 	if err := s.CreateUserGroup(ctx, linked); err != nil {
 		t.Fatalf("create linked: %v", err)
@@ -266,18 +280,54 @@ func TestUserGroupStore_EntraClaimIsUniqueAndMoves(t *testing.T) {
 	}
 }
 
-func TestUserGroupStore_ThousandMembersInOneRow(t *testing.T) {
+// Members are a row each, on both sides: a group has no size limit, and the
+// groups of a user are one query.
+func TestUserGroupStore_MemberRows(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
 	s := NewUserGroupStore(db)
-	members := make([]string, 1000)
+	if err := s.CreateUserGroup(ctx, newTestUserGroup("group-big", "big")); err != nil {
+		t.Fatal(err)
+	}
+	members := make([]string, 3000)
 	for i := range members {
 		members[i] = fmt.Sprintf("01JTESTMEMBER%013d", i)
 	}
-	if err := s.CreateUserGroup(ctx, newTestUserGroup("group-big", "big", members...)); err != nil {
-		t.Fatalf("create a 1000-member group: %v", err)
+	if err := s.ApplyUserGroupMembers(ctx, "group-big", members, nil); err != nil {
+		t.Fatalf("add 3000 members: %v", err)
 	}
-	if got, err := s.GetUserGroup(ctx, "group-big"); err != nil || len(got.MemberIDs) != 1000 {
-		t.Fatalf("read back = %d members, %v", len(got.MemberIDs), err)
+	got, err := s.UserGroupMemberIDs(ctx, "group-big")
+	if err != nil || len(got) != len(members) {
+		t.Fatalf("UserGroupMemberIDs = %d members, %v", len(got), err)
+	}
+	if row, _ := s.GetUserGroup(ctx, "group-big"); row.MemberIDs != nil {
+		t.Fatalf("the group's row carries members: %d", len(row.MemberIDs))
+	}
+
+	if err := s.CreateUserGroup(ctx, newTestUserGroup("group-2", "sre")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ApplyUserGroupMembers(ctx, "group-2", []string{members[0]}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if ids, err := s.UserGroupIDsForUser(ctx, members[0]); err != nil || !slices.Equal(ids, []string{"group-2", "group-big"}) {
+		t.Fatalf("UserGroupIDsForUser = %v, %v", ids, err)
+	}
+
+	// Removing, and repeating writes, are idempotent.
+	if err := s.ApplyUserGroupMembers(ctx, "group-big", members[:2], members[2:]); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if err := s.ApplyUserGroupMembers(ctx, "group-big", nil, members[2:5]); err != nil {
+		t.Fatalf("remove again: %v", err)
+	}
+	if got, _ := s.UserGroupMemberIDs(ctx, "group-big"); !slices.Equal(got, members[:2]) {
+		t.Fatalf("members after removal = %v", got)
+	}
+	if ids, _ := s.UserGroupIDsForUser(ctx, members[5]); len(ids) != 0 {
+		t.Fatalf("a removed member's side row is left: %v", ids)
+	}
+	if err := s.ApplyUserGroupMembers(ctx, "group-big", nil, nil); err != nil {
+		t.Fatalf("an empty change: %v", err)
 	}
 }

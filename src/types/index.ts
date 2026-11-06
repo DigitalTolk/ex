@@ -233,9 +233,6 @@ export interface WorkspaceSettings {
   // The Runners tab in the AI hub (set up, start and disconnect ex-runner
   // from the app). Off until an admin turns it on.
   runnersInApp?: boolean;
-  // Who may create and edit user groups: 'admins' (also when empty) or
-  // 'members'.
-  userGroupManagers?: string;
 }
 
 export interface IncomingWebhook {

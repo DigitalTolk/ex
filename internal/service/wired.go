@@ -187,7 +187,6 @@ func (s *UserGroupService) Wired() error {
 	return wiring.Check("user group service",
 		wiring.Dep{Name: "group store", Set: s.groups != nil},
 		wiring.Dep{Name: "people", Set: s.people != nil},
-		wiring.Dep{Name: "settings", Set: s.settings != nil},
 		wiring.Dep{Name: "bot names", Set: s.bots != nil},
 		wiring.Dep{Name: "publisher", Set: s.publisher != nil},
 		wiring.Dep{Name: "shared copy", Set: s.copies != nil},

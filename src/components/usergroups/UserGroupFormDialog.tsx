@@ -18,14 +18,10 @@ import { queryKeys } from '@/lib/query-keys';
 import { linkSummary } from '@/lib/user-groups';
 import type { EntraGroup, UserGroupDetail } from '@/types/generated';
 import { EntraGroupPicker } from './EntraGroupPicker';
-import { MemberPicker } from './MemberPicker';
 
 interface Props {
-  // The group to edit; absent → create a new one.
+  // The group to edit; absent → create a new one from a Microsoft 365 group.
   group?: UserGroupDetail;
-  // Offer creating the group from a Microsoft 365 group (admins, with the
-  // integration configured).
-  canLinkMicrosoft?: boolean;
   onClose: () => void;
   onSaved?: (group: UserGroupDetail) => void;
 }
@@ -40,19 +36,17 @@ function handleStateOf(unchanged: boolean, wellFormed: boolean, checking: boolea
   return available ? 'available' : 'taken';
 }
 
-// UserGroupFormDialog creates a user group (name, handle, description, then
-// its members) or edits an existing group's details.
-export function UserGroupFormDialog({ group, canLinkMicrosoft = false, onClose, onSaved }: Props) {
+// UserGroupFormDialog creates a user group from a Microsoft 365 group (which
+// its members come from) with a name, handle and description, or edits an
+// existing group's details.
+export function UserGroupFormDialog({ group, onClose, onSaved }: Props) {
   const editing = !!group;
-  const [source, setSource] = useState<'manual' | 'microsoft'>('manual');
   const [entraGroup, setEntraGroup] = useState<EntraGroup | null>(null);
-  const fromMicrosoft = source === 'microsoft';
-  const { data: preview } = useLinkPreview(fromMicrosoft ? entraGroup?.id : undefined);
+  const { data: preview } = useLinkPreview(editing ? undefined : entraGroup?.id);
   const [name, setName] = useState(group?.name ?? '');
   const [handle, setHandle] = useState(group?.handle ?? '');
   const [handleEdited, setHandleEdited] = useState(editing);
   const [description, setDescription] = useState(group?.description ?? '');
-  const [memberIds, setMemberIds] = useState<string[]>([]);
   const [error, setError] = useState('');
   const create = useCreateUserGroup();
   const update = useUpdateUserGroup();
@@ -78,7 +72,7 @@ export function UserGroupFormDialog({ group, canLinkMicrosoft = false, onClose, 
   const nameOk = name.trim() !== '' && countCodepoints(name.trim()) <= MAX_USER_GROUP_NAME_CHARS;
   const descOk = countCodepoints(description.trim()) <= MAX_USER_GROUP_DESCRIPTION_CHARS;
   const handleOk = isValidUserGroupHandle(effectiveHandle) && handleState !== 'taken';
-  const sourceOk = !fromMicrosoft || (!!preview && !preview.overLimit);
+  const sourceOk = editing || !!preview;
   const canSave = nameOk && descOk && handleOk && sourceOk && !saving;
 
   const save = () => {
@@ -96,9 +90,7 @@ export function UserGroupFormDialog({ group, canLinkMicrosoft = false, onClose, 
       return;
     }
     create.mutate(
-      fromMicrosoft
-        ? { handle: effectiveHandle, name: name.trim(), description: description.trim(), memberIds: [], entraGroupId: entraGroup?.id }
-        : { handle: effectiveHandle, name: name.trim(), description: description.trim(), memberIds },
+      { handle: effectiveHandle, name: name.trim(), description: description.trim(), entraGroupId: entraGroup!.id },
       { onSuccess, onError },
     );
   };
@@ -118,21 +110,9 @@ export function UserGroupFormDialog({ group, canLinkMicrosoft = false, onClose, 
           <DialogTitle>{editing ? 'Edit user group' : 'Create user group'}</DialogTitle>
         </DialogHeader>
         <div className="space-y-4">
-          {!editing && canLinkMicrosoft && (
-            <fieldset className="space-y-2">
-              <legend className="text-sm font-medium">Members come from</legend>
-              <label className="flex items-center gap-2 text-sm">
-                <input type="radio" name="usergroup-source" checked={!fromMicrosoft} onChange={() => setSource('manual')} />
-                Added manually in ex
-              </label>
-              <label className="flex items-center gap-2 text-sm">
-                <input type="radio" name="usergroup-source" checked={fromMicrosoft} onChange={() => setSource('microsoft')} />
-                A Microsoft 365 group
-              </label>
-            </fieldset>
-          )}
-          {fromMicrosoft && (
+          {!editing && (
             <div className="space-y-2">
+              <p className="text-sm text-muted-foreground">Members come from a Microsoft 365 group and stay in sync with it.</p>
               <EntraGroupPicker
                 value={entraGroup}
                 onChange={(g) => {
@@ -178,12 +158,6 @@ export function UserGroupFormDialog({ group, canLinkMicrosoft = false, onClose, 
               placeholder="Who gets paged for production incidents"
             />
           </div>
-          {!editing && !fromMicrosoft && (
-            <div className="space-y-2">
-              <Label>Members</Label>
-              <MemberPicker selected={memberIds} onChange={setMemberIds} />
-            </div>
-          )}
           {error && (
             <p className="text-sm text-destructive" role="alert">
               {error}

@@ -69,19 +69,6 @@ func TestUserService_WiredNamesUserGroupMembership(t *testing.T) {
 	}
 }
 
-func TestSettingsService_UserGroupManagers(t *testing.T) {
-	svc := NewSettingsService(&fakeSettingsStore{})
-	for _, v := range []model.UserGroupManagers{"", model.UserGroupManagersAdmins, model.UserGroupManagersMembers} {
-		got, err := svc.Update(context.Background(), &model.WorkspaceSettings{UserGroupManagers: v})
-		if err != nil || got.UserGroupManagers != v {
-			t.Errorf("Update(%q) = %+v, %v", v, got, err)
-		}
-	}
-	if _, err := svc.Update(context.Background(), &model.WorkspaceSettings{UserGroupManagers: "everyone"}); !errors.Is(err, ErrValidation) {
-		t.Fatalf("Update(everyone) = %v, want a validation error", err)
-	}
-}
-
 func TestIncomingWebhookService_TranslatesSlackUserGroups(t *testing.T) {
 	svc := NewIncomingWebhookService(nil, fakeWebhookChannels{}, nil, nil, "")
 	cases := map[string]string{

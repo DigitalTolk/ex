@@ -81,8 +81,8 @@ type Deps struct {
 	Mattermost *MattermostHandler
 	// User groups: mentionable named sets of people (/api/v1/usergroups).
 	UserGroup *UserGroupHandler
-	Activity   *ActivityHandler
-	Command    *CommandHandler
+	Activity  *ActivityHandler
+	Command   *CommandHandler
 	// Scheduled messages: compose now, deliver at a chosen time.
 	ScheduledMessage *ScheduledMessageHandler
 	// Agent orchestration (plan-v2): SPA surface, ex-runner API, and the

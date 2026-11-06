@@ -50,9 +50,10 @@ type chat struct {
 	messageLinks  *service.MessageLinkService
 }
 
-// userGroupCopyTTL bounds a user group's Redis copy whose refresh was lost;
-// every write refreshes it.
-const userGroupCopyTTL = 24 * time.Hour
+// userGroupCopyTTL bounds how long a user group's Redis copy can lag a
+// change: every committed change deletes it, and this caps a copy a reader
+// stored just after that delete (or a delete that failed).
+const userGroupCopyTTL = 5 * time.Minute
 
 // newGraphClient is a seam over the Microsoft Graph constructor: the
 // configuration exposes no endpoint overrides, so tests point the client at a
@@ -196,7 +197,7 @@ func (a *App) buildChat(ctx context.Context) error {
 	// @-mention: typed handles become group mentions on send, the fan-out
 	// expands them, pills and alert text show the current handle, and a
 	// demotion to guest leaves every group.
-	c.userGroups = service.NewUserGroupService(store.NewUserGroupStore(in.db), c.users, c.settings, botStore, in.pubsub)
+	c.userGroups = service.NewUserGroupService(store.NewUserGroupStore(in.db), c.users, botStore, in.pubsub)
 	// A group mention reads the group from Redis; the store stays the source.
 	c.userGroups.SetCopies(cache.NewUserGroupCopies(in.cache.Client(), userGroupCopyTTL))
 	c.messages.SetUserGroups(c.userGroups)

@@ -336,8 +336,6 @@ func NewRouter(d *Deps) http.Handler {
 		mux.Handle("POST /api/v1/usergroups", middleware.WrapFunc(userGroupH.Create, authMW, writeLimit))
 		mux.Handle("GET /api/v1/usergroups/{id}", middleware.WrapFunc(userGroupH.Get, authMW))
 		mux.Handle("PATCH /api/v1/usergroups/{id}", middleware.WrapFunc(userGroupH.Update, authMW, writeLimit))
-		mux.Handle("POST /api/v1/usergroups/{id}/members", middleware.WrapFunc(userGroupH.AddMembers, authMW, writeLimit))
-		mux.Handle("DELETE /api/v1/usergroups/{id}/members/{uid}", middleware.WrapFunc(userGroupH.RemoveMember, authMW, writeLimit))
 		mux.Handle("POST /api/v1/usergroups/{id}/enable", middleware.WrapFunc(userGroupH.Enable, authMW, writeLimit))
 		mux.Handle("POST /api/v1/usergroups/{id}/disable", middleware.WrapFunc(userGroupH.Disable, authMW, writeLimit))
 		mux.Handle("GET /api/v1/usergroup-handles/{handle}", middleware.WrapFunc(userGroupH.HandleAvailable, authMW))
@@ -346,7 +344,6 @@ func NewRouter(d *Deps) http.Handler {
 		mux.Handle("GET /api/v1/usergroup-sources/microsoft", middleware.WrapFunc(userGroupH.SearchMicrosoft, authMW))
 		mux.Handle("GET /api/v1/usergroup-sources/microsoft/{entraId}/preview", middleware.WrapFunc(userGroupH.PreviewMicrosoft, authMW))
 		mux.Handle("POST /api/v1/usergroups/{id}/link", middleware.WrapFunc(userGroupH.Link, authMW, writeLimit))
-		mux.Handle("POST /api/v1/usergroups/{id}/unlink", middleware.WrapFunc(userGroupH.Unlink, authMW, writeLimit))
 		mux.Handle("POST /api/v1/usergroups/{id}/sync", middleware.WrapFunc(userGroupH.Sync, authMW, writeLimit))
 		mux.Handle("GET /api/v1/users/{id}/usergroups", middleware.WrapFunc(userGroupH.ForUser, authMW))
 	}

@@ -58,11 +58,12 @@ func (h *UserGroupHandler) HandleAvailable(w http.ResponseWriter, r *http.Reques
 }
 
 // Permissions answers GET /api/v1/usergroup-permissions: whether the caller
-// may create and edit groups (the directory shows its controls by it).
+// may edit groups, and create them from Microsoft 365 (the directory shows
+// its controls by it).
 func (h *UserGroupHandler) Permissions(w http.ResponseWriter, r *http.Request) {
 	actor := userGroupActor(r)
 	writeJSON(w, http.StatusOK, map[string]bool{
-		"canManage":        h.svc.CanManage(r.Context(), actor),
+		"canManage":        h.svc.CanManage(actor),
 		"canLinkMicrosoft": h.svc.CanLinkMicrosoft(actor),
 	})
 }
@@ -98,16 +99,6 @@ func (h *UserGroupHandler) Link(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	g, err := h.svc.Link(r.Context(), userGroupActor(r), r.PathValue("id"), body.EntraGroupID)
-	if err != nil {
-		writeServiceError(w, r, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, g)
-}
-
-// Unlink answers POST /api/v1/usergroups/{id}/unlink.
-func (h *UserGroupHandler) Unlink(w http.ResponseWriter, r *http.Request) {
-	g, err := h.svc.Unlink(r.Context(), userGroupActor(r), r.PathValue("id"))
 	if err != nil {
 		writeServiceError(w, r, err)
 		return
@@ -165,33 +156,6 @@ func (h *UserGroupHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	g, err := h.svc.Update(r.Context(), userGroupActor(r), r.PathValue("id"), body)
-	if err != nil {
-		writeServiceError(w, r, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, g)
-}
-
-// AddMembers answers POST /api/v1/usergroups/{id}/members.
-func (h *UserGroupHandler) AddMembers(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		UserIDs []string `json:"userIds"`
-	}
-	if err := readJSON(r, &body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
-		return
-	}
-	g, err := h.svc.AddMembers(r.Context(), userGroupActor(r), r.PathValue("id"), body.UserIDs)
-	if err != nil {
-		writeServiceError(w, r, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, g)
-}
-
-// RemoveMember answers DELETE /api/v1/usergroups/{id}/members/{uid}.
-func (h *UserGroupHandler) RemoveMember(w http.ResponseWriter, r *http.Request) {
-	g, err := h.svc.RemoveMember(r.Context(), userGroupActor(r), r.PathValue("id"), r.PathValue("uid"))
 	if err != nil {
 		writeServiceError(w, r, err)
 		return

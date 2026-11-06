@@ -2451,11 +2451,6 @@ export interface WorkspaceSettings {
    * set up from the command line and the account menu's Runners dialog.
    */
   runnersInApp: boolean;
-  /**
-   * UserGroupManagers says who may create and edit user groups: admins
-   * (the default, also when empty) or every member.
-   */
-  userGroupManagers?: UserGroupManagers;
 }
 /**
  * DefaultMaxUploadBytes is the fallback ceiling when the workspace hasn't
@@ -2674,7 +2669,8 @@ export interface MarkUnreadResult {
 export const UserGroupIDPrefix = "group-";
 /**
  * UserGroup is a named set of people mentioned together through its handle
- * (Slack-style "@oncall"). A disabled group keeps its members and its handle
+ * (Slack-style "@oncall"). Its members come from the Microsoft 365 (Entra ID)
+ * group it is linked to. A disabled group keeps its members and its handle
  * but is not mentionable.
  */
 export interface UserGroup {
@@ -2688,9 +2684,8 @@ export interface UserGroup {
   createdAt: string /* RFC3339 */;
   updatedAt: string /* RFC3339 */;
   /**
-   * EntraGroupID links the group to a Microsoft Entra ID group: its members
-   * then come from Entra (synced, read-only in ex). Empty: members are
-   * managed in ex.
+   * EntraGroupID is the Microsoft Entra ID group the members are synced
+   * from.
    */
   entraGroupId?: string;
   /**
@@ -2721,18 +2716,13 @@ export interface UserGroup {
  */
 export type UserGroupSyncState = string;
 /**
- * UserGroupSyncOversize: the Entra group has more members than a user
- * group holds; members stay as last synced.
- */
-export const UserGroupSyncOversize: UserGroupSyncState = "paused-oversize";
-/**
  * UserGroupSyncHeld: the sync would remove most members (or all of them);
  * it waits for an admin to apply it.
  */
 export const UserGroupSyncHeld: UserGroupSyncState = "held-removal";
 /**
  * UserGroupSyncSourceMissing: the Entra group is gone or unreadable; the
- * group was disabled with its members kept.
+ * members are kept.
  */
 export const UserGroupSyncSourceMissing: UserGroupSyncState = "source-missing";
 /**
@@ -2762,23 +2752,15 @@ export interface UserGroupLinkPreview {
   toAdd: number /* int */;
   toRemove: number /* int */;
   skipped: number /* int */;
-  overLimit: boolean;
 }
 /**
- * UserGroupDetail is a group with its member IDs. Version is the store's
- * optimistic-concurrency counter: every write of a group expects the version
- * it read, so two concurrent member edits can't overwrite each other or push
- * a group past its cap.
+ * UserGroupDetail is a group with its member IDs. The members are rows of
+ * their own (one per member), so a group has no size limit. Version is the
+ * group row's optimistic-concurrency counter.
  */
 export interface UserGroupDetail extends UserGroup {
   memberIds: string[];
 }
-/**
- * UserGroupManagers says who may create and edit user groups.
- */
-export type UserGroupManagers = string;
-export const UserGroupManagersAdmins: UserGroupManagers = "admins";
-export const UserGroupManagersMembers: UserGroupManagers = "members";
 
 //////////
 // source: webhook.go

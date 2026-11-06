@@ -14,15 +14,14 @@ import (
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/apperr"
-	"github.com/DigitalTolk/ex/internal/limits"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/msgraph"
 )
 
-// User groups linked to Microsoft 365. An admin links a group to a Microsoft
-// Entra ID group; from then on its members come from Entra (nested groups
-// included) and are read-only in ex. The directory status sweep resyncs every
-// linked group each run; linking and "Sync now" sync at once.
+// User groups take their members from Microsoft 365. Each group is linked to
+// a Microsoft Entra ID group, and its members come from there (nested groups
+// included); they are never edited in ex. The directory status sweep resyncs
+// every group each run; creating, relinking and "Sync now" sync at once.
 //
 // A sync never silently shrinks a group: a Graph failure keeps the last
 // members, a vanished Entra group keeps them too (and says so), and a result
@@ -56,9 +55,8 @@ type EntraGroupDirectory interface {
 	// GetGroup returns ErrEntraGroupNotFound for a group that is gone.
 	GetGroup(ctx context.Context, id string) (*model.EntraGroup, error)
 	// GroupUserIDs returns the object IDs of the group's users, nested groups
-	// included; overLimit once it has more than limit. ErrEntraGroupNotFound
-	// for a group that is gone.
-	GroupUserIDs(ctx context.Context, id string, limit int) (ids []string, overLimit bool, err error)
+	// included. ErrEntraGroupNotFound for a group that is gone.
+	GroupUserIDs(ctx context.Context, id string) ([]string, error)
 }
 
 // EntraUserIndex maps Entra object IDs to ex user IDs (cache.EntraUserIndex).
@@ -101,8 +99,8 @@ type userGroupMicrosoft struct {
 // configured (3 × the status sweep's own 1h default).
 const defaultEntraIndexTTL = 3 * time.Hour
 
-// SetMicrosoft enables linking groups to Microsoft 365. Wired only when the
-// integration is configured (MS_TENANT_ID).
+// SetMicrosoft enables user groups, which take their members from Microsoft
+// 365. Wired only when the integration is configured (MS_TENANT_ID).
 func (s *UserGroupService) SetMicrosoft(deps UserGroupMicrosoftDeps) {
 	if deps.IndexTTL <= 0 {
 		deps.IndexTTL = defaultEntraIndexTTL
@@ -110,8 +108,8 @@ func (s *UserGroupService) SetMicrosoft(deps UserGroupMicrosoftDeps) {
 	s.microsoft = &userGroupMicrosoft{deps}
 }
 
-// CanLinkMicrosoft reports whether actor may link groups: an admin, with the
-// integration configured.
+// CanLinkMicrosoft reports whether actor may create groups and choose their
+// Microsoft 365 group: an admin, with the integration configured.
 func (s *UserGroupService) CanLinkMicrosoft(actor UserGroupActor) bool {
 	return s.microsoft != nil && actor.ID != "" && actor.Role == model.SystemRoleAdmin
 }
@@ -157,38 +155,21 @@ type entraSnapshot struct {
 	group *model.EntraGroup
 	// wanted are the ex users who become members: mapped, active, human,
 	// non-guest accounts, in Entra's order.
-	wanted    []string
-	users     int // Entra users in the group, nested included
-	overLimit bool
+	wanted []string
+	users  int // Entra users in the group, nested included
 }
 
 func (e *entraSnapshot) skipped() int { return e.users - len(e.wanted) }
 
-// applyTo makes g a linked group holding e's members. The group's name is
-// kept when e didn't read it (the sweep reads members only).
+// applyTo records on g's row that it holds e's members. The Entra group's
+// name is kept when e didn't read it (the sweep reads members only).
 func (e *entraSnapshot) applyTo(g *model.UserGroupDetail, now time.Time) {
 	g.EntraGroupID = e.group.ID
 	if e.group.DisplayName != "" {
 		g.EntraGroupName = e.group.DisplayName
 	}
-	g.MemberIDs = slices.Clone(e.wanted)
+	g.MemberCount = len(e.wanted)
 	g.SyncedAt, g.SyncSkipped, g.SyncState, g.PendingRemoval = &now, e.skipped(), "", 0
-}
-
-// entraSnapshot reads an Entra group for linking (admin action): its name
-// and members. Refused over the member cap.
-func (s *UserGroupService) entraSnapshot(ctx context.Context, actor UserGroupActor, entraID string) (*entraSnapshot, error) {
-	if err := s.canLink(actor); err != nil {
-		return nil, err
-	}
-	snap, err := s.readEntraGroup(ctx, entraID, true)
-	if err != nil {
-		return nil, err
-	}
-	if snap.overLimit {
-		return nil, apperr.Invalid("this Microsoft 365 group has more than %d people", limits.MaxUserGroupMembers)
-	}
-	return snap, nil
 }
 
 // readEntraGroup reads an Entra group's members (and, withName, the group
@@ -205,13 +186,9 @@ func (s *UserGroupService) readEntraGroup(ctx context.Context, entraID string, w
 		}
 		snap.group = g
 	}
-	ids, overLimit, err := s.microsoft.Directory.GroupUserIDs(ctx, entraID, limits.MaxUserGroupMembers)
+	ids, err := s.microsoft.Directory.GroupUserIDs(ctx, entraID)
 	if err != nil {
 		return nil, err
-	}
-	if overLimit {
-		snap.overLimit = true
-		return snap, nil
 	}
 	snap.users = len(ids)
 	if snap.wanted, err = s.membersFor(ctx, ids); err != nil {
@@ -317,62 +294,66 @@ func (s *UserGroupService) PreviewLink(ctx context.Context, actor UserGroupActor
 	if err != nil {
 		return nil, fmt.Errorf("user group: read microsoft 365 group: %w", err)
 	}
-	if snap.overLimit {
-		return &model.UserGroupLinkPreview{OverLimit: true}, nil
-	}
 	var current []string
 	if groupID != "" {
-		g, err := s.group(ctx, groupID)
-		if err != nil {
+		if _, err := s.group(ctx, groupID); err != nil {
 			return nil, err
 		}
-		current = g.MemberIDs
+		if current, err = s.memberIDs(ctx, groupID); err != nil {
+			return nil, err
+		}
 	}
 	added, removed := diffMembers(current, snap.wanted)
 	return &model.UserGroupLinkPreview{Users: snap.users, ToAdd: len(added), ToRemove: len(removed), Skipped: snap.skipped()}, nil
 }
 
-// Link links group id to an Entra group and replaces its members with the
-// Entra group's (the admin confirmed the preview).
+// Link points group id at another Entra group and replaces its members with
+// that group's (the admin confirmed the preview).
 func (s *UserGroupService) Link(ctx context.Context, actor UserGroupActor, id, entraID string) (*model.UserGroupDetail, error) {
-	snap, err := s.entraSnapshot(ctx, actor, entraID)
-	if err != nil {
-		return nil, err
-	}
-	return s.mutate(ctx, id, func(g *model.UserGroupDetail) error {
-		snap.applyTo(g, s.now())
-		return nil
-	})
-}
-
-// Unlink makes a linked group an ordinary one, keeping its members.
-func (s *UserGroupService) Unlink(ctx context.Context, actor UserGroupActor, id string) (*model.UserGroupDetail, error) {
 	if err := s.canLink(actor); err != nil {
 		return nil, err
 	}
-	return s.mutate(ctx, id, func(g *model.UserGroupDetail) error {
-		g.EntraGroupID, g.EntraGroupName, g.SyncedAt, g.SyncSkipped, g.SyncState, g.PendingRemoval = "", "", nil, 0, "", 0
-		return nil
+	return s.withSyncLock(ctx, id, func() (*model.UserGroupDetail, error) {
+		snap, err := s.readEntraGroup(ctx, entraID, true)
+		if err != nil {
+			return nil, err
+		}
+		current, err := s.memberIDs(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		// The row first: it moves the claim on the Entra group, which another
+		// group may hold.
+		g, err := s.mutate(ctx, id, func(g *model.UserGroupDetail) error {
+			snap.applyTo(g, s.now())
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+		added, removed := diffMembers(current, snap.wanted)
+		if err := s.groups.ApplyUserGroupMembers(ctx, id, added, removed); err != nil {
+			s.recordSyncFailure(ctx, id)
+			return nil, fmt.Errorf("user group: write members: %w", err)
+		}
+		// Again: a mention between the row and the members may have copied
+		// the previous members.
+		s.forgetCopy(ctx, id)
+		g.MemberIDs = slices.Clone(snap.wanted)
+		return g, nil
 	})
 }
 
-// SyncNow syncs a linked group at once. applyRemovals applies a sync that
-// was held for removing most of the group.
+// SyncNow syncs a group at once. applyRemovals applies a sync that was held
+// for removing most of the group.
 func (s *UserGroupService) SyncNow(ctx context.Context, actor UserGroupActor, id string, applyRemovals bool) (*model.UserGroupDetail, error) {
 	if err := s.canLink(actor); err != nil {
 		return nil, err
 	}
-	g, err := s.group(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	if !g.Linked() {
-		return nil, apperr.Invalid("this group isn't linked to Microsoft 365")
-	}
 	return s.syncGroup(ctx, id, applyRemovals, true)
 }
 
-// SyncLinkedGroups resyncs every linked group, least recently synced first,
+// SyncLinkedGroups resyncs every group, least recently synced first,
 // a few at a time, until the deadline (the status sweep's budget). Failures
 // are recorded on their group and logged; they never stop the others.
 func (s *UserGroupService) SyncLinkedGroups(ctx context.Context, deadline time.Time) {
@@ -384,7 +365,7 @@ func (s *UserGroupService) SyncLinkedGroups(ctx context.Context, deadline time.T
 		slog.WarnContext(ctx, "user group sync: listing groups failed; skipping this run", "error", err)
 		return
 	}
-	linked := slices.DeleteFunc(all, func(g *model.UserGroupDetail) bool { return !g.Linked() })
+	linked := all
 	slices.SortStableFunc(linked, func(a, b *model.UserGroupDetail) int { return cmp.Compare(syncedUnix(a), syncedUnix(b)) })
 
 	work := make(chan string)
@@ -418,10 +399,9 @@ func syncedUnix(g *model.UserGroupDetail) int64 {
 	return g.SyncedAt.UnixNano()
 }
 
-// syncGroup brings one linked group in line with its Entra group, under the
-// group's sync lock. withName also refreshes the Entra group's name (an
-// admin's Sync now; the sweep reads members only).
-func (s *UserGroupService) syncGroup(ctx context.Context, id string, applyRemovals, withName bool) (*model.UserGroupDetail, error) {
+// withSyncLock runs fn under the group's sync lock: one sync, link or
+// "Sync now" of a group at a time.
+func (s *UserGroupService) withSyncLock(ctx context.Context, id string, fn func() (*model.UserGroupDetail, error)) (*model.UserGroupDetail, error) {
 	key, token := "ugsync:"+id, s.microsoft.NewToken()
 	ok, err := s.microsoft.Locker.AcquireLock(ctx, key, token, userGroupSyncLockTTL)
 	if err != nil {
@@ -435,49 +415,70 @@ func (s *UserGroupService) syncGroup(ctx context.Context, id string, applyRemova
 			slog.WarnContext(ctx, "user group sync: releasing the lock failed; it lapses on its own", "groupID", id, "error", err)
 		}
 	}()
-
-	g, err := s.group(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	if !g.Linked() {
-		return g, nil // unlinked meanwhile
-	}
-	snap, err := s.readEntraGroup(ctx, g.EntraGroupID, withName)
-	switch {
-	case errors.Is(err, ErrEntraGroupNotFound), errors.Is(err, ErrNotFound):
-		return s.syncState(ctx, id, model.UserGroupSyncSourceMissing, 0)
-	case err != nil:
-		if _, serr := s.syncState(ctx, id, model.UserGroupSyncError, 0); serr != nil {
-			slog.WarnContext(ctx, "user group sync: recording the failure failed", "groupID", id, "error", serr)
-		}
-		return nil, fmt.Errorf("user group sync: read microsoft 365 group: %w", err)
-	case snap.overLimit:
-		return s.syncState(ctx, id, model.UserGroupSyncOversize, 0)
-	}
-	_, removed := diffMembers(g.MemberIDs, snap.wanted)
-	held := (len(snap.wanted) == 0 && len(g.MemberIDs) > 0) || len(removed) > max(userGroupSyncMinHeld, len(g.MemberIDs)/2)
-	if held && !applyRemovals {
-		return s.syncState(ctx, id, model.UserGroupSyncHeld, len(removed))
-	}
-	return s.applySync(ctx, id, snap)
+	return fn()
 }
 
-// applySync writes the synced members. Only a membership or state change
-// tells clients; a run that changed nothing just moves "last synced".
-func (s *UserGroupService) applySync(ctx context.Context, id string, snap *entraSnapshot) (*model.UserGroupDetail, error) {
-	var changed bool
+// syncGroup brings one group in line with its Entra group, under the group's
+// sync lock. withName also refreshes the Entra group's name (an admin's Sync
+// now; the sweep reads members only).
+func (s *UserGroupService) syncGroup(ctx context.Context, id string, applyRemovals, withName bool) (*model.UserGroupDetail, error) {
+	return s.withSyncLock(ctx, id, func() (*model.UserGroupDetail, error) {
+		g, err := s.group(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		current, err := s.memberIDs(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		snap, err := s.readEntraGroup(ctx, g.EntraGroupID, withName)
+		switch {
+		case errors.Is(err, ErrEntraGroupNotFound), errors.Is(err, ErrNotFound):
+			return s.syncState(ctx, id, model.UserGroupSyncSourceMissing, 0)
+		case err != nil:
+			s.recordSyncFailure(ctx, id)
+			return nil, fmt.Errorf("user group sync: read microsoft 365 group: %w", err)
+		}
+		added, removed := diffMembers(current, snap.wanted)
+		held := (len(snap.wanted) == 0 && len(current) > 0) || len(removed) > max(userGroupSyncMinHeld, len(current)/2)
+		if held && !applyRemovals {
+			return s.syncState(ctx, id, model.UserGroupSyncHeld, len(removed))
+		}
+		return s.applySync(ctx, id, snap, added, removed)
+	})
+}
+
+// applySync writes the synced members, then the row (which deletes the
+// shared copy). Only a membership or state change tells clients; a run that changed nothing just moves "last
+// synced". A write cut short is completed by the next sync, which diffs
+// against the member rows as they are.
+func (s *UserGroupService) applySync(ctx context.Context, id string, snap *entraSnapshot, added, removed []string) (*model.UserGroupDetail, error) {
+	if err := s.groups.ApplyUserGroupMembers(ctx, id, added, removed); err != nil {
+		s.recordSyncFailure(ctx, id)
+		return nil, fmt.Errorf("user group sync: write members: %w", err)
+	}
+	changed := len(added) > 0 || len(removed) > 0
 	g, err := s.write(ctx, id, false, func(g *model.UserGroupDetail) error {
-		added, removed := diffMembers(g.MemberIDs, snap.wanted)
-		changed = len(added) > 0 || len(removed) > 0 || g.SyncState != "" || g.SyncSkipped != snap.skipped() ||
+		changed = changed || g.SyncState != "" || g.SyncSkipped != snap.skipped() || g.MemberCount != len(snap.wanted) ||
 			(snap.group.DisplayName != "" && snap.group.DisplayName != g.EntraGroupName)
 		snap.applyTo(g, s.now())
 		return nil
 	})
-	if err == nil && changed {
+	if err != nil {
+		return nil, err
+	}
+	if changed {
 		s.publishChanged(ctx, id)
 	}
-	return g, err
+	g.MemberIDs = slices.Clone(snap.wanted)
+	return g, nil
+}
+
+// recordSyncFailure marks the group's last sync as failed (members kept).
+func (s *UserGroupService) recordSyncFailure(ctx context.Context, id string) {
+	if _, err := s.syncState(context.WithoutCancel(ctx), id, model.UserGroupSyncError, 0); err != nil {
+		slog.WarnContext(ctx, "user group sync: recording the failure failed", "groupID", id, "error", err)
+	}
 }
 
 // syncState records why a sync didn't apply, leaving the members as they
@@ -525,7 +526,7 @@ type MSGroupDirectory struct {
 type GraphGroups interface {
 	SearchGroups(ctx context.Context, query string) ([]msgraph.Group, error)
 	GetGroup(ctx context.Context, id string) (*msgraph.Group, error)
-	GroupUserIDs(ctx context.Context, id string, limit int) ([]string, bool, error)
+	GroupUserIDs(ctx context.Context, id string) ([]string, error)
 }
 
 // NewMSGroupDirectory builds the Graph-backed group directory.
@@ -564,10 +565,10 @@ func (d *MSGroupDirectory) GetGroup(ctx context.Context, id string) (*model.Entr
 }
 
 // GroupUserIDs reads the group's users, nested groups included.
-func (d *MSGroupDirectory) GroupUserIDs(ctx context.Context, id string, limit int) ([]string, bool, error) {
-	ids, over, err := d.graph.GroupUserIDs(ctx, id, limit)
+func (d *MSGroupDirectory) GroupUserIDs(ctx context.Context, id string) ([]string, error) {
+	ids, err := d.graph.GroupUserIDs(ctx, id)
 	if errors.Is(err, msgraph.ErrNotFound) {
-		return nil, false, ErrEntraGroupNotFound
+		return nil, ErrEntraGroupNotFound
 	}
-	return ids, over, err
+	return ids, err
 }

@@ -12,8 +12,8 @@ import { UserGroupDetailDialog } from './UserGroupDetailDialog';
 import { UserGroupFormDialog } from './UserGroupFormDialog';
 
 // UserGroupsTab is Directory › Groups: every user group by handle, a search,
-// and — for those allowed to manage groups — creating, editing and disabling
-// them. "?group=<id>" opens one group (the mention card links here).
+// and — for admins — creating groups from Microsoft 365 groups, editing and
+// disabling them. "?group=<id>" opens one group (the mention card links here).
 export function UserGroupsTab() {
   const [query, setQuery] = useState('');
   const [showDisabled, setShowDisabled] = useState(false);
@@ -43,7 +43,7 @@ export function UserGroupsTab() {
             Show disabled
           </Label>
         </div>
-        {canManage && <Button onClick={() => setCreating(true)}>Create user group</Button>}
+        {canLinkMicrosoft && <Button onClick={() => setCreating(true)}>Create user group</Button>}
       </div>
 
       {isLoading ? (
@@ -68,7 +68,6 @@ export function UserGroupsTab() {
                   <span className="flex items-center gap-2">
                     <span className="truncate text-sm font-semibold">@{g.handle}</span>
                     <span className="truncate text-sm text-muted-foreground">{g.name}</span>
-                    {g.entraGroupId && <Badge variant="secondary">Microsoft 365</Badge>}
                     {g.disabled && <Badge variant="secondary">Disabled</Badge>}
                   </span>
                   {g.description && <span className="block truncate text-xs text-muted-foreground">{g.description}</span>}
@@ -83,7 +82,7 @@ export function UserGroupsTab() {
       )}
 
       {creating && (
-        <UserGroupFormDialog canLinkMicrosoft={canLinkMicrosoft} onClose={() => setCreating(false)} onSaved={(g) => open(g.id)} />
+        <UserGroupFormDialog onClose={() => setCreating(false)} onSaved={(g) => open(g.id)} />
       )}
       {openId && (
         <UserGroupDetailDialog key={openId} groupId={openId} canManage={canManage} canLinkMicrosoft={canLinkMicrosoft} onClose={close} />

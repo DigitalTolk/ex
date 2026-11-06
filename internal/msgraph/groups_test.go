@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -126,39 +127,40 @@ func TestGroupUserIDsPagesAndKeepsUsers(t *testing.T) {
 		membersPage(w, base, "", [2]string{"#microsoft.graph.user", "u-2"}, [2]string{"#microsoft.graph.user", ""})
 	})
 	base = c.baseURL
-	ids, over, err := c.GroupUserIDs(context.Background(), "g-1", 10)
-	if err != nil || over || !slices.Equal(ids, []string{"u-1", "u-2"}) {
-		t.Fatalf("GroupUserIDs = %v, %v, %v", ids, over, err)
+	ids, err := c.GroupUserIDs(context.Background(), "g-1")
+	if err != nil || !slices.Equal(ids, []string{"u-1", "u-2"}) {
+		t.Fatalf("GroupUserIDs = %v, %v", ids, err)
 	}
 }
 
-func TestGroupUserIDsStopsPastTheLimit(t *testing.T) {
+// A group of any size is read to the end: there is no member cap.
+func TestGroupUserIDsReadsEveryPage(t *testing.T) {
 	var pages atomic.Int64
 	var base string
 	c := graphServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		pages.Add(1)
-		membersPage(w, base, "/groups/g-1/transitiveMembers?$skiptoken=2",
-			[2]string{"#microsoft.graph.user", "u-1"}, [2]string{"#microsoft.graph.user", "u-2"})
+		n := pages.Add(1)
+		next := ""
+		if n < 5 {
+			next = fmt.Sprintf("/groups/g-1/transitiveMembers?$skiptoken=%d", n+1)
+		}
+		membersPage(w, base, next, [2]string{"#microsoft.graph.user", fmt.Sprintf("u-%d", n)})
 	})
 	base = c.baseURL
-	ids, over, err := c.GroupUserIDs(context.Background(), "g-1", 1)
-	if err != nil || !over || ids != nil {
-		t.Fatalf("GroupUserIDs = %v, %v, %v; want over the limit", ids, over, err)
-	}
-	if pages.Load() != 1 {
-		t.Fatalf("read %d pages, want to stop after the first", pages.Load())
+	ids, err := c.GroupUserIDs(context.Background(), "g-1")
+	if err != nil || len(ids) != 5 || ids[4] != "u-5" {
+		t.Fatalf("GroupUserIDs = %v, %v; want all 5 pages", ids, err)
 	}
 }
 
 func TestGroupUserIDsErrors(t *testing.T) {
 	gone := graphServer(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNotFound) })
-	if _, _, err := gone.GroupUserIDs(context.Background(), "g", 10); !errors.Is(err, ErrNotFound) {
+	if _, err := gone.GroupUserIDs(context.Background(), "g"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("missing group = %v, want ErrNotFound", err)
 	}
 	foreign := graphServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		writeJSONBody(w, map[string]any{"value": []any{}, "@odata.nextLink": "https://evil.example/next"})
 	})
-	if _, _, err := foreign.GroupUserIDs(context.Background(), "g", 10); err == nil || !strings.Contains(err.Error(), "outside") {
+	if _, err := foreign.GroupUserIDs(context.Background(), "g"); err == nil || !strings.Contains(err.Error(), "outside") {
 		t.Fatalf("foreign next link = %v, want refused", err)
 	}
 }
@@ -230,4 +232,3 @@ func TestWaitCtx(t *testing.T) {
 		t.Fatalf("waitCtx(cancelled) = %v", err)
 	}
 }
-

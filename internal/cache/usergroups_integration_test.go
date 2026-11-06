@@ -97,7 +97,7 @@ func TestUserGroupCopies_StoreReadForget(t *testing.T) {
 	if g := got["g1"]; g.Version != 3 || !slices.Equal(g.MemberIDs, []string{"u1", "u2"}) || g.Handle != "h-g1" {
 		t.Fatalf("copy = %+v", g)
 	}
-	if ttl := plain.PTTL(ctx, userGroupKey("g1")).Val(); ttl <= 0 || ttl > time.Hour {
+	if ttl := plain.PTTL(ctx, userGroupCopyKey("g1")).Val(); ttl <= 0 || ttl > time.Hour {
 		t.Fatalf("TTL = %v, want within an hour", ttl)
 	}
 
@@ -109,46 +109,21 @@ func TestUserGroupCopies_StoreReadForget(t *testing.T) {
 	}
 }
 
-// Two writers finishing out of order: the older version never overwrites the
-// newer one.
-func TestUserGroupCopies_OnlyMoveForward(t *testing.T) {
-	c, _ := setupRealTestCache(t)
-	ctx := context.Background()
-	copies := NewUserGroupCopies(c.Client(), time.Hour)
-	if err := copies.Put(ctx, testGroup("g1", 5, "new")); err != nil {
-		t.Fatal(err)
-	}
-	for _, v := range []int64{4, 5} {
-		if err := copies.Put(ctx, testGroup("g1", v, "old")); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if got, _ := copies.Get(ctx, []string{"g1"}); !slices.Equal(got["g1"].MemberIDs, []string{"new"}) {
-		t.Fatalf("copy = %v, want version 5 kept", got["g1"].MemberIDs)
-	}
-	if err := copies.Put(ctx, testGroup("g1", 6, "newer")); err != nil {
-		t.Fatal(err)
-	}
-	if got, _ := copies.Get(ctx, []string{"g1"}); got["g1"].Version != 6 {
-		t.Fatalf("version = %d, want 6", got["g1"].Version)
-	}
-}
-
 func TestUserGroupCopies_UnreadableEntriesReadThrough(t *testing.T) {
 	c, plain := setupRealTestCache(t)
 	ctx := context.Background()
 	copies := NewUserGroupCopies(c.Client(), time.Hour)
-	plain.Set(ctx, userGroupKey("bad"), "{not json", time.Hour)
-	plain.Set(ctx, userGroupKey("empty"), `{"v":1}`, time.Hour)
+	plain.Set(ctx, userGroupCopyKey("bad"), "{not json", time.Hour)
+	plain.Set(ctx, userGroupCopyKey("empty"), `{"v":1}`, time.Hour)
 	if got, err := copies.Get(ctx, []string{"bad", "empty"}); err != nil || len(got) != 0 {
 		t.Fatalf("Get = %v, %v; want both left to the store", got, err)
 	}
-	// A corrupt entry is overwritten by the next write.
+	// A corrupt entry is overwritten by the next copy.
 	if err := copies.Put(ctx, testGroup("bad", 1, "u1")); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := copies.Get(ctx, []string{"bad"}); got["bad"] == nil {
-		t.Fatal("a corrupt copy blocked the next write")
+		t.Fatal("a corrupt copy blocked the next one")
 	}
 }
 

@@ -13,24 +13,24 @@ interface Props {
   onClose: () => void;
 }
 
-// UserGroupLinkDialog links an existing group to a Microsoft 365 group: pick
-// the group, see who would be added and removed, confirm.
+// UserGroupLinkDialog points a group at another Microsoft 365 group: pick the
+// group, see who would be added and removed, confirm.
 export function UserGroupLinkDialog({ groupId, handle, onClose }: Props) {
   const [entraGroup, setEntraGroup] = useState<EntraGroup | null>(null);
   const [error, setError] = useState('');
   const { data: preview } = useLinkPreview(entraGroup?.id, groupId);
   const link = useLinkUserGroup();
-  const canLink = !!entraGroup && !!preview && !preview.overLimit && !link.isPending;
+  const canLink = !!entraGroup && !!preview && !link.isPending;
 
   return (
     <Dialog open onOpenChange={onClose}>
       <DialogContent size="md" finalFocus={false}>
         <DialogHeader>
-          <DialogTitle>Link @{handle} to Microsoft 365</DialogTitle>
+          <DialogTitle>Change the Microsoft 365 group of @{handle}</DialogTitle>
         </DialogHeader>
         <div className="space-y-3">
           <p className="text-sm text-muted-foreground">
-            Its members will come from the Microsoft 365 group and stay in sync. You can unlink it later and keep them.
+            Its members will come from the Microsoft 365 group you choose and stay in sync with it.
           </p>
           <EntraGroupPicker value={entraGroup} onChange={setEntraGroup} />
           {preview && (
@@ -53,11 +53,11 @@ export function UserGroupLinkDialog({ groupId, handle, onClose }: Props) {
             onClick={() =>
               link.mutate(
                 { id: groupId, entraGroupId: entraGroup!.id },
-                { onSuccess: onClose, onError: (e) => setError(errorMessage(e, 'Linking failed')) },
+                { onSuccess: onClose, onError: (e) => setError(errorMessage(e, 'Changing the group failed')) },
               )
             }
           >
-            {link.isPending ? 'Linking…' : 'Link group'}
+            {link.isPending ? 'Changing…' : 'Change group'}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -12,10 +12,8 @@ export interface UserGroupInput {
   handle: string;
   name: string;
   description: string;
-  memberIds: string[];
-  // Creates the group linked to this Microsoft 365 group (admins); its
-  // members then come from there and memberIds is ignored.
-  entraGroupId?: string;
+  // The Microsoft 365 group the members come from.
+  entraGroupId: string;
 }
 
 export interface UserGroupPermissions {
@@ -149,29 +147,13 @@ export function useUpdateUserGroup() {
   );
 }
 
-export function useAddUserGroupMembers() {
-  return useInvalidatingMutation(({ id, userIds }: { id: string; userIds: string[] }) =>
-    apiFetch<UserGroupDetail>(`${groupPath(id)}/members`, { method: 'POST', body: JSON.stringify({ userIds }) }),
-  );
-}
-
-export function useRemoveUserGroupMember() {
-  return useInvalidatingMutation(({ id, userId }: { id: string; userId: string }) =>
-    apiFetch<UserGroupDetail>(`${groupPath(id)}/members/${encodeURIComponent(userId)}`, { method: 'DELETE' }),
-  );
-}
-
 export function useLinkUserGroup() {
   return useInvalidatingMutation(({ id, entraGroupId }: { id: string; entraGroupId: string }) =>
     apiFetch<UserGroupDetail>(`${groupPath(id)}/link`, { method: 'POST', body: JSON.stringify({ entraGroupId }) }),
   );
 }
 
-export function useUnlinkUserGroup() {
-  return useInvalidatingMutation((id: string) => apiFetch<UserGroupDetail>(`${groupPath(id)}/unlink`, { method: 'POST' }));
-}
-
-// useSyncUserGroup syncs a linked group now; applyRemovals applies a sync
+// useSyncUserGroup syncs a group with its Microsoft 365 group now; applyRemovals applies a sync
 // that was held for removing most of the group.
 export function useSyncUserGroup() {
   return useInvalidatingMutation(({ id, applyRemovals }: { id: string; applyRemovals: boolean }) =>

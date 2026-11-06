@@ -19,6 +19,27 @@ import (
 type handlerUserGroupStore struct {
 	groups  map[string]*model.UserGroupDetail
 	handles map[string]string
+	members map[string][]string
+}
+
+func (s *handlerUserGroupStore) ApplyUserGroupMembers(_ context.Context, groupID string, add, remove []string) error {
+	cur := append(slices.Clone(s.members[groupID]), add...)
+	s.members[groupID] = slices.DeleteFunc(cur, func(id string) bool { return slices.Contains(remove, id) })
+	return nil
+}
+
+func (s *handlerUserGroupStore) UserGroupMemberIDs(_ context.Context, groupID string) ([]string, error) {
+	return slices.Clone(s.members[groupID]), nil
+}
+
+func (s *handlerUserGroupStore) UserGroupIDsForUser(_ context.Context, userID string) ([]string, error) {
+	var out []string
+	for gid, members := range s.members {
+		if slices.Contains(members, userID) {
+			out = append(out, gid)
+		}
+	}
+	return out, nil
 }
 
 func (s *handlerUserGroupStore) CreateUserGroup(_ context.Context, g *model.UserGroupDetail) error {
@@ -73,12 +94,6 @@ func (s *handlerUserGroupStore) UserGroupHandleOwner(_ context.Context, handle s
 	return "", store.ErrNotFound
 }
 
-type handlerGroupSettings struct{}
-
-func (handlerGroupSettings) Effective(context.Context) *model.WorkspaceSettings {
-	return &model.WorkspaceSettings{}
-}
-
 type userGroupAPIFixture struct {
 	router    http.Handler
 	handler   *UserGroupHandler
@@ -96,8 +111,12 @@ func newUserGroupAPIFixture(t *testing.T) *userGroupAPIFixture {
 	users.users["u-bob"] = &model.User{ID: "u-bob", SystemRole: model.SystemRoleMember, Status: "active", AuthProvider: model.AuthProviderOIDC}
 	users.users["u-guest"] = &model.User{ID: "u-guest", SystemRole: model.SystemRoleGuest, Status: "active", AuthProvider: model.AuthProviderGuest}
 	userSvc := service.NewUserService(users, newMockCache(), nil, nil)
-	groups := &handlerUserGroupStore{groups: map[string]*model.UserGroupDetail{}, handles: map[string]string{}}
-	svc := service.NewUserGroupService(groups, userSvc, handlerGroupSettings{}, newHandlerBotStore(users), nil)
+	groups := &handlerUserGroupStore{groups: map[string]*model.UserGroupDetail{}, handles: map[string]string{}, members: map[string][]string{}}
+	svc := service.NewUserGroupService(groups, userSvc, newHandlerBotStore(users), nil)
+	svc.SetMicrosoft(service.UserGroupMicrosoftDeps{
+		Directory: handlerEntraDirectory{}, Index: handlerEntraIndex{}, Accounts: newMockUserStore(),
+		Locker: handlerLocker{}, Cache: newMockCache(), IndexTTL: time.Hour, NewToken: func() string { return "t" },
+	})
 	h := NewUserGroupHandler(svc)
 	f := &userGroupAPIFixture{handler: h}
 	f.router = NewRouter(&Deps{
@@ -123,12 +142,12 @@ func (f *userGroupAPIFixture) do(method, path, token, body string) *httptest.Res
 func TestUserGroupHandler_Lifecycle(t *testing.T) {
 	f := newUserGroupAPIFixture(t)
 
-	rec := f.do(http.MethodPost, "/api/v1/usergroups", f.adminJWT, `{"handle":"oncall","name":"On-call","memberIds":["u-member"]}`)
+	rec := f.do(http.MethodPost, "/api/v1/usergroups", f.adminJWT, `{"handle":"oncall","name":"On-call","entraGroupId":"entra-sre"}`)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create = %d %s", rec.Code, rec.Body.String())
 	}
 	g := decodeBody[model.UserGroupDetail](t, rec)
-	if g.Handle != "oncall" || !slices.Equal(g.MemberIDs, []string{"u-member"}) {
+	if g.Handle != "oncall" || g.EntraGroupID != "entra-sre" || !slices.Equal(g.MemberIDs, []string{"u-member"}) {
 		t.Fatalf("created = %+v", g)
 	}
 
@@ -137,7 +156,7 @@ func TestUserGroupHandler_Lifecycle(t *testing.T) {
 		t.Fatalf("list = %d %s", rec.Code, rec.Body.String())
 	}
 	rec = f.do(http.MethodGet, "/api/v1/usergroups/"+g.ID, f.memberJWT, "")
-	if rec.Code != http.StatusOK || decodeBody[model.UserGroupDetail](t, rec).ID != g.ID {
+	if got := decodeBody[model.UserGroupDetail](t, rec); rec.Code != http.StatusOK || got.ID != g.ID || !slices.Equal(got.MemberIDs, []string{"u-member"}) {
 		t.Fatalf("get = %d %s", rec.Code, rec.Body.String())
 	}
 	rec = f.do(http.MethodGet, "/api/v1/usergroup-handles/oncall", f.memberJWT, "")
@@ -153,17 +172,9 @@ func TestUserGroupHandler_Lifecycle(t *testing.T) {
 	if rec.Code != http.StatusOK || decodeBody[model.UserGroupDetail](t, rec).Name != "Pager crew" {
 		t.Fatalf("update = %d %s", rec.Code, rec.Body.String())
 	}
-	rec = f.do(http.MethodPost, "/api/v1/usergroups/"+g.ID+"/members", f.adminJWT, `{"userIds":["u-bob"]}`)
-	if rec.Code != http.StatusOK || decodeBody[model.UserGroupDetail](t, rec).MemberCount != 2 {
-		t.Fatalf("add members = %d %s", rec.Code, rec.Body.String())
-	}
-	rec = f.do(http.MethodGet, "/api/v1/users/u-bob/usergroups", f.memberJWT, "")
+	rec = f.do(http.MethodGet, "/api/v1/users/u-member/usergroups", f.memberJWT, "")
 	if listed := decodeBody[[]model.UserGroup](t, rec); rec.Code != http.StatusOK || len(listed) != 1 {
-		t.Fatalf("groups for bob = %d %s", rec.Code, rec.Body.String())
-	}
-	rec = f.do(http.MethodDelete, "/api/v1/usergroups/"+g.ID+"/members/u-bob", f.adminJWT, "")
-	if rec.Code != http.StatusOK || decodeBody[model.UserGroupDetail](t, rec).MemberCount != 1 {
-		t.Fatalf("remove member = %d %s", rec.Code, rec.Body.String())
+		t.Fatalf("groups for the member = %d %s", rec.Code, rec.Body.String())
 	}
 	rec = f.do(http.MethodPost, "/api/v1/usergroups/"+g.ID+"/disable", f.adminJWT, "")
 	if rec.Code != http.StatusOK || !decodeBody[model.UserGroupDetail](t, rec).Disabled {
@@ -181,7 +192,7 @@ func TestUserGroupHandler_Lifecycle(t *testing.T) {
 
 func TestUserGroupHandler_Refusals(t *testing.T) {
 	f := newUserGroupAPIFixture(t)
-	rec := f.do(http.MethodPost, "/api/v1/usergroups", f.adminJWT, `{"handle":"oncall","name":"On-call"}`)
+	rec := f.do(http.MethodPost, "/api/v1/usergroups", f.adminJWT, `{"handle":"oncall","name":"On-call","entraGroupId":"entra-sre"}`)
 	id := decodeBody[model.UserGroupDetail](t, rec).ID
 
 	cases := []struct {
@@ -192,16 +203,19 @@ func TestUserGroupHandler_Refusals(t *testing.T) {
 		{"guest gets", http.MethodGet, "/api/v1/usergroups/" + id, f.guestJWT, "", http.StatusForbidden},
 		{"guest checks a handle", http.MethodGet, "/api/v1/usergroup-handles/x", f.guestJWT, "", http.StatusForbidden},
 		{"guest lists a user's groups", http.MethodGet, "/api/v1/users/u-bob/usergroups", f.guestJWT, "", http.StatusForbidden},
-		{"member creates", http.MethodPost, "/api/v1/usergroups", f.memberJWT, `{"handle":"sre","name":"SRE"}`, http.StatusForbidden},
+		{"member creates", http.MethodPost, "/api/v1/usergroups", f.memberJWT, `{"handle":"sre","name":"SRE","entraGroupId":"entra-oncall"}`, http.StatusForbidden},
 		{"bad create body", http.MethodPost, "/api/v1/usergroups", f.adminJWT, `{`, http.StatusBadRequest},
-		{"taken handle", http.MethodPost, "/api/v1/usergroups", f.adminJWT, `{"handle":"oncall","name":"Again"}`, http.StatusConflict},
+		{"no Microsoft 365 group", http.MethodPost, "/api/v1/usergroups", f.adminJWT, `{"handle":"sre","name":"SRE"}`, http.StatusBadRequest},
+		{"missing Microsoft 365 group", http.MethodPost, "/api/v1/usergroups", f.adminJWT, `{"handle":"sre","name":"SRE","entraGroupId":"entra-gone"}`, http.StatusNotFound},
+		{"taken handle", http.MethodPost, "/api/v1/usergroups", f.adminJWT, `{"handle":"oncall","name":"Again","entraGroupId":"entra-oncall"}`, http.StatusConflict},
 		{"bad update body", http.MethodPatch, "/api/v1/usergroups/" + id, f.adminJWT, `{`, http.StatusBadRequest},
 		{"member updates", http.MethodPatch, "/api/v1/usergroups/" + id, f.memberJWT, `{"name":"x"}`, http.StatusForbidden},
-		{"bad members body", http.MethodPost, "/api/v1/usergroups/" + id + "/members", f.adminJWT, `{`, http.StatusBadRequest},
-		{"guest member", http.MethodPost, "/api/v1/usergroups/" + id + "/members", f.adminJWT, `{"userIds":["u-guest"]}`, http.StatusBadRequest},
-		{"member removes", http.MethodDelete, "/api/v1/usergroups/" + id + "/members/u-bob", f.memberJWT, "", http.StatusForbidden},
 		{"member disables", http.MethodPost, "/api/v1/usergroups/" + id + "/disable", f.memberJWT, "", http.StatusForbidden},
 		{"missing group", http.MethodGet, "/api/v1/usergroups/group-nope", f.memberJWT, "", http.StatusNotFound},
+		// Members come from Microsoft 365 only: there is no way to edit them.
+		{"adding members", http.MethodPost, "/api/v1/usergroups/" + id + "/members", f.adminJWT, `{"userIds":["u-bob"]}`, http.StatusNotFound},
+		{"removing a member", http.MethodDelete, "/api/v1/usergroups/" + id + "/members/u-member", f.adminJWT, "", http.StatusNotFound},
+		{"unlinking", http.MethodPost, "/api/v1/usergroups/" + id + "/unlink", f.adminJWT, "", http.StatusNotFound},
 	}
 	for _, tc := range cases {
 		if rec := f.do(tc.method, tc.path, tc.token, tc.body); rec.Code != tc.want {
@@ -231,33 +245,38 @@ func TestUserGroupHandler_Permissions(t *testing.T) {
 
 // --- Microsoft 365 links ---
 
+// handlerEntraDirectory: "entra-oncall" holds Bob and someone without an ex
+// account; "entra-sre" holds the member.
 type handlerEntraDirectory struct{}
+
+var handlerEntraMembers = map[string][]string{"entra-oncall": {"o-bob", "o-stranger"}, "entra-sre": {"o-member"}}
 
 func (handlerEntraDirectory) SearchGroups(context.Context, string) ([]model.EntraGroup, error) {
 	return []model.EntraGroup{{ID: "entra-oncall", DisplayName: "On-call engineers", Kind: "security"}}, nil
 }
 
 func (handlerEntraDirectory) GetGroup(_ context.Context, id string) (*model.EntraGroup, error) {
-	if id != "entra-oncall" {
+	if _, ok := handlerEntraMembers[id]; !ok {
 		return nil, service.ErrEntraGroupNotFound
 	}
-	return &model.EntraGroup{ID: id, DisplayName: "On-call engineers", Kind: "security"}, nil
+	return &model.EntraGroup{ID: id, DisplayName: "Group " + id, Kind: "security"}, nil
 }
 
-func (handlerEntraDirectory) GroupUserIDs(_ context.Context, id string, _ int) ([]string, bool, error) {
-	if id != "entra-oncall" {
-		return nil, false, service.ErrEntraGroupNotFound
+func (handlerEntraDirectory) GroupUserIDs(_ context.Context, id string) ([]string, error) {
+	members, ok := handlerEntraMembers[id]
+	if !ok {
+		return nil, service.ErrEntraGroupNotFound
 	}
-	return []string{"o-bob", "o-stranger"}, false, nil
+	return slices.Clone(members), nil
 }
 
 type handlerEntraIndex struct{}
 
 func (handlerEntraIndex) Lookup(context.Context, []string) (map[string]string, bool, error) {
-	return map[string]string{"o-bob": "u-bob"}, true, nil
+	return map[string]string{"o-bob": "u-bob", "o-member": "u-member"}, true, nil
 }
 func (handlerEntraIndex) Replace(context.Context, map[string]string, time.Duration) error { return nil }
-func (handlerEntraIndex) Add(context.Context, string, string) error                        { return nil }
+func (handlerEntraIndex) Add(context.Context, string, string) error                       { return nil }
 
 type handlerLocker struct{}
 
@@ -266,18 +285,8 @@ func (handlerLocker) AcquireLock(context.Context, string, string, time.Duration)
 }
 func (handlerLocker) ReleaseLock(context.Context, string, string) error { return nil }
 
-func newLinkedAPIFixture(t *testing.T) *userGroupAPIFixture {
-	t.Helper()
-	f := newUserGroupAPIFixture(t)
-	f.handler.svc.SetMicrosoft(service.UserGroupMicrosoftDeps{
-		Directory: handlerEntraDirectory{}, Index: handlerEntraIndex{}, Accounts: newMockUserStore(),
-		Locker: handlerLocker{}, Cache: newMockCache(), IndexTTL: time.Hour, NewToken: func() string { return "t" },
-	})
-	return f
-}
-
 func TestUserGroupHandler_MicrosoftLinkFlow(t *testing.T) {
-	f := newLinkedAPIFixture(t)
+	f := newUserGroupAPIFixture(t)
 
 	rec := f.do(http.MethodGet, "/api/v1/usergroup-permissions", f.adminJWT, "")
 	if perms := decodeBody[map[string]bool](t, rec); !perms["canLinkMicrosoft"] {
@@ -292,29 +301,30 @@ func TestUserGroupHandler_MicrosoftLinkFlow(t *testing.T) {
 		t.Fatalf("preview = %d %s", rec.Code, rec.Body.String())
 	}
 
-	rec = f.do(http.MethodPost, "/api/v1/usergroups", f.adminJWT, `{"handle":"oncall","name":"On-call","memberIds":["u-member"]}`)
+	rec = f.do(http.MethodPost, "/api/v1/usergroups", f.adminJWT, `{"handle":"oncall","name":"On-call","entraGroupId":"entra-sre"}`)
 	id := decodeBody[model.UserGroupDetail](t, rec).ID
+	rec = f.do(http.MethodGet, "/api/v1/usergroup-sources/microsoft/entra-oncall/preview?groupId="+id, f.adminJWT, "")
+	if p := decodeBody[model.UserGroupLinkPreview](t, rec); rec.Code != http.StatusOK || p.ToAdd != 1 || p.ToRemove != 1 {
+		t.Fatalf("preview for the group = %d %s", rec.Code, rec.Body.String())
+	}
+	// Changing the Microsoft 365 group replaces the members.
 	rec = f.do(http.MethodPost, "/api/v1/usergroups/"+id+"/link", f.adminJWT, `{"entraGroupId":"entra-oncall"}`)
 	if g := decodeBody[model.UserGroupDetail](t, rec); rec.Code != http.StatusOK || g.EntraGroupID != "entra-oncall" || !slices.Equal(g.MemberIDs, []string{"u-bob"}) {
 		t.Fatalf("link = %d %s", rec.Code, rec.Body.String())
 	}
-	rec = f.do(http.MethodPost, "/api/v1/usergroups/"+id+"/members", f.adminJWT, `{"userIds":["u-member"]}`)
-	if rec.Code != http.StatusConflict {
-		t.Fatalf("adding to a linked group = %d %s, want 409", rec.Code, rec.Body.String())
+	rec = f.do(http.MethodGet, "/api/v1/users/u-bob/usergroups", f.memberJWT, "")
+	if listed := decodeBody[[]model.UserGroup](t, rec); rec.Code != http.StatusOK || len(listed) != 1 {
+		t.Fatalf("groups for bob = %d %s", rec.Code, rec.Body.String())
 	}
 	rec = f.do(http.MethodPost, "/api/v1/usergroups/"+id+"/sync", f.adminJWT, `{"applyRemovals":false}`)
 	if rec.Code != http.StatusOK || decodeBody[model.UserGroupDetail](t, rec).SyncedAt == nil {
 		t.Fatalf("sync = %d %s", rec.Code, rec.Body.String())
 	}
-	rec = f.do(http.MethodPost, "/api/v1/usergroups/"+id+"/unlink", f.adminJWT, "")
-	if g := decodeBody[model.UserGroupDetail](t, rec); rec.Code != http.StatusOK || g.Linked() {
-		t.Fatalf("unlink = %d %s", rec.Code, rec.Body.String())
-	}
 }
 
 func TestUserGroupHandler_MicrosoftRefusals(t *testing.T) {
-	f := newLinkedAPIFixture(t)
-	rec := f.do(http.MethodPost, "/api/v1/usergroups", f.adminJWT, `{"handle":"oncall","name":"On-call"}`)
+	f := newUserGroupAPIFixture(t)
+	rec := f.do(http.MethodPost, "/api/v1/usergroups", f.adminJWT, `{"handle":"oncall","name":"On-call","entraGroupId":"entra-sre"}`)
 	id := decodeBody[model.UserGroupDetail](t, rec).ID
 
 	cases := []struct {
@@ -326,9 +336,9 @@ func TestUserGroupHandler_MicrosoftRefusals(t *testing.T) {
 		{"missing Entra group", http.MethodGet, "/api/v1/usergroup-sources/microsoft/entra-gone/preview", f.adminJWT, "", http.StatusNotFound},
 		{"bad link body", http.MethodPost, "/api/v1/usergroups/" + id + "/link", f.adminJWT, `{`, http.StatusBadRequest},
 		{"member links", http.MethodPost, "/api/v1/usergroups/" + id + "/link", f.memberJWT, `{"entraGroupId":"entra-oncall"}`, http.StatusForbidden},
-		{"member unlinks", http.MethodPost, "/api/v1/usergroups/" + id + "/unlink", f.memberJWT, "", http.StatusForbidden},
 		{"bad sync body", http.MethodPost, "/api/v1/usergroups/" + id + "/sync", f.adminJWT, ``, http.StatusBadRequest},
-		{"sync an unlinked group", http.MethodPost, "/api/v1/usergroups/" + id + "/sync", f.adminJWT, `{}`, http.StatusBadRequest},
+		{"member syncs", http.MethodPost, "/api/v1/usergroups/" + id + "/sync", f.memberJWT, `{}`, http.StatusForbidden},
+		{"sync a missing group", http.MethodPost, "/api/v1/usergroups/group-nope/sync", f.adminJWT, `{}`, http.StatusNotFound},
 	}
 	for _, tc := range cases {
 		if rec := f.do(tc.method, tc.path, tc.token, tc.body); rec.Code != tc.want {

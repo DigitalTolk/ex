@@ -8,7 +8,8 @@ import "time"
 const UserGroupIDPrefix = "group-"
 
 // UserGroup is a named set of people mentioned together through its handle
-// (Slack-style "@oncall"). A disabled group keeps its members and its handle
+// (Slack-style "@oncall"). Its members come from the Microsoft 365 (Entra ID)
+// group it is linked to. A disabled group keeps its members and its handle
 // but is not mentionable.
 type UserGroup struct {
 	ID          string    `json:"id" dynamodbav:"id"`
@@ -21,9 +22,8 @@ type UserGroup struct {
 	CreatedAt   time.Time `json:"createdAt" dynamodbav:"createdAt"`
 	UpdatedAt   time.Time `json:"updatedAt" dynamodbav:"updatedAt"`
 
-	// EntraGroupID links the group to a Microsoft Entra ID group: its members
-	// then come from Entra (synced, read-only in ex). Empty: members are
-	// managed in ex.
+	// EntraGroupID is the Microsoft Entra ID group the members are synced
+	// from.
 	EntraGroupID string `json:"entraGroupId,omitempty" dynamodbav:"entraGroupId,omitempty"`
 	// EntraGroupName is the linked group's display name, refreshed on link and
 	// on Sync now.
@@ -43,21 +43,15 @@ type UserGroup struct {
 type UserGroupSyncState string
 
 const (
-	// UserGroupSyncOversize: the Entra group has more members than a user
-	// group holds; members stay as last synced.
-	UserGroupSyncOversize UserGroupSyncState = "paused-oversize"
 	// UserGroupSyncHeld: the sync would remove most members (or all of them);
 	// it waits for an admin to apply it.
 	UserGroupSyncHeld UserGroupSyncState = "held-removal"
 	// UserGroupSyncSourceMissing: the Entra group is gone or unreadable; the
-	// group was disabled with its members kept.
+	// members are kept.
 	UserGroupSyncSourceMissing UserGroupSyncState = "source-missing"
 	// UserGroupSyncError: Microsoft Graph failed; members stay.
 	UserGroupSyncError UserGroupSyncState = "error"
 )
-
-// Linked reports whether the group's members come from Entra.
-func (g UserGroup) Linked() bool { return g.EntraGroupID != "" }
 
 // EntraGroup is a Microsoft Entra ID group as the link picker shows it.
 type EntraGroup struct {
@@ -71,27 +65,17 @@ type EntraGroup struct {
 // UserGroupLinkPreview is what linking a group to an Entra group would do.
 type UserGroupLinkPreview struct {
 	// Users is how many users the Entra group has (nested groups included).
-	Users     int  `json:"users"`
-	ToAdd     int  `json:"toAdd"`
-	ToRemove  int  `json:"toRemove"`
-	Skipped   int  `json:"skipped"`
-	OverLimit bool `json:"overLimit"`
+	Users    int `json:"users"`
+	ToAdd    int `json:"toAdd"`
+	ToRemove int `json:"toRemove"`
+	Skipped  int `json:"skipped"`
 }
 
-// UserGroupDetail is a group with its member IDs. Version is the store's
-// optimistic-concurrency counter: every write of a group expects the version
-// it read, so two concurrent member edits can't overwrite each other or push
-// a group past its cap.
+// UserGroupDetail is a group with its member IDs. The members are rows of
+// their own (one per member), so a group has no size limit. Version is the
+// group row's optimistic-concurrency counter.
 type UserGroupDetail struct {
 	UserGroup `tstype:",extends"`
-	MemberIDs []string `json:"memberIds" dynamodbav:"memberIds"`
+	MemberIDs []string `json:"memberIds" dynamodbav:"-"`
 	Version   int64    `json:"-" dynamodbav:"version"`
 }
-
-// UserGroupManagers says who may create and edit user groups.
-type UserGroupManagers string
-
-const (
-	UserGroupManagersAdmins  UserGroupManagers = "admins"
-	UserGroupManagersMembers UserGroupManagers = "members"
-)

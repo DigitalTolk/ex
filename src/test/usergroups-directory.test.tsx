@@ -47,10 +47,6 @@ vi.mock('@/components/ui/confirm-dialog', () => ({
 }));
 
 import DirectoriesPage from '@/pages/DirectoriesPage';
-import { MemberPicker } from '@/components/usergroups/MemberPicker';
-import { canBeGroupMember } from '@/lib/user-groups';
-import { MAX_USER_GROUP_MEMBERS } from '@/lib/limits';
-import type { User } from '@/types';
 
 const ONCALL = {
   id: 'group-oncall', handle: 'oncall', name: 'On-call engineers', description: 'Pages', disabled: false,
@@ -69,7 +65,11 @@ function routeApi() {
   mockApiFetch.mockImplementation((path: string, init?: Init) => {
     const key = `${init?.method ?? 'GET'} ${path}`;
     if (fail[key]) return Promise.reject(fail[key]);
-    if (key === 'GET /api/v1/usergroup-permissions') return Promise.resolve({ canManage });
+    if (key === 'GET /api/v1/usergroup-permissions') return Promise.resolve({ canManage, canLinkMicrosoft: canManage });
+    if (path.startsWith('/api/v1/usergroup-sources/microsoft?q=')) {
+      return Promise.resolve([{ id: 'entra-design', displayName: 'Design team', kind: 'm365' }]);
+    }
+    if (path.startsWith('/api/v1/usergroup-sources/microsoft/')) return Promise.resolve({ users: 2, toAdd: 2, toRemove: 0, skipped: 0 });
     if (key === 'GET /api/v1/usergroups') return Promise.resolve(groups.filter((g) => !g.disabled));
     if (key === 'GET /api/v1/usergroups?includeDisabled=true') return Promise.resolve(groups);
     if (path.startsWith('/api/v1/usergroup-handles/')) return Promise.resolve({ available: !path.endsWith('/oncall') });
@@ -161,27 +161,30 @@ describe('Directory › Groups', () => {
   });
 });
 
+async function pickMicrosoftGroup() {
+  fireEvent.change(screen.getByLabelText('Search Microsoft 365 groups'), { target: { value: 'design' } });
+  fireEvent.click(await screen.findByLabelText('Design team'));
+  await screen.findByTestId('link-summary');
+}
+
 describe('creating a user group', () => {
-  it('suggests the handle, checks it, picks members and opens the new group', async () => {
+  it('suggests the handle, checks it, takes the members from a Microsoft 365 group and opens the new group', async () => {
     renderAt('/directory/groups');
     fireEvent.click(await screen.findByRole('button', { name: 'Create user group' }));
+    expect(screen.getByText('Members come from a Microsoft 365 group and stay in sync with it.')).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Design Crew' } });
     expect(screen.getByLabelText('Handle')).toHaveValue('design-crew');
     expect(await screen.findByText('@design-crew is available.')).toBeInTheDocument();
+    // There is no way to pick members by hand: they come from Microsoft 365.
+    expect(screen.queryByLabelText('Ann')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Create group' })).toBeDisabled();
 
-    // Only active members can be picked: no guests, bots or deactivated people.
-    expect(screen.queryByLabelText('Guest')).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Bot')).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Gone')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByLabelText('Ann'));
-    fireEvent.click(screen.getByLabelText('Bob'));
-    fireEvent.click(screen.getByLabelText('Bob'));
-    expect(screen.getByTestId('member-count')).toHaveTextContent(`1 / ${MAX_USER_GROUP_MEMBERS}`);
-
+    await pickMicrosoftGroup();
+    expect(screen.getByLabelText('Name')).toHaveValue('Design Crew');
     fireEvent.click(screen.getByRole('button', { name: 'Create group' }));
     await waitFor(() => expect(calls('POST /api/v1/usergroups')).toHaveLength(1));
     expect(JSON.parse(calls('POST /api/v1/usergroups')[0][1].body)).toEqual({
-      handle: 'design-crew', name: 'Design Crew', description: '', memberIds: ['u-ann'],
+      handle: 'design-crew', name: 'Design Crew', description: '', entraGroupId: 'entra-design',
     });
     await waitFor(() => expect(where()).toBe('/directory/groups?group=group-new'));
   });
@@ -199,6 +202,7 @@ describe('creating a user group', () => {
 
     fireEvent.change(screen.getByLabelText('Handle'), { target: { value: 'pager' } });
     await screen.findByText('@pager is available.');
+    await pickMicrosoftGroup();
     fail['POST /api/v1/usergroups'] = new Error('that handle is taken');
     fireEvent.click(screen.getByRole('button', { name: 'Create group' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('that handle is taken');
@@ -250,31 +254,15 @@ describe('a user group', () => {
     expect(within(panel).getByText('2 members')).toBeInTheDocument();
     expect(within(panel).getByText('Gone')).toHaveClass('opacity-50');
     expect(where()).toBe('/directory/groups?group=group-oncall');
+    // Members come from Microsoft 365: even an admin can't edit them here.
+    expect(screen.queryByRole('button', { name: 'Remove Ann' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Add members' })).not.toBeInTheDocument();
   });
 
-  it('lets a manager remove and add members', async () => {
-    renderAt('/directory/groups?group=group-oncall');
-    fireEvent.click(await screen.findByRole('button', { name: 'Remove Ann' }));
-    await waitFor(() => expect(calls('DELETE /api/v1/usergroups/group-oncall/members/u-ann')).toHaveLength(1));
-
-    fireEvent.click(screen.getByRole('button', { name: 'Add members' }));
-    const add = screen.getByRole('button', { name: /^Add/ });
-    expect(add).toBeDisabled();
-    fireEvent.click(screen.getByLabelText('Bob'));
-    fireEvent.click(screen.getByRole('button', { name: 'Add (1)' }));
-    await waitFor(() => expect(calls('POST /api/v1/usergroups/group-oncall/members')).toHaveLength(1));
-    expect(JSON.parse(calls('POST /api/v1/usergroups/group-oncall/members')[0][1].body)).toEqual({ userIds: ['u-bob'] });
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Add members' })).toBeInTheDocument());
-
-    fireEvent.click(screen.getByRole('button', { name: 'Add members' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-    expect(screen.getByRole('button', { name: 'Add members' })).toBeInTheDocument();
-  });
-
-  it('shows a failed member change', async () => {
-    fail['DELETE /api/v1/usergroups/group-oncall/members/u-ann'] = new Error('only admins manage user groups');
-    renderAt('/directory/groups?group=group-oncall');
-    fireEvent.click(await screen.findByRole('button', { name: 'Remove Ann' }));
+  it('shows a failed change', async () => {
+    fail['POST /api/v1/usergroups/group-off/enable'] = new Error('only admins manage user groups');
+    renderAt('/directory/groups?group=group-off');
+    fireEvent.click(await screen.findByRole('button', { name: 'Enable group' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('only admins manage user groups');
   });
 
@@ -318,8 +306,8 @@ describe('a user group', () => {
     canManage = false;
     renderAt('/directory/groups?group=group-oncall');
     await screen.findByTestId('usergroup-detail');
-    expect(screen.queryByRole('button', { name: 'Remove Ann' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Edit details' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Change Microsoft 365 group' })).not.toBeInTheDocument();
   });
 
   it('names a member it has no profile for by id, and counts one member', async () => {
@@ -338,31 +326,10 @@ describe('a user group', () => {
 });
 
 describe('while the roster loads', () => {
-  it('shows members by id and offers no one to pick', async () => {
+  it('shows members by id', async () => {
     roster.data = undefined;
     renderAt('/directory/groups?group=group-oncall');
     const panel = await screen.findByTestId('usergroup-detail');
     expect(within(panel).getByText('u-ann')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Add members' }));
-    expect(screen.getByText('No one matches.')).toBeInTheDocument();
-  });
-});
-
-describe('MemberPicker', () => {
-  it('stops at the member cap and says so', () => {
-    const full = Array.from({ length: MAX_USER_GROUP_MEMBERS }, (_, i) => `x-${i}`);
-    render(<MemberPicker selected={full} onChange={vi.fn()} />);
-    expect(screen.getByLabelText('Ann')).toBeDisabled();
-    expect(screen.getByText(`A user group holds at most ${MAX_USER_GROUP_MEMBERS} people.`)).toBeInTheDocument();
-  });
-
-  it('says when nobody matches the search', () => {
-    render(<MemberPicker selected={[]} onChange={vi.fn()} />);
-    fireEvent.change(screen.getByLabelText('Search people to add'), { target: { value: 'zzz' } });
-    expect(screen.getByText('No one matches.')).toBeInTheDocument();
-  });
-
-  it('knows who can be a member', () => {
-    expect(USERS.map((u) => canBeGroupMember(u as unknown as User))).toEqual([true, true, false, false, false]);
   });
 });

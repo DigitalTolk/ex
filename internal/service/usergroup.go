@@ -20,8 +20,10 @@ import (
 )
 
 // User groups, Slack-style: a named set of people mentioned together through
-// a handle ("@oncall"). Mentioning a group alerts each member who can see the
-// message exactly as if they had been @-mentioned by name (notification
+// a handle ("@oncall"). Every group is linked to a Microsoft 365 group and
+// takes its members from there (usergroup_entra.go); admins choose the group,
+// its handle and its name. Mentioning a group alerts each member who can see
+// the message exactly as if they had been @-mentioned by name (notification
 // fan-out); this file owns the groups themselves and the lookups the mention
 // paths make.
 
@@ -32,10 +34,6 @@ var reservedUserGroupHandles = map[string]bool{"all": true, "channel": true, "he
 
 // ErrUserGroupHandleTaken refuses a handle another group or a bot holds.
 var ErrUserGroupHandleTaken = apperr.Reject(ErrAlreadyExists, "that handle is taken")
-
-// ErrUserGroupMembersManaged refuses a member edit of a group linked to
-// Microsoft 365: its members come from there.
-var ErrUserGroupMembersManaged = apperr.Conflict("this group's members are managed in Microsoft 365")
 
 // ErrEntraGroupLinked refuses linking a Microsoft 365 group another user
 // group is already linked to.
@@ -53,16 +51,14 @@ type UserGroupStore interface {
 	GetUserGroups(ctx context.Context, ids []string) ([]*model.UserGroupDetail, error)
 	ListUserGroups(ctx context.Context) ([]*model.UserGroupDetail, error)
 	UserGroupHandleOwner(ctx context.Context, handle string) (string, error)
+	ApplyUserGroupMembers(ctx context.Context, groupID string, add, remove []string) error
+	UserGroupMemberIDs(ctx context.Context, groupID string) ([]string, error)
+	UserGroupIDsForUser(ctx context.Context, userID string) ([]string, error)
 }
 
 // userGroupPeople is the cached batched user read (UserService.GetBatch).
 type userGroupPeople interface {
 	GetBatch(ctx context.Context, ids []string) ([]*model.User, error)
-}
-
-// userGroupSettings reads the workspace settings (SettingsService).
-type userGroupSettings interface {
-	Effective(ctx context.Context) *model.WorkspaceSettings
 }
 
 // userGroupBotNames says who holds a bot username (BotStore).
@@ -77,15 +73,13 @@ type UserGroupActor struct {
 	Role model.SystemRole
 }
 
-// UserGroupInput is what a manager writes when creating a group. With
-// EntraGroupID (admins only) the group is created linked to that Microsoft
-// 365 group and its members come from there; MemberIDs is then ignored.
+// UserGroupInput is what an admin writes when creating a group: its details
+// and the Microsoft 365 group its members come from.
 type UserGroupInput struct {
-	Handle       string   `json:"handle"`
-	Name         string   `json:"name"`
-	Description  string   `json:"description"`
-	MemberIDs    []string `json:"memberIds"`
-	EntraGroupID string   `json:"entraGroupId"`
+	Handle       string `json:"handle"`
+	Name         string `json:"name"`
+	Description  string `json:"description"`
+	EntraGroupID string `json:"entraGroupId"`
 }
 
 // UserGroupPatch is a partial edit of a group's details.
@@ -100,19 +94,19 @@ type UserGroupPatch struct {
 type UserGroupService struct {
 	groups    UserGroupStore
 	people    userGroupPeople
-	settings  userGroupSettings
 	bots      userGroupBotNames
 	publisher Publisher
 	now       func() time.Time
 	// copies is the Redis copy of groups the mention paths read (SetCopies).
 	copies UserGroupCopies
-	// microsoft links groups to Microsoft 365 (SetMicrosoft); nil when the
-	// integration isn't configured.
+	// microsoft reads the Microsoft 365 groups members come from
+	// (SetMicrosoft); nil when the integration isn't configured, and then no
+	// group can be created.
 	microsoft *userGroupMicrosoft
 }
 
 // UserGroupCopies is the shared copy of user groups (cache.UserGroupCopies):
-// a copy of the store, never the source.
+// a copy of the store, never the source. Every committed change Forgets it.
 type UserGroupCopies interface {
 	Get(ctx context.Context, ids []string) (map[string]*model.UserGroupDetail, error)
 	Put(ctx context.Context, g *model.UserGroupDetail) error
@@ -123,8 +117,8 @@ type UserGroupCopies interface {
 func (s *UserGroupService) SetCopies(c UserGroupCopies) { s.copies = c }
 
 // NewUserGroupService wires the user-group service.
-func NewUserGroupService(groups UserGroupStore, people userGroupPeople, settings userGroupSettings, bots userGroupBotNames, publisher Publisher) *UserGroupService {
-	return &UserGroupService{groups: groups, people: people, settings: settings, bots: bots, publisher: publisher, now: time.Now}
+func NewUserGroupService(groups UserGroupStore, people userGroupPeople, bots userGroupBotNames, publisher Publisher) *UserGroupService {
+	return &UserGroupService{groups: groups, people: people, bots: bots, publisher: publisher, now: time.Now}
 }
 
 // canView: everyone but guests sees groups.
@@ -135,23 +129,17 @@ func (a UserGroupActor) canView() error {
 	return nil
 }
 
-// canManage: admins always; members when the workspace allows it.
-func (s *UserGroupService) canManage(ctx context.Context, a UserGroupActor) error {
-	if err := a.canView(); err != nil {
-		return err
+// canManage: only admins edit, enable and disable groups.
+func (a UserGroupActor) canManage() error {
+	if a.ID == "" || a.Role != model.SystemRoleAdmin {
+		return apperr.Forbidden("user group: only admins manage user groups")
 	}
-	if a.Role == model.SystemRoleAdmin {
-		return nil
-	}
-	if s.settings.Effective(ctx).UserGroupManagers == model.UserGroupManagersMembers {
-		return nil
-	}
-	return apperr.Forbidden("user group: only admins manage user groups")
+	return nil
 }
 
-// CanManage reports whether actor may create and edit groups.
-func (s *UserGroupService) CanManage(ctx context.Context, actor UserGroupActor) bool {
-	return s.canManage(ctx, actor) == nil
+// CanManage reports whether actor may edit groups.
+func (s *UserGroupService) CanManage(actor UserGroupActor) bool {
+	return actor.canManage() == nil
 }
 
 // normalizeUserGroupHandle lowercases and trims a handle (a leading "@" is
@@ -204,7 +192,14 @@ func (s *UserGroupService) Get(ctx context.Context, actor UserGroupActor, id str
 	if err := actor.canView(); err != nil {
 		return nil, err
 	}
-	return s.group(ctx, id)
+	g, err := s.group(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if g.MemberIDs, err = s.memberIDs(ctx, id); err != nil {
+		return nil, err
+	}
+	return g, nil
 }
 
 // GroupsForUser returns the enabled groups userID belongs to, by handle.
@@ -212,16 +207,21 @@ func (s *UserGroupService) GroupsForUser(ctx context.Context, actor UserGroupAct
 	if err := actor.canView(); err != nil {
 		return nil, err
 	}
-	all, err := s.groups.ListUserGroups(ctx)
+	ids, err := s.groups.UserGroupIDsForUser(ctx, userID)
 	if err != nil {
-		return nil, fmt.Errorf("user group: list: %w", err)
+		return nil, fmt.Errorf("user group: list a user's groups: %w", err)
+	}
+	groups, err := s.groups.GetUserGroups(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("user group: get groups: %w", err)
 	}
 	out := []*model.UserGroup{}
-	for _, g := range all {
-		if !g.Disabled && slices.Contains(g.MemberIDs, userID) {
+	for _, g := range groups {
+		if !g.Disabled {
 			out = append(out, &g.UserGroup)
 		}
 	}
+	slices.SortFunc(out, func(a, b *model.UserGroup) int { return strings.Compare(a.Handle, b.Handle) })
 	return out, nil
 }
 
@@ -244,9 +244,10 @@ func (s *UserGroupService) HandleAvailable(ctx context.Context, actor UserGroupA
 	return true, nil
 }
 
-// Create makes a group.
+// Create makes a group from a Microsoft 365 group (admins only): its
+// details, then its members.
 func (s *UserGroupService) Create(ctx context.Context, actor UserGroupActor, in UserGroupInput) (*model.UserGroupDetail, error) {
-	if err := s.canManage(ctx, actor); err != nil {
+	if err := s.canLink(actor); err != nil {
 		return nil, err
 	}
 	handle, err := normalizeUserGroupHandle(in.Handle)
@@ -261,14 +262,11 @@ func (s *UserGroupService) Create(ctx context.Context, actor UserGroupActor, in 
 	if err != nil {
 		return nil, err
 	}
-	var link *entraSnapshot
-	var members []string
-	if in.EntraGroupID != "" {
-		if link, err = s.entraSnapshot(ctx, actor, in.EntraGroupID); err != nil {
-			return nil, err
-		}
-		members = link.wanted
-	} else if members, err = s.validMembers(ctx, nil, in.MemberIDs); err != nil {
+	if strings.TrimSpace(in.EntraGroupID) == "" {
+		return nil, apperr.Invalid("choose the Microsoft 365 group the members come from")
+	}
+	snap, err := s.readEntraGroup(ctx, strings.TrimSpace(in.EntraGroupID), true)
+	if err != nil {
 		return nil, err
 	}
 	if err := s.handleFree(ctx, handle, ""); err != nil {
@@ -281,27 +279,27 @@ func (s *UserGroupService) Create(ctx context.Context, actor UserGroupActor, in 
 			Handle:      handle,
 			Name:        name,
 			Description: desc,
-			MemberCount: len(members),
 			CreatedBy:   actor.ID,
 			CreatedAt:   now,
 			UpdatedAt:   now,
 		},
-		MemberIDs: members,
 	}
-	if link != nil {
-		link.applyTo(g, now)
-	}
+	snap.applyTo(g, now)
 	if err := s.groups.CreateUserGroup(ctx, g); err != nil {
 		return nil, s.writeError("create", err)
 	}
-	s.cacheCopy(ctx, g)
-	s.publishChanged(ctx, g.ID)
+	defer s.publishChanged(ctx, g.ID)
+	if err := s.groups.ApplyUserGroupMembers(ctx, g.ID, snap.wanted, nil); err != nil {
+		s.recordSyncFailure(ctx, g.ID)
+		return nil, fmt.Errorf("user group: write members: %w", err)
+	}
+	g.MemberIDs = slices.Clone(snap.wanted)
 	return g, nil
 }
 
 // Update edits a group's handle, name or description.
 func (s *UserGroupService) Update(ctx context.Context, actor UserGroupActor, id string, patch UserGroupPatch) (*model.UserGroupDetail, error) {
-	if err := s.canManage(ctx, actor); err != nil {
+	if err := actor.canManage(); err != nil {
 		return nil, err
 	}
 	var handle, name, desc string
@@ -338,42 +336,10 @@ func (s *UserGroupService) Update(ctx context.Context, actor UserGroupActor, id 
 	})
 }
 
-// AddMembers adds people to a group, up to limits.MaxUserGroupMembers.
-func (s *UserGroupService) AddMembers(ctx context.Context, actor UserGroupActor, id string, userIDs []string) (*model.UserGroupDetail, error) {
-	if err := s.canManage(ctx, actor); err != nil {
-		return nil, err
-	}
-	return s.mutate(ctx, id, func(g *model.UserGroupDetail) error {
-		if g.Linked() {
-			return ErrUserGroupMembersManaged
-		}
-		members, err := s.validMembers(ctx, g.MemberIDs, userIDs)
-		if err != nil {
-			return err
-		}
-		g.MemberIDs = members
-		return nil
-	})
-}
-
-// RemoveMember takes one person out of a group.
-func (s *UserGroupService) RemoveMember(ctx context.Context, actor UserGroupActor, id, userID string) (*model.UserGroupDetail, error) {
-	if err := s.canManage(ctx, actor); err != nil {
-		return nil, err
-	}
-	return s.mutate(ctx, id, func(g *model.UserGroupDetail) error {
-		if g.Linked() {
-			return ErrUserGroupMembersManaged
-		}
-		g.MemberIDs = slices.DeleteFunc(g.MemberIDs, func(m string) bool { return m == userID })
-		return nil
-	})
-}
-
 // SetEnabled disables or re-enables a group. A disabled group keeps its
 // members and its handle; it just can't be mentioned.
 func (s *UserGroupService) SetEnabled(ctx context.Context, actor UserGroupActor, id string, enabled bool) (*model.UserGroupDetail, error) {
-	if err := s.canManage(ctx, actor); err != nil {
+	if err := actor.canManage(); err != nil {
 		return nil, err
 	}
 	return s.mutate(ctx, id, func(g *model.UserGroupDetail) error {
@@ -385,17 +351,18 @@ func (s *UserGroupService) SetEnabled(ctx context.Context, actor UserGroupActor,
 // RemoveUserFromAllGroups takes userID out of every group (they became a
 // guest, who can't be in one). Implements UserGroupMembershipRemover.
 func (s *UserGroupService) RemoveUserFromAllGroups(ctx context.Context, userID string) error {
-	all, err := s.groups.ListUserGroups(ctx)
+	ids, err := s.groups.UserGroupIDsForUser(ctx, userID)
 	if err != nil {
-		return fmt.Errorf("user group: list: %w", err)
+		return fmt.Errorf("user group: list a user's groups: %w", err)
 	}
-	for _, g := range all {
-		if !slices.Contains(g.MemberIDs, userID) {
-			continue
+	for _, id := range ids {
+		if err := s.groups.ApplyUserGroupMembers(ctx, id, nil, []string{userID}); err != nil {
+			return fmt.Errorf("user group: remove member: %w", err)
 		}
-		if _, err := s.mutate(ctx, g.ID, func(g *model.UserGroupDetail) error {
-			g.MemberIDs = slices.DeleteFunc(g.MemberIDs, func(m string) bool { return m == userID })
-			return nil
+		if _, err := s.mutate(ctx, id, func(g *model.UserGroupDetail) error {
+			members, err := s.memberIDs(ctx, id)
+			g.MemberCount = len(members)
+			return err
 		}); err != nil {
 			return err
 		}
@@ -410,7 +377,8 @@ func (s *UserGroupService) mutate(ctx context.Context, id string, change func(g 
 }
 
 // write is mutate with the usergroup.changed event optional: a sync that
-// only moved its bookkeeping (when it last ran) tells no one.
+// only moved its bookkeeping (when it last ran) tells no one. It writes the
+// group's row; members are written with ApplyUserGroupMembers.
 func (s *UserGroupService) write(ctx context.Context, id string, publish bool, change func(g *model.UserGroupDetail) error) (*model.UserGroupDetail, error) {
 	for attempt := 1; ; attempt++ {
 		previous, err := s.group(ctx, id)
@@ -421,12 +389,11 @@ func (s *UserGroupService) write(ctx context.Context, id string, publish bool, c
 		if err := change(g); err != nil {
 			return nil, err
 		}
-		g.MemberCount = len(g.MemberIDs)
 		g.UpdatedAt = s.now()
 		err = s.groups.UpdateUserGroup(ctx, g, previous)
 		switch {
 		case err == nil:
-			s.cacheCopy(ctx, g)
+			s.forgetCopy(ctx, g.ID)
 			if publish {
 				s.publishChanged(ctx, g.ID)
 			}
@@ -456,22 +423,27 @@ func cloneUserGroup(g *model.UserGroupDetail) *model.UserGroupDetail {
 	return &c
 }
 
-// cacheCopy stores a committed group in the shared copy. A failed write
-// drops the copy instead, so readers go to the store rather than serve the
-// previous version for the copy's lifetime.
-func (s *UserGroupService) cacheCopy(ctx context.Context, g *model.UserGroupDetail) {
+// forgetCopy deletes the group's shared copy after a committed change (row
+// or members), so the next reader reads the store.
+func (s *UserGroupService) forgetCopy(ctx context.Context, id string) {
 	if s.copies == nil {
 		return
 	}
-	if err := s.copies.Put(ctx, g); err != nil {
-		slog.WarnContext(ctx, "user group: refreshing the shared copy failed; dropping it", "groupID", g.ID, "error", err)
-		if err := s.copies.Forget(context.WithoutCancel(ctx), g.ID); err != nil {
-			slog.ErrorContext(ctx, "user group: dropping a stale shared copy failed — mentions may use the previous members until it expires", "groupID", g.ID, "error", err)
-		}
+	if err := s.copies.Forget(context.WithoutCancel(ctx), id); err != nil {
+		slog.ErrorContext(ctx, "user group: deleting the shared copy failed — mentions may use the previous members until it expires", "groupID", id, "error", err)
 	}
 }
 
-// group loads one group; NotFound when there is none.
+// memberIDs lists a group's members.
+func (s *UserGroupService) memberIDs(ctx context.Context, id string) ([]string, error) {
+	members, err := s.groups.UserGroupMemberIDs(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("user group: list members: %w", err)
+	}
+	return members, nil
+}
+
+// group loads one group's row (no members); NotFound when there is none.
 func (s *UserGroupService) group(ctx context.Context, id string) (*model.UserGroupDetail, error) {
 	g, err := s.groups.GetUserGroup(ctx, id)
 	if errors.Is(err, store.ErrNotFound) {
@@ -481,40 +453,6 @@ func (s *UserGroupService) group(ctx context.Context, id string) (*model.UserGro
 		return nil, fmt.Errorf("user group: get: %w", err)
 	}
 	return g, nil
-}
-
-// validMembers returns current plus the distinct people in add, refusing
-// anyone who is not an active, human, non-guest account and a group past
-// limits.MaxUserGroupMembers.
-func (s *UserGroupService) validMembers(ctx context.Context, current, add []string) ([]string, error) {
-	out := slices.Clone(current)
-	var fresh []string
-	for _, id := range add {
-		id = strings.TrimSpace(id)
-		if id != "" && !slices.Contains(out, id) && !slices.Contains(fresh, id) {
-			fresh = append(fresh, id)
-		}
-	}
-	if len(out)+len(fresh) > limits.MaxUserGroupMembers {
-		return nil, apperr.Invalid("a user group holds at most %d members", limits.MaxUserGroupMembers)
-	}
-	if len(fresh) == 0 {
-		return out, nil
-	}
-	users, err := s.people.GetBatch(ctx, fresh)
-	if err != nil {
-		return nil, fmt.Errorf("user group: get members: %w", err)
-	}
-	ok := make(map[string]bool, len(users))
-	for _, u := range users {
-		ok[u.ID] = eligibleGroupMember(u)
-	}
-	for _, id := range fresh {
-		if !ok[id] {
-			return nil, apperr.Invalid("only active members can be in a user group (not guests or bots)")
-		}
-	}
-	return append(out, fresh...), nil
 }
 
 // handleFree refuses a handle held by a bot, or by another group than self.
@@ -543,10 +481,11 @@ func (s *UserGroupService) publishChanged(ctx context.Context, id string) {
 
 // --- lookups for the mention paths ---
 
-// enabledGroups reads the groups with these IDs and keeps the enabled ones:
-// from the shared copy first, the rest strongly consistent from the store
-// (and copied for the next reader). A failed copy read reads everything
-// from the store — the copy can make a mention slower, never miss someone.
+// enabledGroups reads the groups with these IDs, members included, and
+// keeps the enabled ones: from the shared copy first, the rest strongly
+// consistent from the store (and copied for the next reader). A failed copy
+// read reads everything from the store — the copy can make a mention slower,
+// never miss someone.
 func (s *UserGroupService) enabledGroups(ctx context.Context, ids []string) ([]*model.UserGroupDetail, error) {
 	if len(ids) == 0 {
 		return nil, nil
@@ -572,8 +511,17 @@ func (s *UserGroupService) enabledGroups(ctx context.Context, ids []string) ([]*
 			return nil, fmt.Errorf("user group: get groups: %w", err)
 		}
 		for _, g := range groups {
+			if !g.Disabled {
+				if g.MemberIDs, err = s.memberIDs(ctx, g.ID); err != nil {
+					return nil, err
+				}
+			}
 			found[g.ID] = g
-			s.cacheCopy(ctx, g)
+			if s.copies != nil {
+				if err := s.copies.Put(ctx, g); err != nil {
+					slog.WarnContext(ctx, "user group: storing the shared copy failed", "groupID", g.ID, "error", err)
+				}
+			}
 		}
 	}
 	out := make([]*model.UserGroupDetail, 0, len(found))

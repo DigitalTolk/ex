@@ -318,12 +318,11 @@ func (c *Client) GetGroup(ctx context.Context, id string) (*Group, error) {
 
 // GroupUserIDs returns the object IDs of every user in the group, nested
 // groups included (transitiveMembers), following Graph's paging; devices,
-// contacts and service principals are left out. It stops reading once more
-// than limit users were seen and reports overLimit. The plain (non-cast)
+// contacts and service principals are left out. The plain (non-cast)
 // request reads the directory itself, not the eventually consistent
 // advanced-query index, so a fresh membership change is seen.
 // ErrNotFound when the group doesn't exist.
-func (c *Client) GroupUserIDs(ctx context.Context, id string, limit int) (ids []string, overLimit bool, err error) {
+func (c *Client) GroupUserIDs(ctx context.Context, id string) (ids []string, err error) {
 	path := "/groups/" + url.PathEscape(id) + "/transitiveMembers?$select=id&$top=999"
 	for path != "" {
 		var page struct {
@@ -334,21 +333,18 @@ func (c *Client) GroupUserIDs(ctx context.Context, id string, limit int) (ids []
 			NextLink string `json:"@odata.nextLink"`
 		}
 		if err := c.doJSON(ctx, http.MethodGet, path, nil, &page); err != nil {
-			return nil, false, err
+			return nil, err
 		}
 		for _, m := range page.Value {
 			if m.Type == "#microsoft.graph.user" && m.ID != "" {
 				ids = append(ids, m.ID)
 			}
 		}
-		if len(ids) > limit {
-			return nil, true, nil
-		}
 		if path, err = c.nextPath(page.NextLink); err != nil {
-			return nil, false, err
+			return nil, err
 		}
 	}
-	return ids, false, nil
+	return ids, nil
 }
 
 // GetUserManager fetches a user's manager from the directory hierarchy.
