@@ -19,11 +19,12 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-// The test server serves a token of `f.<base64url file>` as that file.
-function fileToken(html: string): string {
+// The test server serves a token of `f.<base64url file>` as that file, and
+// one of `o.<base64url file>` as that file with the response left open.
+function fileToken(html: string, kind: 'f' | 'o' = 'f'): string {
   let bin = '';
   for (const b of new TextEncoder().encode(html)) bin += String.fromCharCode(b);
-  return `f.${btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')}`;
+  return `${kind}.${btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')}`;
 }
 
 async function mountURL(url: string) {
@@ -138,7 +139,12 @@ describe('HtmlPreviewPanel in a real browser', () => {
   });
 
   it('never shows a page the file navigated to before its own load', async () => {
-    await mount(`<script>location.href = ${JSON.stringify(outside('early'))};</script><p>x</p>`);
+    // The response stays open, so the document cannot finish loading before
+    // it navigates. Given the whole file at once, WebKit sometimes completes
+    // the load first and only then follows `location`, which is the followed
+    // link below, not this case.
+    const html = `<script>location.href = ${JSON.stringify(outside('early'))};</script><p>x</p>`;
+    await mountURL(`/api/v1/media/${fileToken(html, 'o')}/mockup.html`);
     const seen = new Set<string>();
     const watch = setInterval(() => {
       const g = frame()?.dataset.guard;

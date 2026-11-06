@@ -10,7 +10,10 @@ import type { Plugin } from 'vite';
 // (UPDATE_GOLDEN=1 rewrites it).
 //
 //  GET /api/v1/html-preview/f.<base64url file>/<name>
-//      The file as the server's preview document. Any other token: the
+//      The file as the server's preview document. An `o.` token serves its
+//      file the same way but leaves the response open after it, so the
+//      document cannot reach its own load until the browser drops the request
+//      (or HOLD_MS runs out). Any other token: the
 //      server's "no file to show" document (404). Like the server it refuses
 //      a load that says it is not for a frame — stricter, it also refuses one
 //      that says nothing, so the suite proves each engine sends
@@ -27,6 +30,9 @@ interface Contract {
 }
 
 const PREVIEW = '/api/v1/html-preview/';
+
+// How long an `o.` response stays open when nothing drops it.
+const HOLD_MS = 10_000;
 
 // The probe's additions, each reporting through the page's own (hashed) script.
 const PROBE_TAIL =
@@ -46,9 +52,19 @@ export function htmlPreviewTestServer(contractPath: string): Plugin {
     }
     const { headers, head, failed } = contract().preview;
     for (const [name, value] of Object.entries(headers)) res.setHeader(name, value);
-    if (token.startsWith('f.')) {
+    if (token.startsWith('f.') || token.startsWith('o.')) {
       res.statusCode = 200;
-      res.end(head + Buffer.from(token.slice(2), 'base64url').toString('utf8'));
+      const body = head + Buffer.from(token.slice(2), 'base64url').toString('utf8');
+      if (token.startsWith('f.')) {
+        res.end(body);
+        return;
+      }
+      res.write(body);
+      const timer = setTimeout(() => res.end(), HOLD_MS);
+      req.on('close', () => {
+        clearTimeout(timer);
+        res.end();
+      });
       return;
     }
     res.statusCode = 404;

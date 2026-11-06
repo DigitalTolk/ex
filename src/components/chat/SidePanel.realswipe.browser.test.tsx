@@ -35,8 +35,9 @@ describe('SidePanel — real swipe-to-dismiss', () => {
     // A real rightward drag well past DISMISS_DISTANCE (72px).
     await swipe(el!, { dx: 220, steps: 8, stepMs: 18 });
 
-    // onClose fires once the exit spring completes.
-    await vi.waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    // onClose fires once the exit spring completes, which on a loaded run can
+    // take past vi.waitFor's 1s; expect.poll waits the shared budget.
+    await expect.poll(() => onClose.mock.calls.length).toBe(1);
   });
 
   it('a small RIGHT swipe below the threshold springs back and stays open', async () => {
