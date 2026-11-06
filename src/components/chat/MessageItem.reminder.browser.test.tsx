@@ -121,9 +121,12 @@ describe('MessageItem "Remind me"', () => {
     await openMenu();
     await userEvent.click(screen.getByTestId('remind-all-trigger'));
     await userEvent.click(screen.getByTestId('remind-all-custom'));
-    await expect.element(screen.getByTestId('reminder-tab-who')).toHaveTextContent('Who · Everyone');
+    // Titled and worded for everyone, with whoever is left out one tap away.
+    await expect.element(screen.getByRole('heading', { name: 'Remind all' })).toBeVisible();
+    await expect.element(screen.getByTestId('reminder-who-summary')).toHaveTextContent('Everyone here');
     await pickTomorrow();
     await wheelMorning(9);
+    await expect.poll(() => screen.getByTestId('reminder-preview').element().textContent).toContain('Reminds everyone');
     await userEvent.click(screen.getByTestId('reminder-confirm'));
     await vi.waitFor(() => expect(createReminderMutateAsync).toHaveBeenCalledTimes(1));
     expect(createReminderMutateAsync.mock.calls[0][0]).toMatchObject({ everyone: true, excludedUserIDs: [] });
@@ -229,7 +232,7 @@ describe('MessageItem "Remind me"', () => {
     await openMobileSheet();
     await userEvent.click(document.querySelector('[data-testid="mobile-remind-all"]') as HTMLButtonElement);
     await vi.waitFor(() => expect(document.querySelector('[data-testid="reminder-dialog"]')).not.toBeNull());
-    expect(document.querySelector('[data-testid="reminder-tab-who"]')?.textContent).toContain('Who · Everyone');
+    expect(document.querySelector('[data-testid="reminder-who-summary"]')?.textContent).toMatch(/^Everyone here/);
   });
 
   it('schedules a reminder from the mobile action sheet via the date-selector popup', async () => {

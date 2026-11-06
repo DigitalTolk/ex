@@ -33,6 +33,9 @@ const users: User[] = [
   { id: 'a-1', email: '', displayName: 'Carl the agent', systemRole: 'member', status: 'active', kind: 'agent' },
 ];
 
+// Everyone the users endpoint knows; a test of a big channel adds to it.
+let directory: User[] = users;
+
 function mockApi(overrides: (path: string, method?: string) => unknown = () => undefined) {
   vi.mocked(apiFetch).mockImplementation(async (path: string, options?: { method?: string; body?: string }) => {
     const o = overrides(path, options?.method);
@@ -47,7 +50,7 @@ function mockApi(overrides: (path: string, method?: string) => unknown = () => u
     if (path === '/api/v1/conversations/dm-1') return { id: 'dm-1', type: 'group', participantIDs: ['u-1', 'u-2', 'u-4'] };
     if (path === '/api/v1/users/batch') {
       const { ids } = JSON.parse(options!.body!) as { ids: string[] };
-      return users.filter((u) => ids.includes(u.id));
+      return directory.filter((u) => ids.includes(u.id));
     }
     return undefined;
   });
@@ -75,12 +78,19 @@ async function openEditor(index: number) {
   return screen.findByTestId('reminder-dialog');
 }
 
-const search = (dialog: HTMLElement, text: string) => fireEvent.change(within(dialog).getByTestId('reminder-people-input'), { target: { value: text } });
+// The Who list drops down over the dialog, outside it.
+async function openWho(dialog: HTMLElement) {
+  fireEvent.click(within(dialog).getByTestId('reminder-who'));
+  return screen.findByTestId('reminder-people');
+}
+
+const search = (panel: HTMLElement, text: string) => fireEvent.change(within(panel).getByTestId('reminder-people-input'), { target: { value: text } });
 
 beforeEach(() => {
   vi.mocked(apiFetch).mockReset();
   toast.mockReset();
   me.user = { id: 'u-1' };
+  directory = users;
 });
 
 describe('Drafts page — Reminders tab', () => {
@@ -119,50 +129,40 @@ describe('Drafts page — Reminders tab', () => {
     expect(within(everyoneDM).getByTestId('reminder-row-people')).toHaveTextContent(/^Everyone$/);
   });
 
-  // A channel of hundreds is one line and the exceptions, never a list: the
-  // editor says who gets reminded and lets a few be left out.
-  it('edits a reminder for everyone: who is left out, and the choice itself', async () => {
+  // Who is one line under the title; its list of the chat's people drops
+  // down, a box each: ticked is reminded. "Everyone here" leaves people out by
+  // unticking them.
+  it('edits a reminder for everyone: untick to leave people out', async () => {
     mockApi();
     renderPage();
     const dialog = await openEditor(5);
-    expect(within(dialog).getByTestId('reminder-tab-who')).toHaveTextContent('Who · Everyone except 1');
-    fireEvent.click(within(dialog).getByTestId('reminder-tab-who'));
-    expect(within(dialog).getByTestId('reminder-audience-everyone')).toHaveAttribute('aria-checked', 'true');
-    expect(within(dialog).getByTestId('reminder-audience-people')).toHaveAttribute('aria-checked', 'false');
-    await waitFor(() => expect(within(dialog).getByTestId('reminder-everyone-count')).toHaveTextContent('Everyone in this channel (5 people) gets reminded.'));
-    expect(within(dialog).getByText('Leave out')).toBeInTheDocument();
-    expect(within(dialog).getByTestId('reminder-people-input')).toHaveAttribute('placeholder', 'Find someone to leave out');
-    expect(await within(dialog).findByTestId('reminder-except-u-2')).toHaveTextContent('Bob');
-    // The chat's people are listed to tick off — no bots or agents, no you —
-    // Bob already ticked; the search narrows the list.
-    const roster = within(dialog).getByTestId('reminder-roster');
+    await waitFor(() => expect(within(dialog).getByTestId('reminder-who-summary')).toHaveTextContent('Everyone except Bob'));
+    const panel = await openWho(dialog);
+    expect(within(panel).getByTestId('reminder-everyone')).toBeChecked();
+    expect(panel).toHaveTextContent('5 people');
+    // The chat's people — no bots or agents, no you — with Bob left out.
+    const roster = within(panel).getByTestId('reminder-roster');
     await waitFor(() => expect(within(roster).getAllByRole('checkbox')).toHaveLength(2));
-    expect(within(roster).getByLabelText('Leave out Bob')).toBeChecked();
-    expect(within(roster).getByLabelText('Leave out Carol')).not.toBeChecked();
-    search(dialog, 'car');
+    expect(within(roster).getByLabelText('Remind Bob')).not.toBeChecked();
+    expect(within(roster).getByLabelText('Remind Carol')).toBeChecked();
+    // The search narrows the list.
+    search(panel, 'car');
     expect(within(roster).getAllByRole('checkbox')).toHaveLength(1);
-    // Leave Carol out too, and let Bob back in — from the list and the chips.
-    fireEvent.click(within(roster).getByLabelText('Leave out Carol'));
-    expect(within(dialog).getByTestId('reminder-except-u-3')).toHaveTextContent('Carol');
-    search(dialog, '');
-    fireEvent.click(within(dialog).getByLabelText('Remove Bob'));
-    expect(within(dialog).queryByTestId('reminder-except-u-2')).toBeNull();
-    expect(within(roster).getByLabelText('Leave out Bob')).not.toBeChecked();
-    fireEvent.click(within(roster).getByLabelText('Leave out Bob'));
-    fireEvent.click(within(roster).getByLabelText('Leave out Bob'));
-    search(dialog, 'zzz');
-    expect(within(dialog).getByTestId('reminder-people-empty')).toHaveTextContent('No one in this conversation matches.');
-    search(dialog, '');
-    // Switching to people and back keeps the exceptions; choosing the same
-    // again changes nothing.
-    fireEvent.click(within(dialog).getByTestId('reminder-audience-people'));
-    expect(within(dialog).getByText('Also remind')).toBeInTheDocument();
-    expect(within(dialog).queryByTestId('reminder-everyone-count')).toBeNull();
-    expect(within(dialog).queryByTestId('reminder-except-u-3')).toBeNull();
-    fireEvent.click(within(dialog).getByTestId('reminder-audience-everyone'));
-    fireEvent.click(within(dialog).getByTestId('reminder-audience-everyone'));
-    expect(within(dialog).getByTestId('reminder-except-u-3')).toBeInTheDocument();
-    expect(within(dialog).getByTestId('reminder-tab-who')).toHaveTextContent('Who · Everyone except 1');
+    search(panel, 'zzz');
+    expect(within(panel).getByTestId('reminder-people-empty')).toHaveTextContent('No one here matches.');
+    search(panel, '');
+    fireEvent.click(within(roster).getByLabelText('Remind Carol'));
+    expect(within(dialog).getByTestId('reminder-who-summary')).toHaveTextContent('Everyone except Bob and Carol');
+    fireEvent.click(within(roster).getByLabelText('Remind Bob'));
+    expect(within(dialog).getByTestId('reminder-who-summary')).toHaveTextContent('Everyone except Carol');
+    // Closing it drops the search; the choice stays.
+    search(panel, 'car');
+    fireEvent.click(within(dialog).getByTestId('reminder-who'));
+    await waitFor(() => expect(screen.queryByTestId('reminder-people')).toBeNull());
+    expect(within(await openWho(dialog)).getByTestId('reminder-people-input')).toHaveValue('');
+    // The preview says who, whatever the title.
+    wheelTo(9, 30, (el, key) => fireEvent.keyDown(el, { key }));
+    expect(within(dialog).getByTestId('reminder-preview')).toHaveTextContent(/^Reminds everyone /);
     await act(async () => {
       fireEvent.click(within(dialog).getByTestId('reminder-confirm'));
     });
@@ -172,26 +172,29 @@ describe('Drafts page — Reminders tab', () => {
     expect(body).toMatchObject({ everyone: true, excludedUserIDs: ['u-3'], userIDs: [] });
   });
 
-  it("counts a conversation's participants, and turns a reminder for people into one for everyone", async () => {
+  it("counts a conversation's participants, and turns a reminder for people into one for everyone and back", async () => {
     mockApi();
     renderPage();
     const dm = await openEditor(6);
-    expect(within(dm).getByTestId('reminder-tab-who')).toHaveTextContent('Who · Everyone');
-    fireEvent.click(within(dm).getByTestId('reminder-tab-who'));
-    await waitFor(() => expect(within(dm).getByTestId('reminder-everyone-count')).toHaveTextContent('Everyone in this conversation (3 people) gets reminded.'));
+    await waitFor(() => expect(within(dm).getByTestId('reminder-who-summary')).toHaveTextContent('Everyone here · 3 people'));
     fireEvent.click(within(dm).getByLabelText('Cancel'));
     await waitFor(() => expect(screen.queryByTestId('reminder-dialog')).toBeNull());
 
     const dialog = await openEditor(0);
-    fireEvent.click(within(dialog).getByTestId('reminder-tab-who'));
-    expect(within(dialog).getByTestId('reminder-audience-people')).toHaveAttribute('aria-checked', 'true');
-    fireEvent.click(within(dialog).getByTestId('reminder-audience-everyone'));
-    expect(within(dialog).getByTestId('reminder-tab-who')).toHaveTextContent('Who · Everyone');
+    const panel = await openWho(dialog);
+    const everyone = within(panel).getByTestId('reminder-everyone');
+    expect(everyone).not.toBeChecked();
+    fireEvent.click(everyone);
+    expect(within(dialog).getByTestId('reminder-who-summary')).toHaveTextContent('Everyone here · 5 people');
+    // Off again starts from nobody else.
+    fireEvent.click(everyone);
+    expect(within(dialog).getByTestId('reminder-who-summary')).toHaveTextContent('Just you');
+    fireEvent.click(everyone);
     await act(async () => {
       fireEvent.click(within(dialog).getByTestId('reminder-confirm'));
     });
     await waitFor(() => expect(screen.queryByTestId('reminder-dialog')).toBeNull());
-    expect(lastBody('PATCH').body).toMatchObject({ everyone: true, excludedUserIDs: [], userIDs: ['u-2', 'u-gone'] });
+    expect(lastBody('PATCH').body).toMatchObject({ everyone: true, excludedUserIDs: [], userIDs: [] });
   });
 
   it("edits the time, the people and the note, offering only the channel's people", async () => {
@@ -199,69 +202,95 @@ describe('Drafts page — Reminders tab', () => {
     renderPage();
     const dialog = await openEditor(0);
     expect(within(dialog).getByText('Edit reminder')).toBeInTheDocument();
-    // Who has its own tab beside the time's, with a count on it; the picker
-    // takes the calendar's place rather than adding to the dialog.
-    expect(within(dialog).getByTestId('reminder-tab-who')).toHaveTextContent('Who · You + 2');
-    expect(within(dialog).queryByTestId('reminder-people-input')).toBeNull();
-    fireEvent.click(within(dialog).getByTestId('reminder-tab-who'));
-    expect(within(dialog).queryByTestId('reminder-wheel')).toBeNull();
-    expect(await within(dialog).findByTestId('reminder-person-u-2')).toHaveTextContent('Bob');
+    // Someone whose account is gone reads as "Someone".
+    await waitFor(() => expect(within(dialog).getByTestId('reminder-who-summary')).toHaveTextContent('You, Bob and Someone'));
+    // The list waits for a tap; the time stays on screen beside it.
+    expect(screen.queryByTestId('reminder-people')).toBeNull();
+    const panel = await openWho(dialog);
+    expect(within(dialog).getByTestId('reminder-wheel')).toBeInTheDocument();
+    const roster = within(panel).getByTestId('reminder-roster');
+    await waitFor(() => expect(within(roster).getAllByRole('checkbox')).toHaveLength(2));
+    // You, bots and agents are never offered.
+    expect(within(roster).queryByLabelText('Remind Alice')).toBeNull();
+    expect(within(roster).queryByLabelText('Remind Carbot')).toBeNull();
+    expect(within(roster).queryByLabelText('Remind Carl the agent')).toBeNull();
+    expect(within(roster).getByLabelText('Remind Bob')).toBeChecked();
+    fireEvent.click(within(roster).getByLabelText('Remind Carol'));
+    expect(within(dialog).getByTestId('reminder-who-summary')).toHaveTextContent('You, Bob, Someone and Carol');
+    fireEvent.click(within(roster).getByLabelText('Remind Bob'));
+    expect(within(dialog).getByTestId('reminder-who-summary')).toHaveTextContent('You, Someone and Carol');
 
-    // You, bots and agents are never offered; neither is anyone already on it.
-    search(dialog, 'a');
-    await within(dialog).findByTestId('reminder-people-option-u-3');
-    expect(within(dialog).queryByTestId('reminder-people-option-u-1')).toBeNull();
-    expect(within(dialog).queryByTestId('reminder-people-option-bot-x')).toBeNull();
-    expect(within(dialog).queryByTestId('reminder-people-option-a-1')).toBeNull();
-    search(dialog, 'bo');
-    expect(await within(dialog).findByTestId('reminder-people-empty')).toHaveTextContent('No one in this conversation matches.');
-    // Enter with nothing matching picks no one (and doesn't save either).
-    fireEvent.keyDown(within(dialog).getByTestId('reminder-people-input'), { key: 'Enter' });
-    expect(within(dialog).queryByTestId('reminder-person-u-3')).toBeNull();
-
-    search(dialog, 'car');
-    fireEvent.click(await within(dialog).findByTestId('reminder-people-option-u-3'));
-    expect(within(dialog).getByTestId('reminder-person-u-3')).toHaveTextContent('Carol');
-    expect(within(dialog).getByTestId('reminder-people-input')).toHaveValue('');
-    fireEvent.click(within(dialog).getByLabelText('Remove Bob'));
-    expect(within(dialog).queryByTestId('reminder-person-u-2')).toBeNull();
-    // Someone whose account is gone reads as "Someone", to remove too.
-    fireEvent.click(within(dialog).getByLabelText('Remove Someone'));
-
-    expect(within(dialog).getByTestId('reminder-tab-who')).toHaveTextContent('Who · You + 1');
-    // Back to the time; the note is below either tab.
-    fireEvent.click(within(dialog).getByTestId('reminder-tab-when'));
-    expect(within(dialog).queryByTestId('reminder-people-input')).toBeNull();
     // The note starts as it was, and is saved as edited.
     expect(within(dialog).getByTestId('reminder-note')).toHaveValue('bring the Q3 numbers');
     fireEvent.change(within(dialog).getByTestId('reminder-note'), { target: { value: ' bring the deck too ' } });
 
     wheelTo(9, 30, (el, key) => fireEvent.keyDown(el, { key }));
+    expect(within(dialog).getByTestId('reminder-preview')).toHaveTextContent(/^Reminds you and 2 others /);
     await act(async () => {
       fireEvent.click(within(dialog).getByTestId('reminder-confirm'));
     });
     await waitFor(() => expect(screen.queryByTestId('reminder-dialog')).toBeNull());
     const { path, body } = lastBody('PATCH');
     expect(path).toBe('/api/v1/reminders/r-1');
-    expect(body.userIDs).toEqual(['u-3']);
+    expect(body.userIDs).toEqual(['u-gone', 'u-3']);
     expect(body.note).toBe('bring the deck too');
     expect(new Date(body.remindAt as string).getHours()).toBe(9);
     expect(toast).toHaveBeenCalledWith('Reminder updated', 'success');
   });
 
-  it("offers a conversation's participants, picking the top match with Enter", async () => {
+  it("offers a conversation's participants by name", async () => {
     mockApi();
     renderPage();
     const dialog = await openEditor(1);
-    fireEvent.click(within(dialog).getByTestId('reminder-tab-who'));
-    search(dialog, 'ca');
-    await within(dialog).findByTestId('reminder-people-option-u-4');
-    fireEvent.keyDown(within(dialog).getByTestId('reminder-people-input'), { key: 'Enter' });
-    expect(within(dialog).getByTestId('reminder-person-u-4')).toHaveTextContent('Cara');
+    expect(within(dialog).getByTestId('reminder-who-summary')).toHaveTextContent('Just you');
+    const panel = await openWho(dialog);
+    fireEvent.click(await within(panel).findByLabelText('Remind Cara'));
+    expect(within(dialog).getByTestId('reminder-who-summary')).toHaveTextContent('You, Cara');
+    wheelTo(9, 30, (el, key) => fireEvent.keyDown(el, { key }));
+    expect(within(dialog).getByTestId('reminder-preview')).toHaveTextContent(/^Reminds you and 1 other /);
     await act(async () => {
       fireEvent.click(within(dialog).getByTestId('reminder-confirm'));
     });
     await waitFor(() => expect(lastBody('PATCH').body.userIDs).toEqual(['u-4']));
+  });
+
+  // A big channel: past the cap, only who's already picked can change.
+  it('stops at the most people a reminder can add or leave out', async () => {
+    const crowd: User[] = Array.from({ length: 22 }, (_, i) => ({ id: `p-${i}`, email: '', displayName: `Person ${String(i).padStart(2, '0')}`, systemRole: 'member', status: 'active' }));
+    directory = [...users, ...crowd];
+    mockApi((path) =>
+      path === '/api/v1/channels/ch-1/members'
+        ? ['u-1', ...crowd.map((u) => u.id)].map((id) => ({ channelID: 'ch-1', userID: id, role: 1, displayName: directory.find((u) => u.id === id)!.displayName, joinedAt: '' }))
+        : undefined,
+    );
+    renderPage();
+    const dialog = await openEditor(0);
+    const panel = await openWho(dialog);
+    const roster = within(panel).getByTestId('reminder-roster');
+    await waitFor(() => expect(within(roster).getAllByRole('checkbox')).toHaveLength(22));
+    for (let i = 0; i < 18; i++) fireEvent.click(within(roster).getByLabelText(`Remind Person ${String(i).padStart(2, '0')}`));
+    expect(within(dialog).getByTestId('reminder-who-summary')).toHaveTextContent('You, Bob, Someone and 18 others');
+    expect(within(panel).getByTestId('reminder-people-full')).toHaveTextContent('Up to 20 people can be added.');
+    expect(within(roster).getByLabelText('Remind Person 18')).toBeDisabled();
+    expect(within(roster).getByLabelText('Remind Person 00')).toBeEnabled();
+    // Everyone: twenty left out is as far as it goes.
+    fireEvent.click(within(panel).getByTestId('reminder-everyone'));
+    expect(within(panel).queryByTestId('reminder-people-full')).toBeNull();
+    for (let i = 0; i < 20; i++) fireEvent.click(within(roster).getByLabelText(`Remind Person ${String(i).padStart(2, '0')}`));
+    expect(within(panel).getByTestId('reminder-people-full')).toHaveTextContent('Up to 20 people can be left out.');
+    expect(within(roster).getByLabelText('Remind Person 21')).toBeDisabled();
+    expect(within(dialog).getByTestId('reminder-who-summary')).toHaveTextContent('Everyone except Person 00, Person 01 and 18 others');
+  });
+
+  it('says so while the chat and its people are still loading', async () => {
+    mockApi((path) => (path === '/api/v1/conversations/dm-1' || path === '/api/v1/users/batch' ? new Promise(() => {}) : undefined));
+    renderPage();
+    const dialog = await openEditor(6);
+    expect(within(dialog).getByTestId('reminder-who-summary')).toHaveTextContent(/^Everyone here$/);
+    const panel = await openWho(dialog);
+    expect(within(panel).getByTestId('reminder-people-empty')).toHaveTextContent('Loading people…');
+    // No headcount until the conversation loads.
+    expect(panel).not.toHaveTextContent(/\d people/);
   });
 
   it('keeps the dialog open with the error when saving fails', async () => {
@@ -281,9 +310,8 @@ describe('Drafts page — Reminders tab', () => {
     mockApi();
     renderPage();
     const dialog = await openEditor(0);
-    fireEvent.click(within(dialog).getByTestId('reminder-tab-who'));
-    search(dialog, 'ali');
-    expect(await within(dialog).findByTestId('reminder-people-option-u-1')).toHaveTextContent('Alice');
+    const panel = await openWho(dialog);
+    expect(await within(panel).findByLabelText('Remind Alice')).not.toBeChecked();
   });
 
   it('cancels one after confirming', async () => {
