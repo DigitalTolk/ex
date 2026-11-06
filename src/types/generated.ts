@@ -185,6 +185,13 @@ export interface Reminder {
    */
   userIDs?: string[];
   /**
+   * Everyone: the reminder is for every member of the chat (UserIDs is then
+   * empty) but ExcludedUserIDs, the few the owner left out. The bot's reply
+   * tags @all, and its notifications skip them.
+   */
+  everyone?: boolean;
+  excludedUserIDs?: string[];
+  /**
    * Note is the owner's own words for context, shown with the reminder
    * when it comes due.
    */

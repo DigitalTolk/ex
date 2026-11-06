@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type FocusEvent, type PointerEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { SmilePlus, MoreHorizontal, AlarmClock, Eye, Pin, Zap, type LucideIcon } from 'lucide-react';
+import { SmilePlus, MoreHorizontal, AlarmClock, Eye, Pin, Zap, type LucideIcon, Users } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { MessageInput, type MessageInputValue } from '@/components/chat/MessageInput';
 import type { DraftAttachment } from '@/components/chat/AttachmentChip';
@@ -502,7 +502,7 @@ function MessageItemImpl({
 
   // Everything that can be done to the message, for the desktop menu and the
   // mobile sheet alike.
-  const { actions, reminderPresets, deleteDialog, reminderDialog, watcherDialog } = useMessageActions({
+  const { actions, reminderPresets, reminderAllPresets, deleteDialog, reminderDialog, watcherDialog } = useMessageActions({
     message,
     channelId,
     channelSlug,
@@ -800,7 +800,7 @@ function MessageItemImpl({
         </motion.div>
         {/* Everything else as a short list. */}
         <motion.div className="flex flex-col divide-y divide-border/60 rounded-2xl bg-muted" {...sheetSection(2)}>
-          {[actions.activity, actions.pin, actions.markUnread, actions.watch, actions.edit, actions.delete].map(
+          {[actions.activity, actions.remindAll, actions.pin, actions.markUnread, actions.watch, actions.edit, actions.delete].map(
             (action) =>
               action && (
                 <button
@@ -1311,6 +1311,21 @@ function MessageItemImpl({
                     </DropdownMenuItem>
                   ))}
                   <DropdownMenuItem onClick={actions.remind.run} data-testid="remind-custom">
+                    Custom…
+                  </DropdownMenuItem>
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger data-testid="remind-all-trigger">
+                  <Users className="mr-2 h-4 w-4" /> Remind all
+                </DropdownMenuSubTrigger>
+                <DropdownMenuSubContent>
+                  {reminderAllPresets.map((preset) => (
+                    <DropdownMenuItem key={preset.key} onClick={preset.run} data-testid={`remind-all-${preset.key}`}>
+                      {preset.label}
+                    </DropdownMenuItem>
+                  ))}
+                  <DropdownMenuItem onClick={actions.remindAll.run} data-testid="remind-all-custom">
                     Custom…
                   </DropdownMenuItem>
                 </DropdownMenuSubContent>

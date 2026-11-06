@@ -438,6 +438,10 @@ export interface Reminder {
   // People tagged besides the owner when it comes due (the reminder bot's
   // reply); none means a personal reminder, the bot's DM to its owner.
   userIDs?: string[];
+  // Everyone in the chat instead (userIDs is then empty), but the few the
+  // owner left out.
+  everyone?: boolean;
+  excludedUserIDs?: string[];
   // The owner's context, shown with the reminder when it comes due.
   note?: string;
   remindAt: string;

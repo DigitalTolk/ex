@@ -1,4 +1,5 @@
 import { LazyReminderDialog as ReminderDialog } from '@/components/chat/LazyReminderDialog';
+import type { ReminderAudience } from '@/lib/reminder-audience';
 import { useCreateReminder } from '@/hooks/useActivity';
 import type { ActivityReminder } from '@/lib/activity-reminder';
 
@@ -17,7 +18,7 @@ export function ActivityReminderDialog({ reminder, channelSlug, onClose }: Activ
   const createReminder = useCreateReminder();
   if (!reminder) return null;
   const { lead } = reminder.row;
-  const confirm = (when: Date, _people: string[], note: string) =>
+  const confirm = (when: Date, _audience: ReminderAudience, note: string) =>
     createReminder
       .mutateAsync({
         messageID: lead.messageID,

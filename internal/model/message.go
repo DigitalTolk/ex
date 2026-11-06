@@ -13,7 +13,11 @@ type Message struct {
 	// admin reindex) — for machine-posted ephemera like /mstmeetings join
 	// links, where a stale meeting URL surfacing in search is noise. Internal
 	// only, never serialized to clients.
-	NoIndex         bool       `json:"-" dynamodbav:"noIndex,omitempty"`
+	NoIndex bool `json:"-" dynamodbav:"noIndex,omitempty"`
+	// NotifyExcept are members this message's notifications skip: a
+	// reminder for everyone but them. Internal only, never serialized to
+	// clients; stored, so the fan-out's safety net skips them too.
+	NotifyExcept    []string   `json:"-" dynamodbav:"notifyExcept,omitempty"`
 	ParentMessageID string     `json:"parentMessageID,omitempty" dynamodbav:"parentMessageID,omitempty"` // root message of the thread
 	ReplyCount      int        `json:"replyCount,omitempty" dynamodbav:"replyCount,omitempty"`           // count of replies (only set on root messages)
 	LastReplyAt     *time.Time `json:"lastReplyAt,omitempty" dynamodbav:"lastReplyAt,omitempty"`         // timestamp of the latest reply (only set on root messages)

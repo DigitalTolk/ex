@@ -18,6 +18,7 @@ import { inputValueForDate } from '@/lib/datetime-input';
 import { dayKey } from '@/lib/format';
 import { localTimeZone } from '@/lib/user-time';
 import { ReminderPeoplePicker } from '@/components/chat/ReminderPeoplePicker';
+import { NOBODY_ELSE, type ReminderAudience } from '@/lib/reminder-audience';
 
 // A quick pick fills the calendar and time with a ready-made instant; the
 // reader can still adjust before confirming.
@@ -34,11 +35,11 @@ interface ReminderDialogProps {
   // impure clock read happens in an event handler, never during render).
   initialValue: string;
   // onConfirm schedules the reminder for the chosen time (and, with people,
-  // the people picked, and with a note, its text). It resolves on success (the
+  // who it's for, and with a note, its text). It resolves on success (the
   // dialog then closes) and rejects on failure (the dialog stays open and
   // surfaces the error) — so scheduling is never silent.
-  onConfirm: (when: Date, userIDs: string[], note: string) => Promise<void>;
-  // people adds the "Also remind" picker, offering that chat's people.
+  onConfirm: (when: Date, audience: ReminderAudience, note: string) => Promise<void>;
+  // people adds the Who line: the picker, offering that chat's people.
   people?: ReminderPeople;
   // note adds the optional note field, starting from this text.
   note?: string;
@@ -52,8 +53,9 @@ interface ReminderDialogProps {
 export interface ReminderPeople {
   parentID: string;
   parentType: 'channel' | 'conversation';
-  // Who is already on it, when editing a reminder.
-  initial?: string[];
+  // Who it's for to begin with: a reminder being edited, or "everyone"
+  // from the Remind all menu.
+  initial?: ReminderAudience;
 }
 
 export interface DateTimeDialogCopy {
@@ -75,6 +77,9 @@ const REMINDER_COPY: DateTimeDialogCopy = {
   previewVerb: 'Reminds you',
 };
 
+// A reminder for everyone in the chat says so.
+const REMIND_ALL_COPY: DateTimeDialogCopy = { ...REMINDER_COPY, title: 'Remind all', previewVerb: 'Reminds everyone' };
+
 // A note's cap, as the server counts it (service.maxReminderNote).
 const MAX_NOTE = 500;
 
@@ -92,8 +97,9 @@ const dateOf = (date: string): Date | undefined => combineDateAndClock(date, { h
 
 // ReminderDialog is the "Custom…" picker for reminders and scheduled sends:
 // a calendar for the day, wheels for the time (spin, tap or type them, like a
-// phone's alarm), a row of quick picks that fill both in one tap,
-// and a preview line that reads the result back ("Sends Tomorrow at 9:00 AM ·
+// phone's alarm), a row of quick picks that fill both in one tap, a reminder's
+// Who line (its list of people drops down over the dialog, so the dialog never
+// grows), a note, and a preview line that reads the result back ("Sends Tomorrow at 9:00 AM ·
 // in 21 h"). Validated to a strictly-future instant before the caller
 // schedules it. Mount it fresh per open so the seed re-applies.
 export function ReminderDialog({
@@ -101,19 +107,28 @@ export function ReminderDialog({
   onOpenChange,
   initialValue,
   onConfirm,
-  copy = REMINDER_COPY,
+  copy: copyProp,
   quickPicks = REMINDER_QUICK_PICKS,
   people,
   note: initialNote,
 }: ReminderDialogProps) {
   const [fields, setFields] = useState(() => splitDateTimeSeed(initialValue));
-  const [userIDs, setUserIDs] = useState<string[]>(() => people?.initial ?? []);
+  const [audience, setAudience] = useState<ReminderAudience>(() => people?.initial ?? NOBODY_ELSE);
+  const added = audience.userIDs.length;
+  const copy =
+    copyProp ??
+    (audience.everyone
+      ? REMIND_ALL_COPY
+      : added
+        ? { ...REMINDER_COPY, previewVerb: `Reminds you and ${added === 1 ? '1 other' : `${added} others`}` }
+        : REMINDER_COPY);
   const [note, setNote] = useState(initialNote ?? '');
   // The month the calendar shows; follows a quick pick, otherwise the reader's.
   const [month, setMonth] = useState<Date | undefined>(() => dateOf(splitDateTimeSeed(initialValue).date));
   // The preview compares against the clock, so it is worked out in the
   // handlers (never during render) and kept as text — a warning, with the
-  // confirm held back, when the time picked has already gone.
+  // confirm held back, when the time picked has already gone. Its verb is
+  // added as it renders, so it follows who the reminder is for.
   const [preview, setPreview] = useState<{ text: string; past: boolean } | null>(null);
   const [error, setError] = useState('');
   const [pending, setPending] = useState(false);
@@ -127,7 +142,7 @@ export function ReminderDialog({
   const describe = (when: Date | null, now: Date) => {
     if (!when) return null;
     if (when.getTime() <= now.getTime()) return { text: `${formatScheduleTime(when, now)} has already passed`, past: true };
-    return { text: `${copy.previewVerb} ${formatScheduleTime(when, now)} · ${describeDelay(when.getTime() - now.getTime())}`, past: false };
+    return { text: `${formatScheduleTime(when, now)} · ${describeDelay(when.getTime() - now.getTime())}`, past: false };
   };
   const update = (next: { date: string; time: string }) => {
     setFields(next);
@@ -158,7 +173,7 @@ export function ReminderDialog({
     setPending(true);
     setError('');
     try {
-      await onConfirm(when, userIDs, note.trim());
+      await onConfirm(when, audience, note.trim());
       onOpenChange(false);
     } catch {
       setError(copy.failed);
@@ -185,6 +200,9 @@ export function ReminderDialog({
           <DialogTitle>{copy.title}</DialogTitle>
         </DialogHeader>
         <div className="space-y-3 px-1 py-2">
+          {people && (
+            <ReminderPeoplePicker parentID={people.parentID} parentType={people.parentType} value={audience} onChange={setAudience} />
+          )}
           <div className="flex flex-wrap gap-1.5" role="group" aria-label="Quick picks">
             {quickPicks.map((quick) => (
               <button
@@ -219,9 +237,6 @@ export function ReminderDialog({
               <TimeWheel value={clock} onChange={setTime} onEnter={() => void confirm()} hourCycle={HOUR_CYCLE} testIdPrefix="reminder" />
             </div>
           </div>
-          {people && (
-            <ReminderPeoplePicker parentID={people.parentID} parentType={people.parentType} value={userIDs} onChange={setUserIDs} />
-          )}
           {initialNote !== undefined && (
             <label className="block">
               <span className="mb-1 block text-xs font-medium text-muted-foreground">Note (optional)</span>
@@ -231,7 +246,7 @@ export function ReminderDialog({
                 placeholder="What it's about, e.g. bring the Q3 numbers"
                 maxLength={MAX_NOTE}
                 rows={2}
-                className="w-full resize-y rounded-md border border-border bg-background px-3 py-2 text-sm mobile:text-base"
+                className="w-full resize-none rounded-md border border-border bg-background px-3 py-2 text-sm mobile:text-base"
                 value={note}
                 onChange={(e) => setNote(e.target.value)}
               />
@@ -245,7 +260,7 @@ export function ReminderDialog({
               data-testid="reminder-preview"
             >
               {preview.past && <TriangleAlert className="h-4 w-4 shrink-0" aria-hidden />}
-              {preview.text}
+              {preview.past ? preview.text : `${copy.previewVerb} ${preview.text}`}
             </p>
           )}
           {error && (

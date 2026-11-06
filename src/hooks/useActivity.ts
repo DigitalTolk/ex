@@ -84,8 +84,11 @@ export interface CreateReminderInput {
   parentType: 'channel' | 'conversation';
   channelSlug?: string;
   remindAt: string; // ISO8601
-  // People to tag besides the owner when it comes due.
+  // People to tag besides the owner when it comes due — or everyone in the
+  // chat but the few left out.
   userIDs?: string[];
+  everyone?: boolean;
+  excludedUserIDs?: string[];
   note?: string;
 }
 
@@ -114,6 +117,8 @@ export interface UpdateReminderInput {
   id: string;
   remindAt: string; // ISO8601
   userIDs: string[];
+  everyone: boolean;
+  excludedUserIDs: string[];
   note: string;
 }
 

@@ -97,6 +97,30 @@ func TestNotifyForMessage_IgnoreGroupMentions(t *testing.T) {
 	}
 }
 
+// A message's NotifyExcept (a reminder for everyone but them) are skipped by
+// the whole fan-out: no alert, no Activity row, even for @all.
+func TestNotifyForMessage_NotifyExceptSkipsMembers(t *testing.T) {
+	svc, pub, members, _, chans, users := setupNotifier(t)
+	ctx := context.Background()
+	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general"}
+	users.users["u-author"] = &model.User{ID: "u-author", DisplayName: "Alice"}
+	users.users["u-bob"] = userWith("u-bob", model.DefaultNotificationSettings())
+	users.users["u-carol"] = userWith("u-carol", model.DefaultNotificationSettings())
+	for _, uid := range []string{"u-author", "u-bob", "u-carol"} {
+		members.memberships["ch1#"+uid] = &model.ChannelMembership{ChannelID: "ch1", UserID: uid}
+	}
+
+	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "⏰ Reminder for @all", NotifyExcept: []string{"u-bob"}}, ParentChannel, nil)
+
+	kinds := publishedKinds(pub)
+	if _, ok := kinds[pubsub.UserChannel("u-bob")]; ok {
+		t.Error("bob was left out of the reminder and must not be pinged")
+	}
+	if got := kinds[pubsub.UserChannel("u-carol")]; got != NotificationKindMention {
+		t.Errorf("carol should get the @all mention, got %q", got)
+	}
+}
+
 func TestNotifyForMessage_ThreadRepliesOff_SuppressesThreadNotif(t *testing.T) {
 	svc, pub, members, chans, users, msgs := setupNotifierWithMessages(t)
 	ctx := context.Background()

@@ -13,12 +13,13 @@ const NO_IDS: string[] = [];
 // the Reminders tab, where it can be changed or cancelled.
 export function ReminderMark({ reminder }: { reminder: Reminder }) {
   const navigate = useNavigate();
-  const people = reminder.userIDs ?? NO_IDS;
+  const people = reminder.everyone ? (reminder.excludedUserIDs ?? NO_IDS) : (reminder.userIDs ?? NO_IDS);
   const { data: users } = useUsersBatch(people);
   // Read once per mount for the relative label ("Tomorrow at 9:00 AM").
   const [now] = useState(() => new Date());
   const when = formatScheduleTime(new Date(reminder.remindAt), now);
   const names = people.map((id) => users?.find((u) => u.id === id)?.displayName ?? 'Someone');
+  const who = reminder.everyone ? `everyone${names.length > 0 ? ` except ${names.join(', ')}` : ''}` : names.join(', ');
 
   return (
     <Tooltip>
@@ -34,7 +35,7 @@ export function ReminderMark({ reminder }: { reminder: Reminder }) {
       <TooltipContent>
         <span className="flex flex-col">
           <span>Reminder · {when}</span>
-          {names.length > 0 && <span>With {names.join(', ')}</span>}
+          {who && <span>With {who}</span>}
         </span>
       </TooltipContent>
     </Tooltip>

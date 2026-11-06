@@ -160,12 +160,12 @@ func TestActivityHandler_CreateReminder(t *testing.T) {
 	h, jwt := setupActivityHandler(t, &fakeActivitySvc{}, good)
 	handler := middleware.Auth(jwt)(http.HandlerFunc(h.CreateReminder))
 	rec := httptest.NewRecorder()
-	body := `{"messageID":"m-1","parentID":"ch-1","parentType":"channel","remindAt":"` + now.Format(time.RFC3339) + `","userIDs":["u-2"],"note":"bring the numbers"}`
+	body := `{"messageID":"m-1","parentID":"ch-1","parentType":"channel","remindAt":"` + now.Format(time.RFC3339) + `","userIDs":["u-2"],"everyone":true,"excludedUserIDs":["u-3"],"note":"bring the numbers"}`
 	handler.ServeHTTP(rec, authedReq(t, jwt, http.MethodPost, "/api/v1/reminders", body))
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("CreateReminder = %d %s", rec.Code, rec.Body.String())
 	}
-	if in := good.schedIn; in.MessageID != "m-1" || len(in.UserIDs) != 1 || in.Note != "bring the numbers" {
+	if in := good.schedIn; in.MessageID != "m-1" || len(in.UserIDs) != 1 || !in.Everyone || len(in.ExcludedUserIDs) != 1 || in.Note != "bring the numbers" {
 		t.Fatalf("scheduled with %+v", in)
 	}
 }
@@ -337,12 +337,12 @@ func TestActivityHandler_UpdateReminder(t *testing.T) {
 	mux.Handle("PATCH /api/v1/reminders/{id}", middleware.Auth(jwt)(http.HandlerFunc(h.UpdateReminder)))
 
 	rec := httptest.NewRecorder()
-	body := `{"remindAt":"` + later.Format(time.RFC3339) + `","userIDs":["u-2"]}`
+	body := `{"remindAt":"` + later.Format(time.RFC3339) + `","userIDs":["u-2"],"everyone":true,"excludedUserIDs":["u-3"]}`
 	mux.ServeHTTP(rec, authedReq(t, jwt, http.MethodPatch, "/api/v1/reminders/r1", body))
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"userIDs":["u-2"]`) {
 		t.Fatalf("UpdateReminder = %d %s", rec.Code, rec.Body.String())
 	}
-	if svc.updateID != "r1" || !svc.updateIn.RemindAt.Equal(later) || len(svc.updateIn.UserIDs) != 1 {
+	if svc.updateID != "r1" || !svc.updateIn.RemindAt.Equal(later) || len(svc.updateIn.UserIDs) != 1 || !svc.updateIn.Everyone || len(svc.updateIn.ExcludedUserIDs) != 1 {
 		t.Fatalf("service got %q %+v", svc.updateID, svc.updateIn)
 	}
 

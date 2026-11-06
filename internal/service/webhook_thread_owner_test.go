@@ -97,7 +97,7 @@ func TestMessageService_SendReminderRepliesInAnyLiveThread(t *testing.T) {
 	messages := newMockMessageStore()
 	svc := NewMessageService(messages, nil, nil, newMockPublisher(), nil)
 	messages.messages["ch-1#human"] = &model.Message{ID: "human", ParentID: "ch-1", AuthorID: "u-1"}
-	in := WebhookMessageInput{ParentID: "ch-1", ParentType: ParentChannel, Body: "⏰ Reminder for @[u-1|Alice]", Username: "Reminder", IconEmoji: "alarm_clock", ParentMessageID: "human"}
+	in := WebhookMessageInput{ParentID: "ch-1", ParentType: ParentChannel, Body: "⏰ Reminder for @[u-1|Alice] and @all", Username: "Reminder", IconEmoji: "alarm_clock", ParentMessageID: "human", NotifyExcept: []string{"u-2"}}
 
 	if _, err := svc.SendWebhook(ctx, in); !errors.Is(err, ErrInvalidThreadRoot) {
 		t.Fatalf("webhook into a person's thread: err = %v, want ErrInvalidThreadRoot", err)
@@ -108,6 +108,11 @@ func TestMessageService_SendReminderRepliesInAnyLiveThread(t *testing.T) {
 	}
 	if msg.ParentMessageID != "human" || msg.AuthorID != WebhookAuthorID || msg.WebhookUsername != "Reminder" || msg.WebhookIconEmoji != "alarm_clock" {
 		t.Fatalf("reply = %+v", msg)
+	}
+	// Who the reminder leaves out rides on the stored message, for the
+	// fan-out (and its safety net) to skip.
+	if len(msg.NotifyExcept) != 1 || msg.NotifyExcept[0] != "u-2" || len(messages.messages["ch-1#"+msg.ID].NotifyExcept) != 1 {
+		t.Fatalf("NotifyExcept = %v (stored %v)", msg.NotifyExcept, messages.messages["ch-1#"+msg.ID].NotifyExcept)
 	}
 }
 

@@ -905,6 +905,9 @@ type WebhookMessageInput struct {
 	// WebhookID is the posting webhook, stamped on the message so its threads
 	// stay its own.
 	WebhookID string
+	// NotifyExcept are members the post's notifications skip (a reminder for
+	// everyone but them).
+	NotifyExcept []string
 }
 
 func (s *MessageService) SendWebhook(ctx context.Context, in WebhookMessageInput) (*model.Message, error) {
@@ -969,6 +972,7 @@ func (s *MessageService) sendMachine(ctx context.Context, in WebhookMessageInput
 		WebhookIconEmoji:   in.IconEmoji,
 		MessageAttachments: in.Attachments,
 		WebhookID:          in.WebhookID,
+		NotifyExcept:       in.NotifyExcept,
 		CreatedAt:          time.Now(),
 	}
 	if msg.WebhookUsername == "" {

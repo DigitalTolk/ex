@@ -39,7 +39,7 @@ export function RemindersList() {
   // Read once per render pass for the relative labels ("Tomorrow at 9:00 AM").
   const [now] = useState(() => new Date());
 
-  const peopleIDs = useMemo(() => (reminders ?? []).flatMap((r) => r.userIDs ?? []), [reminders]);
+  const peopleIDs = useMemo(() => (reminders ?? []).flatMap((r) => [...(r.userIDs ?? []), ...(r.excludedUserIDs ?? [])]), [reminders]);
   const { data: people } = useUsersBatch(peopleIDs);
   const nameOf = (id: string) => people?.find((u) => u.id === id)?.displayName ?? 'Someone';
 
@@ -88,10 +88,12 @@ export function RemindersList() {
                 <AlarmClock className="h-3.5 w-3.5" aria-hidden />
                 {formatScheduleTime(new Date(r.remindAt), now)}
               </span>
-              {(r.userIDs?.length ?? 0) > 0 && (
+              {(r.everyone || (r.userIDs?.length ?? 0) > 0) && (
                 <span className="flex items-center gap-1" data-testid="reminder-row-people">
                   <Users className="h-3.5 w-3.5" aria-hidden />
-                  With {r.userIDs!.map(nameOf).join(', ')}
+                  {r.everyone
+                    ? `Everyone${(r.excludedUserIDs?.length ?? 0) > 0 ? ` except ${r.excludedUserIDs!.map(nameOf).join(', ')}` : ''}`
+                    : `With ${r.userIDs!.map(nameOf).join(', ')}`}
                 </span>
               )}
             </p>
@@ -112,10 +114,16 @@ export function RemindersList() {
           onOpenChange={() => setEditing(null)}
           initialValue={toLocalInputValue(new Date(editing.remindAt))}
           copy={EDIT_COPY}
-          people={{ parentID: editing.parentID, parentType: editing.parentType, initial: editing.userIDs ?? [] }}
+          people={{
+            parentID: editing.parentID,
+            parentType: editing.parentType,
+            initial: { everyone: !!editing.everyone, userIDs: editing.userIDs ?? [], excludedUserIDs: editing.excludedUserIDs ?? [] },
+          }}
           note={editing.note ?? ''}
-          onConfirm={(when, userIDs, note) =>
-            update.mutateAsync({ id: editing.id, remindAt: when.toISOString(), userIDs, note }).then(() => undefined)
+          onConfirm={(when, audience, note) =>
+            update
+              .mutateAsync({ id: editing.id, remindAt: when.toISOString(), ...audience, note })
+              .then(() => undefined)
           }
         />
       )}
