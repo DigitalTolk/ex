@@ -6,7 +6,7 @@ import { SearchInput } from '@/components/ui/search-input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
-import { useCanManageUserGroups, useUserGroups } from '@/hooks/useUserGroups';
+import { useUserGroupPermissions, useUserGroups } from '@/hooks/useUserGroups';
 import { rankedMatches } from '@/lib/fuzzy';
 import { UserGroupDetailDialog } from './UserGroupDetailDialog';
 import { UserGroupFormDialog } from './UserGroupFormDialog';
@@ -20,7 +20,7 @@ export function UserGroupsTab() {
   const [creating, setCreating] = useState(false);
   const [params, setParams] = useSearchParams();
   const openId = params.get('group') ?? '';
-  const canManage = useCanManageUserGroups();
+  const { canManage, canLinkMicrosoft } = useUserGroupPermissions();
   const { data: groups, isLoading } = useUserGroups(showDisabled);
 
   const visible = rankedMatches(groups ?? [], query, (g) => [g.handle, g.name, g.description]);
@@ -68,6 +68,7 @@ export function UserGroupsTab() {
                   <span className="flex items-center gap-2">
                     <span className="truncate text-sm font-semibold">@{g.handle}</span>
                     <span className="truncate text-sm text-muted-foreground">{g.name}</span>
+                    {g.entraGroupId && <Badge variant="secondary">Microsoft 365</Badge>}
                     {g.disabled && <Badge variant="secondary">Disabled</Badge>}
                   </span>
                   {g.description && <span className="block truncate text-xs text-muted-foreground">{g.description}</span>}
@@ -81,8 +82,12 @@ export function UserGroupsTab() {
         </ul>
       )}
 
-      {creating && <UserGroupFormDialog onClose={() => setCreating(false)} onSaved={(g) => open(g.id)} />}
-      {openId && <UserGroupDetailDialog key={openId} groupId={openId} canManage={canManage} onClose={close} />}
+      {creating && (
+        <UserGroupFormDialog canLinkMicrosoft={canLinkMicrosoft} onClose={() => setCreating(false)} onSaved={(g) => open(g.id)} />
+      )}
+      {openId && (
+        <UserGroupDetailDialog key={openId} groupId={openId} canManage={canManage} canLinkMicrosoft={canLinkMicrosoft} onClose={close} />
+      )}
     </div>
   );
 }

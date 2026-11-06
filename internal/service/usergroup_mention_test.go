@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/DigitalTolk/ex/internal/limits"
+	"github.com/DigitalTolk/ex/internal/model"
 )
 
 func TestCanonicalizeMentions_TypedHandles(t *testing.T) {
@@ -65,6 +66,7 @@ func TestCanonicalizeMentions_GuestsAndFailuresLeaveTheBody(t *testing.T) {
 		t.Errorf("handle lookup failure = %q, want it unchanged", got)
 	}
 	f.store.ownerErr = nil
+	f.copies.groups = map[string]*model.UserGroupDetail{} // not in the shared copy: read from the store
 	f.store.batchErr = errors.New("boom")
 	if got := f.svc.CanonicalizeMentions(ctx, "u-1", body); got != body {
 		t.Errorf("group read failure = %q, want it unchanged", got)

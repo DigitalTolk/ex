@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { skipToken, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
-import type { UserGroup, UserGroupDetail } from '@/types/generated';
+import type { EntraGroup, UserGroup, UserGroupDetail, UserGroupLinkPreview } from '@/types/generated';
 
 // User groups ("@oncall"): a named set of people mentioned together. Every
 // change also arrives as usergroup.changed (ChatPage), which invalidates the
@@ -13,7 +13,17 @@ export interface UserGroupInput {
   name: string;
   description: string;
   memberIds: string[];
+  // Creates the group linked to this Microsoft 365 group (admins); its
+  // members then come from there and memberIds is ignored.
+  entraGroupId?: string;
 }
+
+export interface UserGroupPermissions {
+  canManage: boolean;
+  canLinkMicrosoft: boolean;
+}
+
+const NO_PERMISSIONS: UserGroupPermissions = { canManage: false, canLinkMicrosoft: false };
 
 export interface UserGroupPatch {
   handle?: string;
@@ -64,16 +74,53 @@ export function useMyUserGroupIds(userId: string | undefined): ReadonlySet<strin
   return useMemo(() => (data ? new Set(data.map((g) => g.id)) : NO_GROUP_IDS), [data]);
 }
 
-// useCanManageUserGroups says whether the viewer may create and edit groups
-// (admins, or every member when the workspace allows it).
-export function useCanManageUserGroups(enabled = true) {
+// useUserGroupPermissions says what the viewer may do with groups: create
+// and edit them (admins, or every member when the workspace allows it), and
+// link them to Microsoft 365 (admins, with the integration configured).
+export function useUserGroupPermissions(): UserGroupPermissions {
   const { data } = useQuery({
     queryKey: queryKeys.userGroupPermissions(),
-    queryFn: async () => (await apiFetch<{ canManage: boolean }>('/api/v1/usergroup-permissions')) ?? { canManage: false },
-    enabled,
+    queryFn: async () => (await apiFetch<UserGroupPermissions>('/api/v1/usergroup-permissions')) ?? NO_PERMISSIONS,
     staleTime: 60_000,
   });
-  return data?.canManage === true;
+  return data ?? NO_PERMISSIONS;
+}
+
+// useCanManageUserGroups says whether the viewer may create and edit groups.
+export function useCanManageUserGroups() {
+  return useUserGroupPermissions().canManage === true;
+}
+
+// useEntraGroupSearch lists the Microsoft 365 groups whose name matches
+// query (the server caches answers for a minute).
+export function useEntraGroupSearch(query: string) {
+  const q = query.trim();
+  return useQuery({
+    queryKey: queryKeys.entraGroupSearch(q),
+    queryFn: q
+      ? async () => {
+          const res = await apiFetch<EntraGroup[]>(`/api/v1/usergroup-sources/microsoft?q=${encodeURIComponent(q)}`);
+          return Array.isArray(res) ? res : [];
+        }
+      : skipToken,
+    staleTime: 60_000,
+  });
+}
+
+// useLinkPreview says what linking groupId (none: a new group) to a
+// Microsoft 365 group would do.
+export function useLinkPreview(entraGroupId: string | undefined, groupId?: string) {
+  return useQuery({
+    queryKey: queryKeys.userGroupLinkPreview(entraGroupId ?? '', groupId ?? ''),
+    queryFn: entraGroupId
+      ? () =>
+          apiFetch<UserGroupLinkPreview>(
+            `/api/v1/usergroup-sources/microsoft/${encodeURIComponent(entraGroupId)}/preview${
+              groupId ? `?groupId=${encodeURIComponent(groupId)}` : ''
+            }`,
+          )
+      : skipToken,
+  });
 }
 
 // checkUserGroupHandle asks whether a handle is free (and well-formed).
@@ -111,6 +158,24 @@ export function useAddUserGroupMembers() {
 export function useRemoveUserGroupMember() {
   return useInvalidatingMutation(({ id, userId }: { id: string; userId: string }) =>
     apiFetch<UserGroupDetail>(`${groupPath(id)}/members/${encodeURIComponent(userId)}`, { method: 'DELETE' }),
+  );
+}
+
+export function useLinkUserGroup() {
+  return useInvalidatingMutation(({ id, entraGroupId }: { id: string; entraGroupId: string }) =>
+    apiFetch<UserGroupDetail>(`${groupPath(id)}/link`, { method: 'POST', body: JSON.stringify({ entraGroupId }) }),
+  );
+}
+
+export function useUnlinkUserGroup() {
+  return useInvalidatingMutation((id: string) => apiFetch<UserGroupDetail>(`${groupPath(id)}/unlink`, { method: 'POST' }));
+}
+
+// useSyncUserGroup syncs a linked group now; applyRemovals applies a sync
+// that was held for removing most of the group.
+export function useSyncUserGroup() {
+  return useInvalidatingMutation(({ id, applyRemovals }: { id: string; applyRemovals: boolean }) =>
+    apiFetch<UserGroupDetail>(`${groupPath(id)}/sync`, { method: 'POST', body: JSON.stringify({ applyRemovals }) }),
   );
 }
 

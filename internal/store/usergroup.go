@@ -22,11 +22,66 @@ import (
 
 func userGroupPK(id string) string           { return "USERGROUP#" + id }
 func userGroupHandlePK(handle string) string { return "UGHANDLE#" + handle }
+func entraGroupClaimPK(id string) string     { return "ENTRAGROUP#" + id }
 func allUserGroupsGSI2PK() string            { return "ALL_USERGROUPS" }
 
 // ErrUserGroupChanged is returned when a group write expected a version the
 // group no longer has (a concurrent edit won) or the group is gone.
 var ErrUserGroupChanged = errors.New("store: user group changed concurrently")
+
+// ErrEntraGroupLinked is returned when the Entra group a write links is
+// already linked to another user group: one Entra group feeds one group.
+var ErrEntraGroupLinked = errors.New("store: entra group already linked")
+
+// claimKind names what one transaction step guards, so a cancelled
+// transaction reports which condition failed.
+type claimKind int
+
+const (
+	claimRow claimKind = iota
+	claimHandle
+	claimEntra
+	claimOther
+)
+
+// transactGroup runs a group transaction, mapping a failed condition to the
+// error of the step that failed: the row's version (ErrUserGroupChanged), the
+// Entra claim (ErrEntraGroupLinked), or the handle claim or a bot's username
+// (ErrAlreadyExists).
+func (s *UserGroupStoreImpl) transactGroup(ctx context.Context, what string, items []types.TransactWriteItem, kinds []claimKind) error {
+	_, err := s.Client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items})
+	if err == nil {
+		return nil
+	}
+	var tce *types.TransactionCanceledException
+	if errors.As(err, &tce) {
+		for i, reason := range tce.CancellationReasons {
+			if reason.Code == nil || *reason.Code != "ConditionalCheckFailed" || i >= len(kinds) {
+				continue
+			}
+			switch kinds[i] {
+			case claimRow:
+				return ErrUserGroupChanged
+			case claimEntra:
+				return ErrEntraGroupLinked
+			default:
+				return ErrAlreadyExists
+			}
+		}
+	}
+	return fmt.Errorf("store: %s: %w", what, err)
+}
+
+func (s *UserGroupStoreImpl) claimEntraGroup(entraID, groupID string) types.TransactWriteItem {
+	return s.putNew(userGroupHandleItem{PK: entraGroupClaimPK(entraID), SK: metaSK(), GroupID: groupID})
+}
+
+func (s *UserGroupStoreImpl) deleteItem(pk string) types.TransactWriteItem {
+	return types.TransactWriteItem{Delete: &types.Delete{
+		TableName: aws.String(s.Table),
+		Key:       compositeKey(pk, metaSK()),
+	}}
+}
 
 type userGroupItem struct {
 	PK     string `dynamodbav:"PK"`
@@ -80,33 +135,34 @@ func (s *UserGroupStoreImpl) noBotNamed(handle string) types.TransactWriteItem {
 	}}
 }
 
-// CreateUserGroup writes a new group (version 1) and the claim on its handle,
-// all or nothing. ErrAlreadyExists when the handle is taken by a group or a
-// bot.
+// CreateUserGroup writes a new group (version 1), the claim on its handle
+// and, for a linked group, the claim on its Entra group — all or nothing.
+// ErrAlreadyExists when the handle is taken by a group or a bot;
+// ErrEntraGroupLinked when the Entra group is linked elsewhere.
 func (s *UserGroupStoreImpl) CreateUserGroup(ctx context.Context, g *model.UserGroupDetail) error {
 	g.Version = 1
-	_, err := s.Client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: []types.TransactWriteItem{
+	items := []types.TransactWriteItem{
 		s.putNew(newUserGroupItem(g)),
 		s.putNew(userGroupHandleItem{PK: userGroupHandlePK(g.Handle), SK: metaSK(), GroupID: g.ID}),
 		s.noBotNamed(g.Handle),
-	}})
-	if err != nil {
-		if isTransactionCancelledWithCondition(err) {
-			return ErrAlreadyExists
-		}
-		return fmt.Errorf("store: create user group: %w", err)
 	}
-	return nil
+	kinds := []claimKind{claimOther, claimHandle, claimHandle}
+	if g.EntraGroupID != "" {
+		items = append(items, s.claimEntraGroup(g.EntraGroupID, g.ID))
+		kinds = append(kinds, claimEntra)
+	}
+	return s.transactGroup(ctx, "create user group", items, kinds)
 }
 
-// UpdateUserGroup replaces a group's row when it still has expectedVersion,
-// and bumps g.Version. A changed handle takes its new claim and lets go of
-// previousHandle in the same transaction. ErrUserGroupChanged when the group
-// moved on (or is gone); ErrAlreadyExists when the new handle is taken.
-func (s *UserGroupStoreImpl) UpdateUserGroup(ctx context.Context, g *model.UserGroupDetail, previousHandle string, expectedVersion int64) error {
-	g.Version = expectedVersion + 1
+// UpdateUserGroup replaces a group's row when it still has the version of
+// previous (the row as read), and bumps g.Version. A changed handle or Entra
+// link moves its claim in the same transaction. ErrUserGroupChanged when the
+// group moved on (or is gone); ErrAlreadyExists when the new handle is taken;
+// ErrEntraGroupLinked when the new Entra group is linked elsewhere.
+func (s *UserGroupStoreImpl) UpdateUserGroup(ctx context.Context, g, previous *model.UserGroupDetail) error {
+	g.Version = previous.Version + 1
 	cond := mustExpr(expression.NewBuilder().WithCondition(
-		expression.Name("version").Equal(expression.Value(expectedVersion)),
+		expression.Name("version").Equal(expression.Value(previous.Version)),
 	).Build())
 	items := []types.TransactWriteItem{{Put: &types.Put{
 		TableName:                 aws.String(s.Table),
@@ -115,31 +171,30 @@ func (s *UserGroupStoreImpl) UpdateUserGroup(ctx context.Context, g *model.UserG
 		ExpressionAttributeNames:  cond.Names(),
 		ExpressionAttributeValues: cond.Values(),
 	}}}
-	if g.Handle != previousHandle {
+	kinds := []claimKind{claimRow}
+	if g.Handle != previous.Handle {
 		items = append(items,
 			s.putNew(userGroupHandleItem{PK: userGroupHandlePK(g.Handle), SK: metaSK(), GroupID: g.ID}),
 			s.noBotNamed(g.Handle),
-			types.TransactWriteItem{Delete: &types.Delete{
-				TableName: aws.String(s.Table),
-				Key:       compositeKey(userGroupHandlePK(previousHandle), metaSK()),
-			}},
+			s.deleteItem(userGroupHandlePK(previous.Handle)),
 		)
+		kinds = append(kinds, claimHandle, claimHandle, claimOther)
 	}
-	_, err := s.Client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items})
-	if err == nil {
-		return nil
-	}
-	g.Version = expectedVersion
-	var tce *types.TransactionCanceledException
-	if errors.As(err, &tce) && len(tce.CancellationReasons) > 0 {
-		if code := tce.CancellationReasons[0].Code; code != nil && *code == "ConditionalCheckFailed" {
-			return ErrUserGroupChanged
+	if g.EntraGroupID != previous.EntraGroupID {
+		if g.EntraGroupID != "" {
+			items = append(items, s.claimEntraGroup(g.EntraGroupID, g.ID))
+			kinds = append(kinds, claimEntra)
 		}
-		if isTransactionCancelledWithCondition(err) {
-			return ErrAlreadyExists
+		if previous.EntraGroupID != "" {
+			items = append(items, s.deleteItem(entraGroupClaimPK(previous.EntraGroupID)))
+			kinds = append(kinds, claimOther)
 		}
 	}
-	return fmt.Errorf("store: update user group: %w", err)
+	if err := s.transactGroup(ctx, "update user group", items, kinds); err != nil {
+		g.Version = previous.Version
+		return err
+	}
+	return nil
 }
 
 // GetUserGroup reads one group, strongly consistent: membership read right

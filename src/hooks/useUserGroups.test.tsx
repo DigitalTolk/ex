@@ -8,6 +8,12 @@ const mockApiFetch = vi.fn();
 vi.mock('@/lib/api', () => ({ apiFetch: (...args: unknown[]) => mockApiFetch(...args) }));
 
 import {
+  useEntraGroupSearch,
+  useLinkPreview,
+  useLinkUserGroup,
+  useSyncUserGroup,
+  useUnlinkUserGroup,
+  useUserGroupPermissions,
   checkUserGroupHandle,
   useAddUserGroupMembers,
   useCanManageUserGroups,
@@ -128,5 +134,51 @@ describe('user-group mutations', () => {
     ]);
     expect(spy).toHaveBeenCalledTimes(6);
     expect(spy).toHaveBeenCalledWith({ queryKey: queryKeys.userGroupsAll() });
+  });
+});
+
+describe('Microsoft 365 links', () => {
+  it('reads both permissions, and none when the answer is missing', async () => {
+    mockApiFetch.mockResolvedValueOnce({ canManage: true, canLinkMicrosoft: true });
+    const perms = renderHook(() => useUserGroupPermissions(), { wrapper });
+    await waitFor(() => expect(perms.result.current).toEqual({ canManage: true, canLinkMicrosoft: true }));
+  });
+
+  it('searches Microsoft 365 groups, and not for a blank query', async () => {
+    const blank = renderHook(() => useEntraGroupSearch('  '), { wrapper });
+    expect(blank.result.current.fetchStatus).toBe('idle');
+    mockApiFetch.mockResolvedValueOnce([{ id: 'e-1', displayName: 'On call', kind: 'security' }]).mockResolvedValueOnce(undefined);
+    const found = renderHook(() => useEntraGroupSearch(' on call '), { wrapper });
+    await waitFor(() => expect(found.result.current.data).toHaveLength(1));
+    expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/usergroup-sources/microsoft?q=on%20call');
+    const odd = renderHook(() => useEntraGroupSearch('odd'), { wrapper });
+    await waitFor(() => expect(odd.result.current.data).toEqual([]));
+  });
+
+  it('previews a link for a new or an existing group', async () => {
+    const none = renderHook(() => useLinkPreview(undefined), { wrapper });
+    expect(none.result.current.fetchStatus).toBe('idle');
+    mockApiFetch.mockResolvedValue({ users: 1, toAdd: 1, toRemove: 0, skipped: 0, overLimit: false });
+    const fresh = renderHook(() => useLinkPreview('e 1'), { wrapper });
+    await waitFor(() => expect(fresh.result.current.data?.toAdd).toBe(1));
+    expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/usergroup-sources/microsoft/e%201/preview');
+    const existing = renderHook(() => useLinkPreview('e-1', 'group 1'), { wrapper });
+    await waitFor(() => expect(existing.result.current.data).toBeDefined());
+    expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/usergroup-sources/microsoft/e-1/preview?groupId=group%201');
+  });
+
+  it('links, unlinks and syncs', async () => {
+    mockApiFetch.mockResolvedValue(ONCALL);
+    const { result } = renderHook(() => ({ link: useLinkUserGroup(), unlink: useUnlinkUserGroup(), sync: useSyncUserGroup() }), { wrapper });
+    await act(async () => {
+      await result.current.link.mutateAsync({ id: 'group-1', entraGroupId: 'e-1' });
+      await result.current.unlink.mutateAsync('group-1');
+      await result.current.sync.mutateAsync({ id: 'group-1', applyRemovals: true });
+    });
+    expect(mockApiFetch.mock.calls).toEqual([
+      ['/api/v1/usergroups/group-1/link', { method: 'POST', body: JSON.stringify({ entraGroupId: 'e-1' }) }],
+      ['/api/v1/usergroups/group-1/unlink', { method: 'POST' }],
+      ['/api/v1/usergroups/group-1/sync', { method: 'POST', body: JSON.stringify({ applyRemovals: true }) }],
+    ]);
   });
 });

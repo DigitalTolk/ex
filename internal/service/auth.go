@@ -42,6 +42,8 @@ type ChannelJoiner interface {
 
 // AuthService handles authentication, token management, and invitations.
 type AuthService struct {
+	// entraUsers records signed-in users' Entra object IDs (SetEntraUserNoter).
+	entraUsers   EntraUserNoter
 	users        UserStore
 	tokens       TokenStore
 	invites      InviteStore
@@ -208,6 +210,16 @@ func (s *AuthService) SetDirectory(d DirectoryLookup) { s.directory = d }
 // a directory sync changes a profile. Optional.
 func (s *AuthService) SetPublisher(p Publisher) { s.publisher = p }
 
+// EntraUserNoter records a signed-in user's Entra object ID for the user
+// groups linked to Microsoft 365 (UserGroupService).
+type EntraUserNoter interface {
+	NoteEntraUser(ctx context.Context, objectID, userID string)
+}
+
+// SetEntraUserNoter wires the sign-in hook of user groups linked to
+// Microsoft 365. Optional: only with the integration configured.
+func (s *AuthService) SetEntraUserNoter(n EntraUserNoter) { s.entraUsers = n }
+
 func (s *AuthService) indexUser(ctx context.Context, u *model.User) {
 	IndexUser(ctx, s.indexer, u)
 }
@@ -283,6 +295,9 @@ func (s *AuthService) HandleOIDCCallback(ctx context.Context, code, state, nonce
 
 	// Ensure #general exists and the user is a member.
 	s.ensureGeneralChannel(ctx, user)
+	if s.entraUsers != nil {
+		s.entraUsers.NoteEntraUser(ctx, user.MSObjectID, user.ID)
+	}
 
 	accessToken, refreshTokenRaw, err = s.issueTokens(ctx, user)
 	if err != nil {

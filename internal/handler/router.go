@@ -342,6 +342,12 @@ func NewRouter(d *Deps) http.Handler {
 		mux.Handle("POST /api/v1/usergroups/{id}/disable", middleware.WrapFunc(userGroupH.Disable, authMW, writeLimit))
 		mux.Handle("GET /api/v1/usergroup-handles/{handle}", middleware.WrapFunc(userGroupH.HandleAvailable, authMW))
 		mux.Handle("GET /api/v1/usergroup-permissions", middleware.WrapFunc(userGroupH.Permissions, authMW))
+		// Microsoft 365 links (admins; the service decides).
+		mux.Handle("GET /api/v1/usergroup-sources/microsoft", middleware.WrapFunc(userGroupH.SearchMicrosoft, authMW))
+		mux.Handle("GET /api/v1/usergroup-sources/microsoft/{entraId}/preview", middleware.WrapFunc(userGroupH.PreviewMicrosoft, authMW))
+		mux.Handle("POST /api/v1/usergroups/{id}/link", middleware.WrapFunc(userGroupH.Link, authMW, writeLimit))
+		mux.Handle("POST /api/v1/usergroups/{id}/unlink", middleware.WrapFunc(userGroupH.Unlink, authMW, writeLimit))
+		mux.Handle("POST /api/v1/usergroups/{id}/sync", middleware.WrapFunc(userGroupH.Sync, authMW, writeLimit))
 		mux.Handle("GET /api/v1/users/{id}/usergroups", middleware.WrapFunc(userGroupH.ForUser, authMW))
 	}
 	if botH != nil {

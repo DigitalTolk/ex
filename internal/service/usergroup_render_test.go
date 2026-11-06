@@ -97,6 +97,7 @@ func TestMentionDirectoryResolvesUserGroups(t *testing.T) {
 	if got, err := d.ResolveUserGroups(context.Background(), nil); err != nil || len(got) != 0 {
 		t.Fatalf("ResolveUserGroups(nil) = %v, %v", got, err)
 	}
+	f.copies.groups = map[string]*model.UserGroupDetail{} // not in the shared copy: read from the store
 	f.store.batchErr = errors.New("boom")
 	if _, err := d.ResolveUserGroups(context.Background(), []string{g.ID}); err == nil {
 		t.Fatal("ResolveUserGroups swallowed a lookup error")

@@ -2687,6 +2687,82 @@ export interface UserGroup {
   createdBy: string;
   createdAt: string /* RFC3339 */;
   updatedAt: string /* RFC3339 */;
+  /**
+   * EntraGroupID links the group to a Microsoft Entra ID group: its members
+   * then come from Entra (synced, read-only in ex). Empty: members are
+   * managed in ex.
+   */
+  entraGroupId?: string;
+  /**
+   * EntraGroupName is the linked group's display name, refreshed on link and
+   * on Sync now.
+   */
+  entraGroupName?: string;
+  /**
+   * SyncedAt is when the linked group last synced successfully.
+   */
+  syncedAt?: string /* RFC3339 */;
+  /**
+   * SyncSkipped counts the Entra members who aren't group members in ex
+   * (no ex account yet, a guest, a bot or deactivated).
+   */
+  syncSkipped?: number /* int */;
+  /**
+   * SyncState is why the last sync didn't apply ("" when it did).
+   */
+  syncState?: UserGroupSyncState;
+  /**
+   * PendingRemoval is how many members a held sync would remove.
+   */
+  pendingRemoval?: number /* int */;
+}
+/**
+ * UserGroupSyncState says why a linked group's last sync didn't apply.
+ */
+export type UserGroupSyncState = string;
+/**
+ * UserGroupSyncOversize: the Entra group has more members than a user
+ * group holds; members stay as last synced.
+ */
+export const UserGroupSyncOversize: UserGroupSyncState = "paused-oversize";
+/**
+ * UserGroupSyncHeld: the sync would remove most members (or all of them);
+ * it waits for an admin to apply it.
+ */
+export const UserGroupSyncHeld: UserGroupSyncState = "held-removal";
+/**
+ * UserGroupSyncSourceMissing: the Entra group is gone or unreadable; the
+ * group was disabled with its members kept.
+ */
+export const UserGroupSyncSourceMissing: UserGroupSyncState = "source-missing";
+/**
+ * UserGroupSyncError: Microsoft Graph failed; members stay.
+ */
+export const UserGroupSyncError: UserGroupSyncState = "error";
+/**
+ * EntraGroup is a Microsoft Entra ID group as the link picker shows it.
+ */
+export interface EntraGroup {
+  id: string;
+  displayName: string;
+  mail?: string;
+  /**
+   * Kind is "m365", "security" or "dynamic".
+   */
+  kind: string;
+}
+/**
+ * UserGroupLinkPreview is what linking a group to an Entra group would do.
+ */
+export interface UserGroupLinkPreview {
+  /**
+   * Users is how many users the Entra group has (nested groups included).
+   */
+  users: number /* int */;
+  toAdd: number /* int */;
+  toRemove: number /* int */;
+  skipped: number /* int */;
+  overLimit: boolean;
 }
 /**
  * UserGroupDetail is a group with its member IDs. Version is the store's

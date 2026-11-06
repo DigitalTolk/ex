@@ -5,7 +5,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
-import { checkUserGroupHandle, useCreateUserGroup, useUpdateUserGroup } from '@/hooks/useUserGroups';
+import { checkUserGroupHandle, useCreateUserGroup, useLinkPreview, useUpdateUserGroup } from '@/hooks/useUserGroups';
 import {
   MAX_USER_GROUP_DESCRIPTION_CHARS,
   MAX_USER_GROUP_NAME_CHARS,
@@ -15,12 +15,17 @@ import {
 } from '@/lib/limits';
 import { errorMessage } from '@/lib/error-message';
 import { queryKeys } from '@/lib/query-keys';
-import type { UserGroupDetail } from '@/types/generated';
+import { linkSummary } from '@/lib/user-groups';
+import type { EntraGroup, UserGroupDetail } from '@/types/generated';
+import { EntraGroupPicker } from './EntraGroupPicker';
 import { MemberPicker } from './MemberPicker';
 
 interface Props {
   // The group to edit; absent → create a new one.
   group?: UserGroupDetail;
+  // Offer creating the group from a Microsoft 365 group (admins, with the
+  // integration configured).
+  canLinkMicrosoft?: boolean;
   onClose: () => void;
   onSaved?: (group: UserGroupDetail) => void;
 }
@@ -37,8 +42,12 @@ function handleStateOf(unchanged: boolean, wellFormed: boolean, checking: boolea
 
 // UserGroupFormDialog creates a user group (name, handle, description, then
 // its members) or edits an existing group's details.
-export function UserGroupFormDialog({ group, onClose, onSaved }: Props) {
+export function UserGroupFormDialog({ group, canLinkMicrosoft = false, onClose, onSaved }: Props) {
   const editing = !!group;
+  const [source, setSource] = useState<'manual' | 'microsoft'>('manual');
+  const [entraGroup, setEntraGroup] = useState<EntraGroup | null>(null);
+  const fromMicrosoft = source === 'microsoft';
+  const { data: preview } = useLinkPreview(fromMicrosoft ? entraGroup?.id : undefined);
   const [name, setName] = useState(group?.name ?? '');
   const [handle, setHandle] = useState(group?.handle ?? '');
   const [handleEdited, setHandleEdited] = useState(editing);
@@ -69,7 +78,8 @@ export function UserGroupFormDialog({ group, onClose, onSaved }: Props) {
   const nameOk = name.trim() !== '' && countCodepoints(name.trim()) <= MAX_USER_GROUP_NAME_CHARS;
   const descOk = countCodepoints(description.trim()) <= MAX_USER_GROUP_DESCRIPTION_CHARS;
   const handleOk = isValidUserGroupHandle(effectiveHandle) && handleState !== 'taken';
-  const canSave = nameOk && descOk && handleOk && !saving;
+  const sourceOk = !fromMicrosoft || (!!preview && !preview.overLimit);
+  const canSave = nameOk && descOk && handleOk && sourceOk && !saving;
 
   const save = () => {
     setError('');
@@ -86,7 +96,9 @@ export function UserGroupFormDialog({ group, onClose, onSaved }: Props) {
       return;
     }
     create.mutate(
-      { handle: effectiveHandle, name: name.trim(), description: description.trim(), memberIds },
+      fromMicrosoft
+        ? { handle: effectiveHandle, name: name.trim(), description: description.trim(), memberIds: [], entraGroupId: entraGroup?.id }
+        : { handle: effectiveHandle, name: name.trim(), description: description.trim(), memberIds },
       { onSuccess, onError },
     );
   };
@@ -106,6 +118,35 @@ export function UserGroupFormDialog({ group, onClose, onSaved }: Props) {
           <DialogTitle>{editing ? 'Edit user group' : 'Create user group'}</DialogTitle>
         </DialogHeader>
         <div className="space-y-4">
+          {!editing && canLinkMicrosoft && (
+            <fieldset className="space-y-2">
+              <legend className="text-sm font-medium">Members come from</legend>
+              <label className="flex items-center gap-2 text-sm">
+                <input type="radio" name="usergroup-source" checked={!fromMicrosoft} onChange={() => setSource('manual')} />
+                Added manually in ex
+              </label>
+              <label className="flex items-center gap-2 text-sm">
+                <input type="radio" name="usergroup-source" checked={fromMicrosoft} onChange={() => setSource('microsoft')} />
+                A Microsoft 365 group
+              </label>
+            </fieldset>
+          )}
+          {fromMicrosoft && (
+            <div className="space-y-2">
+              <EntraGroupPicker
+                value={entraGroup}
+                onChange={(g) => {
+                  setEntraGroup(g);
+                  if (name.trim() === '') setName(g.displayName);
+                }}
+              />
+              {preview && (
+                <p className="text-sm text-muted-foreground" data-testid="link-summary">
+                  {linkSummary(preview)}
+                </p>
+              )}
+            </div>
+          )}
           <div className="space-y-2">
             <Label htmlFor="usergroup-name">Name</Label>
             <Input id="usergroup-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="On-call engineers" />
@@ -137,7 +178,7 @@ export function UserGroupFormDialog({ group, onClose, onSaved }: Props) {
               placeholder="Who gets paged for production incidents"
             />
           </div>
-          {!editing && (
+          {!editing && !fromMicrosoft && (
             <div className="space-y-2">
               <Label>Members</Label>
               <MemberPicker selected={memberIds} onChange={setMemberIds} />

@@ -78,7 +78,25 @@ type DirectorySyncService struct {
 	// again.
 	accounts DirectoryAccountLister
 	status   DirectoryStatusSetter
+	// userGroups resyncs the user groups linked to Microsoft 365 after each
+	// status pass (SetUserGroupSync); nil leaves them alone.
+	userGroups LinkedUserGroupSync
 }
+
+// LinkedUserGroupSync is what the status sweep drives for user groups linked
+// to Microsoft 365 (UserGroupService).
+type LinkedUserGroupSync interface {
+	ReplaceEntraIndex(ctx context.Context, byObject map[string]string)
+	SyncLinkedGroups(ctx context.Context, deadline time.Time)
+}
+
+// SetUserGroupSync makes the status sweep resync linked user groups, after
+// its own pass (so accounts it deactivated are already left out).
+func (s *DirectorySyncService) SetUserGroupSync(g LinkedUserGroupSync) { s.userGroups = g }
+
+// userGroupSyncBudget is the share of the interval linked-group syncing may
+// use, so a slow run never overlaps the next.
+const userGroupSyncBudget = 0.8
 
 // SetStatusSync wires offboarding: where account standing comes from and
 // what applies it.
@@ -249,8 +267,10 @@ func (s *DirectorySyncService) SweepStatus(ctx context.Context, interval time.Du
 		return
 	}
 
+	start := time.Now()
 	var checked, reactivated int
 	var offboarded []*model.User
+	byObject := map[string]string{}
 	cursor := ""
 	for {
 		users, next, err := s.users.ListUsers(ctx, directorySyncPageSize, cursor)
@@ -259,6 +279,9 @@ func (s *DirectorySyncService) SweepStatus(ctx context.Context, interval time.Du
 			return
 		}
 		for _, u := range users {
+			if u.MSObjectID != "" {
+				byObject[u.MSObjectID] = u.ID
+			}
 			if u.IsBot || u.AuthProvider != model.AuthProviderOIDC || u.MSObjectID == "" {
 				continue
 			}
@@ -291,6 +314,10 @@ func (s *DirectorySyncService) SweepStatus(ctx context.Context, interval time.Du
 	if deactivated > 0 || reactivated > 0 {
 		slog.InfoContext(ctx, "directory status: sweep complete",
 			"checked", checked, "deactivated", deactivated, "reactivated", reactivated)
+	}
+	if s.userGroups != nil {
+		s.userGroups.ReplaceEntraIndex(ctx, byObject)
+		s.userGroups.SyncLinkedGroups(ctx, start.Add(time.Duration(float64(interval)*userGroupSyncBudget)))
 	}
 }
 

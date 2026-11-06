@@ -20,6 +20,62 @@ type UserGroup struct {
 	CreatedBy   string    `json:"createdBy" dynamodbav:"createdBy"`
 	CreatedAt   time.Time `json:"createdAt" dynamodbav:"createdAt"`
 	UpdatedAt   time.Time `json:"updatedAt" dynamodbav:"updatedAt"`
+
+	// EntraGroupID links the group to a Microsoft Entra ID group: its members
+	// then come from Entra (synced, read-only in ex). Empty: members are
+	// managed in ex.
+	EntraGroupID string `json:"entraGroupId,omitempty" dynamodbav:"entraGroupId,omitempty"`
+	// EntraGroupName is the linked group's display name, refreshed on link and
+	// on Sync now.
+	EntraGroupName string `json:"entraGroupName,omitempty" dynamodbav:"entraGroupName,omitempty"`
+	// SyncedAt is when the linked group last synced successfully.
+	SyncedAt *time.Time `json:"syncedAt,omitempty" dynamodbav:"syncedAt,omitempty"`
+	// SyncSkipped counts the Entra members who aren't group members in ex
+	// (no ex account yet, a guest, a bot or deactivated).
+	SyncSkipped int `json:"syncSkipped,omitempty" dynamodbav:"syncSkipped,omitempty"`
+	// SyncState is why the last sync didn't apply ("" when it did).
+	SyncState UserGroupSyncState `json:"syncState,omitempty" dynamodbav:"syncState,omitempty"`
+	// PendingRemoval is how many members a held sync would remove.
+	PendingRemoval int `json:"pendingRemoval,omitempty" dynamodbav:"pendingRemoval,omitempty"`
+}
+
+// UserGroupSyncState says why a linked group's last sync didn't apply.
+type UserGroupSyncState string
+
+const (
+	// UserGroupSyncOversize: the Entra group has more members than a user
+	// group holds; members stay as last synced.
+	UserGroupSyncOversize UserGroupSyncState = "paused-oversize"
+	// UserGroupSyncHeld: the sync would remove most members (or all of them);
+	// it waits for an admin to apply it.
+	UserGroupSyncHeld UserGroupSyncState = "held-removal"
+	// UserGroupSyncSourceMissing: the Entra group is gone or unreadable; the
+	// group was disabled with its members kept.
+	UserGroupSyncSourceMissing UserGroupSyncState = "source-missing"
+	// UserGroupSyncError: Microsoft Graph failed; members stay.
+	UserGroupSyncError UserGroupSyncState = "error"
+)
+
+// Linked reports whether the group's members come from Entra.
+func (g UserGroup) Linked() bool { return g.EntraGroupID != "" }
+
+// EntraGroup is a Microsoft Entra ID group as the link picker shows it.
+type EntraGroup struct {
+	ID          string `json:"id"`
+	DisplayName string `json:"displayName"`
+	Mail        string `json:"mail,omitempty"`
+	// Kind is "m365", "security" or "dynamic".
+	Kind string `json:"kind"`
+}
+
+// UserGroupLinkPreview is what linking a group to an Entra group would do.
+type UserGroupLinkPreview struct {
+	// Users is how many users the Entra group has (nested groups included).
+	Users     int  `json:"users"`
+	ToAdd     int  `json:"toAdd"`
+	ToRemove  int  `json:"toRemove"`
+	Skipped   int  `json:"skipped"`
+	OverLimit bool `json:"overLimit"`
 }
 
 // UserGroupDetail is a group with its member IDs. Version is the store's

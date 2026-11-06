@@ -50,6 +50,10 @@ type chat struct {
 	messageLinks  *service.MessageLinkService
 }
 
+// userGroupCopyTTL bounds a user group's Redis copy whose refresh was lost;
+// every write refreshes it.
+const userGroupCopyTTL = 24 * time.Hour
+
 // newGraphClient is a seam over the Microsoft Graph constructor: the
 // configuration exposes no endpoint overrides, so tests point the client at a
 // local server through it.
@@ -193,6 +197,8 @@ func (a *App) buildChat(ctx context.Context) error {
 	// expands them, pills and alert text show the current handle, and a
 	// demotion to guest leaves every group.
 	c.userGroups = service.NewUserGroupService(store.NewUserGroupStore(in.db), c.users, c.settings, botStore, in.pubsub)
+	// A group mention reads the group from Redis; the store stays the source.
+	c.userGroups.SetCopies(cache.NewUserGroupCopies(in.cache.Client(), userGroupCopyTTL))
 	c.messages.SetUserGroups(c.userGroups)
 	c.mentions.SetUserGroups(c.userGroups)
 	c.users.SetUserGroups(c.userGroups)
@@ -224,6 +230,19 @@ func (a *App) buildChat(ctx context.Context) error {
 		// deactivated (sessions ended) by the next status sweep, minutes
 		// later, and reactivated once it can sign in again.
 		c.directorySync.SetStatusSync(directory, c.users)
+		// User groups linked to Microsoft 365: members synced from Entra by
+		// the same status sweep; a sign-in records its user for the next sync.
+		c.userGroups.SetMicrosoft(service.UserGroupMicrosoftDeps{
+			Directory: service.NewMSGroupDirectory(graph),
+			Index:     cache.NewEntraUserIndex(in.cache.Client()),
+			Accounts:  in.users,
+			Locker:    in.cache,
+			Cache:     in.cache,
+			IndexTTL:  3 * cfg.MSStatusSyncInterval,
+			NewToken:  store.NewID,
+		})
+		c.directorySync.SetUserGroupSync(c.userGroups)
+		c.auth.SetEntraUserNoter(c.userGroups)
 		c.commands.Register(service.NewTeamsMeetingCommand(service.TeamsMeetingDeps{
 			Meetings:      graph,
 			Sender:        c.messages,

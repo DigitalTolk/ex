@@ -30,8 +30,8 @@ func (s *handlerUserGroupStore) CreateUserGroup(_ context.Context, g *model.User
 	return nil
 }
 
-func (s *handlerUserGroupStore) UpdateUserGroup(_ context.Context, g *model.UserGroupDetail, previous string, _ int64) error {
-	delete(s.handles, previous)
+func (s *handlerUserGroupStore) UpdateUserGroup(_ context.Context, g, previous *model.UserGroupDetail) error {
+	delete(s.handles, previous.Handle)
 	c := *g
 	s.groups[g.ID], s.handles[g.Handle] = &c, g.ID
 	return nil
@@ -225,6 +225,114 @@ func TestUserGroupHandler_Permissions(t *testing.T) {
 		rec := f.do(http.MethodGet, "/api/v1/usergroup-permissions", token, "")
 		if rec.Code != http.StatusOK || decodeBody[map[string]bool](t, rec)["canManage"] != want {
 			t.Errorf("permissions = %d %s, want canManage %v", rec.Code, rec.Body.String(), want)
+		}
+	}
+}
+
+// --- Microsoft 365 links ---
+
+type handlerEntraDirectory struct{}
+
+func (handlerEntraDirectory) SearchGroups(context.Context, string) ([]model.EntraGroup, error) {
+	return []model.EntraGroup{{ID: "entra-oncall", DisplayName: "On-call engineers", Kind: "security"}}, nil
+}
+
+func (handlerEntraDirectory) GetGroup(_ context.Context, id string) (*model.EntraGroup, error) {
+	if id != "entra-oncall" {
+		return nil, service.ErrEntraGroupNotFound
+	}
+	return &model.EntraGroup{ID: id, DisplayName: "On-call engineers", Kind: "security"}, nil
+}
+
+func (handlerEntraDirectory) GroupUserIDs(_ context.Context, id string, _ int) ([]string, bool, error) {
+	if id != "entra-oncall" {
+		return nil, false, service.ErrEntraGroupNotFound
+	}
+	return []string{"o-bob", "o-stranger"}, false, nil
+}
+
+type handlerEntraIndex struct{}
+
+func (handlerEntraIndex) Lookup(context.Context, []string) (map[string]string, bool, error) {
+	return map[string]string{"o-bob": "u-bob"}, true, nil
+}
+func (handlerEntraIndex) Replace(context.Context, map[string]string, time.Duration) error { return nil }
+func (handlerEntraIndex) Add(context.Context, string, string) error                        { return nil }
+
+type handlerLocker struct{}
+
+func (handlerLocker) AcquireLock(context.Context, string, string, time.Duration) (bool, error) {
+	return true, nil
+}
+func (handlerLocker) ReleaseLock(context.Context, string, string) error { return nil }
+
+func newLinkedAPIFixture(t *testing.T) *userGroupAPIFixture {
+	t.Helper()
+	f := newUserGroupAPIFixture(t)
+	f.handler.svc.SetMicrosoft(service.UserGroupMicrosoftDeps{
+		Directory: handlerEntraDirectory{}, Index: handlerEntraIndex{}, Accounts: newMockUserStore(),
+		Locker: handlerLocker{}, Cache: newMockCache(), IndexTTL: time.Hour, NewToken: func() string { return "t" },
+	})
+	return f
+}
+
+func TestUserGroupHandler_MicrosoftLinkFlow(t *testing.T) {
+	f := newLinkedAPIFixture(t)
+
+	rec := f.do(http.MethodGet, "/api/v1/usergroup-permissions", f.adminJWT, "")
+	if perms := decodeBody[map[string]bool](t, rec); !perms["canLinkMicrosoft"] {
+		t.Fatalf("admin permissions = %v", perms)
+	}
+	rec = f.do(http.MethodGet, "/api/v1/usergroup-sources/microsoft?q=on", f.adminJWT, "")
+	if found := decodeBody[[]model.EntraGroup](t, rec); rec.Code != http.StatusOK || len(found) != 1 || found[0].ID != "entra-oncall" {
+		t.Fatalf("search = %d %s", rec.Code, rec.Body.String())
+	}
+	rec = f.do(http.MethodGet, "/api/v1/usergroup-sources/microsoft/entra-oncall/preview", f.adminJWT, "")
+	if p := decodeBody[model.UserGroupLinkPreview](t, rec); rec.Code != http.StatusOK || p.Users != 2 || p.ToAdd != 1 || p.Skipped != 1 {
+		t.Fatalf("preview = %d %s", rec.Code, rec.Body.String())
+	}
+
+	rec = f.do(http.MethodPost, "/api/v1/usergroups", f.adminJWT, `{"handle":"oncall","name":"On-call","memberIds":["u-member"]}`)
+	id := decodeBody[model.UserGroupDetail](t, rec).ID
+	rec = f.do(http.MethodPost, "/api/v1/usergroups/"+id+"/link", f.adminJWT, `{"entraGroupId":"entra-oncall"}`)
+	if g := decodeBody[model.UserGroupDetail](t, rec); rec.Code != http.StatusOK || g.EntraGroupID != "entra-oncall" || !slices.Equal(g.MemberIDs, []string{"u-bob"}) {
+		t.Fatalf("link = %d %s", rec.Code, rec.Body.String())
+	}
+	rec = f.do(http.MethodPost, "/api/v1/usergroups/"+id+"/members", f.adminJWT, `{"userIds":["u-member"]}`)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("adding to a linked group = %d %s, want 409", rec.Code, rec.Body.String())
+	}
+	rec = f.do(http.MethodPost, "/api/v1/usergroups/"+id+"/sync", f.adminJWT, `{"applyRemovals":false}`)
+	if rec.Code != http.StatusOK || decodeBody[model.UserGroupDetail](t, rec).SyncedAt == nil {
+		t.Fatalf("sync = %d %s", rec.Code, rec.Body.String())
+	}
+	rec = f.do(http.MethodPost, "/api/v1/usergroups/"+id+"/unlink", f.adminJWT, "")
+	if g := decodeBody[model.UserGroupDetail](t, rec); rec.Code != http.StatusOK || g.Linked() {
+		t.Fatalf("unlink = %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestUserGroupHandler_MicrosoftRefusals(t *testing.T) {
+	f := newLinkedAPIFixture(t)
+	rec := f.do(http.MethodPost, "/api/v1/usergroups", f.adminJWT, `{"handle":"oncall","name":"On-call"}`)
+	id := decodeBody[model.UserGroupDetail](t, rec).ID
+
+	cases := []struct {
+		name, method, path, token, body string
+		want                            int
+	}{
+		{"member searches", http.MethodGet, "/api/v1/usergroup-sources/microsoft?q=x", f.memberJWT, "", http.StatusForbidden},
+		{"member previews", http.MethodGet, "/api/v1/usergroup-sources/microsoft/entra-oncall/preview", f.memberJWT, "", http.StatusForbidden},
+		{"missing Entra group", http.MethodGet, "/api/v1/usergroup-sources/microsoft/entra-gone/preview", f.adminJWT, "", http.StatusNotFound},
+		{"bad link body", http.MethodPost, "/api/v1/usergroups/" + id + "/link", f.adminJWT, `{`, http.StatusBadRequest},
+		{"member links", http.MethodPost, "/api/v1/usergroups/" + id + "/link", f.memberJWT, `{"entraGroupId":"entra-oncall"}`, http.StatusForbidden},
+		{"member unlinks", http.MethodPost, "/api/v1/usergroups/" + id + "/unlink", f.memberJWT, "", http.StatusForbidden},
+		{"bad sync body", http.MethodPost, "/api/v1/usergroups/" + id + "/sync", f.adminJWT, ``, http.StatusBadRequest},
+		{"sync an unlinked group", http.MethodPost, "/api/v1/usergroups/" + id + "/sync", f.adminJWT, `{}`, http.StatusBadRequest},
+	}
+	for _, tc := range cases {
+		if rec := f.do(tc.method, tc.path, tc.token, tc.body); rec.Code != tc.want {
+			t.Errorf("%s: %d %s, want %d", tc.name, rec.Code, rec.Body.String(), tc.want)
 		}
 	}
 }

@@ -102,6 +102,10 @@ export const queryKeys = {
   userGroupPermissions: () => ['usergroups', 'permissions'] as const,
   // Whether a handle is free (the create/edit dialog asks as you type).
   userGroupHandle: (handle: string) => ['usergroups', 'handle', handle] as const,
+  // Microsoft 365 group search (link picker) and what a link would do.
+  entraGroupSearch: (query: string) => ['usergroups', 'entra-search', query] as const,
+  userGroupLinkPreview: (entraGroupId: string, groupId: string) =>
+    ['usergroups', 'link-preview', entraGroupId, groupId] as const,
   // Projects page (products + design references). project(key) nests under
   // projects() so one invalidation refreshes the list and every open detail.
   projects: () => ['projects'] as const,

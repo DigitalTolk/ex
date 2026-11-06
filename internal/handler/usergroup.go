@@ -60,7 +60,76 @@ func (h *UserGroupHandler) HandleAvailable(w http.ResponseWriter, r *http.Reques
 // Permissions answers GET /api/v1/usergroup-permissions: whether the caller
 // may create and edit groups (the directory shows its controls by it).
 func (h *UserGroupHandler) Permissions(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]bool{"canManage": h.svc.CanManage(r.Context(), userGroupActor(r))})
+	actor := userGroupActor(r)
+	writeJSON(w, http.StatusOK, map[string]bool{
+		"canManage":        h.svc.CanManage(r.Context(), actor),
+		"canLinkMicrosoft": h.svc.CanLinkMicrosoft(actor),
+	})
+}
+
+// SearchMicrosoft answers GET /api/v1/usergroup-sources/microsoft?q=.
+func (h *UserGroupHandler) SearchMicrosoft(w http.ResponseWriter, r *http.Request) {
+	groups, err := h.svc.SearchEntraGroups(r.Context(), userGroupActor(r), r.URL.Query().Get("q"))
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, groups)
+}
+
+// PreviewMicrosoft answers GET
+// /api/v1/usergroup-sources/microsoft/{entraId}/preview?groupId=.
+func (h *UserGroupHandler) PreviewMicrosoft(w http.ResponseWriter, r *http.Request) {
+	preview, err := h.svc.PreviewLink(r.Context(), userGroupActor(r), r.PathValue("entraId"), r.URL.Query().Get("groupId"))
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, preview)
+}
+
+// Link answers POST /api/v1/usergroups/{id}/link.
+func (h *UserGroupHandler) Link(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		EntraGroupID string `json:"entraGroupId"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
+		return
+	}
+	g, err := h.svc.Link(r.Context(), userGroupActor(r), r.PathValue("id"), body.EntraGroupID)
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, g)
+}
+
+// Unlink answers POST /api/v1/usergroups/{id}/unlink.
+func (h *UserGroupHandler) Unlink(w http.ResponseWriter, r *http.Request) {
+	g, err := h.svc.Unlink(r.Context(), userGroupActor(r), r.PathValue("id"))
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, g)
+}
+
+// Sync answers POST /api/v1/usergroups/{id}/sync.
+func (h *UserGroupHandler) Sync(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ApplyRemovals bool `json:"applyRemovals"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
+		return
+	}
+	g, err := h.svc.SyncNow(r.Context(), userGroupActor(r), r.PathValue("id"), body.ApplyRemovals)
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, g)
 }
 
 // ForUser answers GET /api/v1/users/{id}/usergroups.

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,8 +20,10 @@ import (
 // fakeUserGroupStore keeps groups in memory with the real store's version and
 // handle-claim semantics.
 type fakeUserGroupStore struct {
+	mu        sync.Mutex
 	groups    map[string]*model.UserGroupDetail
 	handles   map[string]string
+	entra     map[string]string
 	createErr error
 	updateErr error
 	// conflicts makes the next N updates fail as a concurrent write would.
@@ -33,7 +36,7 @@ type fakeUserGroupStore struct {
 }
 
 func newFakeUserGroupStore() *fakeUserGroupStore {
-	return &fakeUserGroupStore{groups: map[string]*model.UserGroupDetail{}, handles: map[string]string{}}
+	return &fakeUserGroupStore{groups: map[string]*model.UserGroupDetail{}, handles: map[string]string{}, entra: map[string]string{}}
 }
 
 func cloneGroup(g *model.UserGroupDetail) *model.UserGroupDetail {
@@ -48,18 +51,28 @@ func (f *fakeUserGroupStore) put(g *model.UserGroupDetail) {
 }
 
 func (f *fakeUserGroupStore) CreateUserGroup(_ context.Context, g *model.UserGroupDetail) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.createErr != nil {
 		return f.createErr
 	}
 	if _, taken := f.handles[g.Handle]; taken {
 		return store.ErrAlreadyExists
 	}
+	if g.EntraGroupID != "" {
+		if _, taken := f.entra[g.EntraGroupID]; taken {
+			return store.ErrEntraGroupLinked
+		}
+		f.entra[g.EntraGroupID] = g.ID
+	}
 	g.Version = 1
 	f.put(g)
 	return nil
 }
 
-func (f *fakeUserGroupStore) UpdateUserGroup(_ context.Context, g *model.UserGroupDetail, previousHandle string, expected int64) error {
+func (f *fakeUserGroupStore) UpdateUserGroup(_ context.Context, g, previous *model.UserGroupDetail) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.updates++
 	if f.updateErr != nil {
 		return f.updateErr
@@ -70,19 +83,30 @@ func (f *fakeUserGroupStore) UpdateUserGroup(_ context.Context, g *model.UserGro
 		return store.ErrUserGroupChanged
 	}
 	cur, ok := f.groups[g.ID]
-	if !ok || cur.Version != expected {
+	if !ok || cur.Version != previous.Version {
 		return store.ErrUserGroupChanged
 	}
 	if owner, taken := f.handles[g.Handle]; taken && owner != g.ID {
 		return store.ErrAlreadyExists
 	}
-	delete(f.handles, previousHandle)
-	g.Version = expected + 1
+	if g.EntraGroupID != previous.EntraGroupID && g.EntraGroupID != "" {
+		if owner, taken := f.entra[g.EntraGroupID]; taken && owner != g.ID {
+			return store.ErrEntraGroupLinked
+		}
+		f.entra[g.EntraGroupID] = g.ID
+	}
+	if previous.EntraGroupID != "" && g.EntraGroupID != previous.EntraGroupID {
+		delete(f.entra, previous.EntraGroupID)
+	}
+	delete(f.handles, previous.Handle)
+	g.Version = previous.Version + 1
 	f.put(g)
 	return nil
 }
 
 func (f *fakeUserGroupStore) GetUserGroup(_ context.Context, id string) (*model.UserGroupDetail, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.getErr != nil {
 		return nil, f.getErr
 	}
@@ -94,6 +118,8 @@ func (f *fakeUserGroupStore) GetUserGroup(_ context.Context, id string) (*model.
 }
 
 func (f *fakeUserGroupStore) GetUserGroups(_ context.Context, ids []string) ([]*model.UserGroupDetail, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.batchErr != nil {
 		return nil, f.batchErr
 	}
@@ -107,6 +133,8 @@ func (f *fakeUserGroupStore) GetUserGroups(_ context.Context, ids []string) ([]*
 }
 
 func (f *fakeUserGroupStore) ListUserGroups(context.Context) ([]*model.UserGroupDetail, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.listErr != nil {
 		return nil, f.listErr
 	}
@@ -119,6 +147,8 @@ func (f *fakeUserGroupStore) ListUserGroups(context.Context) ([]*model.UserGroup
 }
 
 func (f *fakeUserGroupStore) UserGroupHandleOwner(_ context.Context, handle string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.ownerErr != nil {
 		return "", f.ownerErr
 	}
@@ -131,12 +161,15 @@ func (f *fakeUserGroupStore) UserGroupHandleOwner(_ context.Context, handle stri
 
 // fakeGroupPeople is the people directory: active members unless marked.
 type fakeGroupPeople struct {
+	mu    sync.Mutex
 	users map[string]*model.User
 	err   error
 	calls int
 }
 
 func (f *fakeGroupPeople) GetBatch(_ context.Context, ids []string) ([]*model.User, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.calls++
 	if f.err != nil {
 		return nil, f.err
@@ -172,6 +205,7 @@ func (f *fakeBotNames) UsernameOwner(_ context.Context, username string) (string
 }
 
 type userGroupFixture struct {
+	copies   *fakeCopies
 	svc      *UserGroupService
 	store    *fakeUserGroupStore
 	people   *fakeGroupPeople
@@ -197,7 +231,61 @@ func newUserGroupFixture() *userGroupFixture {
 	}
 	f.svc = NewUserGroupService(f.store, f.people, f.settings, f.bots, f.pub)
 	f.svc.now = func() time.Time { return time.Date(2026, 11, 5, 9, 0, 0, 0, time.UTC) }
+	f.copies = newFakeCopies()
+	f.svc.SetCopies(f.copies)
 	return f
+}
+
+// fakeCopies is the shared copy in memory, with the real one's
+// only-forward versioning and injectable failures.
+type fakeCopies struct {
+	mu        sync.Mutex
+	groups    map[string]*model.UserGroupDetail
+	getErr    error
+	putErr    error
+	forgetErr error
+	forgotten []string
+}
+
+func newFakeCopies() *fakeCopies { return &fakeCopies{groups: map[string]*model.UserGroupDetail{}} }
+
+func (c *fakeCopies) Get(_ context.Context, ids []string) (map[string]*model.UserGroupDetail, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.getErr != nil {
+		return nil, c.getErr
+	}
+	out := map[string]*model.UserGroupDetail{}
+	for _, id := range ids {
+		if g, ok := c.groups[id]; ok {
+			out[id] = cloneGroup(g)
+		}
+	}
+	return out, nil
+}
+
+func (c *fakeCopies) Put(_ context.Context, g *model.UserGroupDetail) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.putErr != nil {
+		return c.putErr
+	}
+	if cur, ok := c.groups[g.ID]; ok && cur.Version >= g.Version {
+		return nil
+	}
+	c.groups[g.ID] = cloneGroup(g)
+	return nil
+}
+
+func (c *fakeCopies) Forget(_ context.Context, id string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.forgotten = append(c.forgotten, id)
+	if c.forgetErr != nil {
+		return c.forgetErr
+	}
+	delete(c.groups, id)
+	return nil
 }
 
 var (
@@ -568,6 +656,7 @@ func TestUserGroups_MentionedMembers(t *testing.T) {
 	if got, err := f.svc.MentionedMembers(ctx, "u-1", nil); err != nil || got != nil {
 		t.Fatalf("no groups = %v, %v", got, err)
 	}
+	f.copies.groups = map[string]*model.UserGroupDetail{} // not in the shared copy: read from the store
 	f.store.batchErr = errors.New("boom")
 	if _, err := f.svc.MentionedMembers(ctx, "u-3", []string{oncall.ID}); err == nil {
 		t.Error("MentionedMembers swallowed a store error")
@@ -593,6 +682,7 @@ func TestUserGroups_EnabledHandles(t *testing.T) {
 	if got, err := f.svc.EnabledHandles(ctx, nil); err != nil || len(got) != 0 {
 		t.Fatalf("EnabledHandles(nil) = %v, %v", got, err)
 	}
+	f.copies.groups = map[string]*model.UserGroupDetail{} // not in the shared copy: read from the store
 	f.store.batchErr = errors.New("boom")
 	if _, err := f.svc.EnabledHandles(ctx, []string{on.ID}); err == nil {
 		t.Error("EnabledHandles swallowed a store error")

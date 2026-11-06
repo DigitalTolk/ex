@@ -5,6 +5,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -21,6 +22,11 @@ func newTestUserGroup(id, handle string, members ...string) *model.UserGroupDeta
 		},
 		MemberIDs: members,
 	}
+}
+
+// prior is the row as read before an update: its handle and version.
+func prior(handle string, version int64) *model.UserGroupDetail {
+	return &model.UserGroupDetail{UserGroup: model.UserGroup{Handle: handle}, Version: version}
 }
 
 func TestUserGroupStore_CreateGetListAndHandles(t *testing.T) {
@@ -116,7 +122,7 @@ func TestUserGroupStore_UpdateIsVersionedAndMovesTheHandleClaim(t *testing.T) {
 	}
 
 	g.Handle, g.MemberIDs, g.MemberCount = "on-call", []string{"u-1", "u-2"}, 2
-	if err := s.UpdateUserGroup(ctx, g, "oncall", 1); err != nil {
+	if err := s.UpdateUserGroup(ctx, g, prior("oncall", 1)); err != nil {
 		t.Fatalf("UpdateUserGroup: %v", err)
 	}
 	if g.Version != 2 {
@@ -139,7 +145,7 @@ func TestUserGroupStore_UpdateIsVersionedAndMovesTheHandleClaim(t *testing.T) {
 
 	// A stale version loses, and leaves the group as it was.
 	g.MemberIDs = []string{"u-9"}
-	if err := s.UpdateUserGroup(ctx, g, "on-call", 1); !errors.Is(err, ErrUserGroupChanged) {
+	if err := s.UpdateUserGroup(ctx, g, prior("on-call", 1)); !errors.Is(err, ErrUserGroupChanged) {
 		t.Fatalf("stale update = %v, want ErrUserGroupChanged", err)
 	}
 	if g.Version != 1 {
@@ -152,13 +158,13 @@ func TestUserGroupStore_UpdateIsVersionedAndMovesTheHandleClaim(t *testing.T) {
 	// Taking another group's handle fails as a taken handle.
 	g.MemberIDs = []string{"u-1"}
 	g.Handle = "sre"
-	if err := s.UpdateUserGroup(ctx, g, "on-call", 2); !errors.Is(err, ErrAlreadyExists) {
+	if err := s.UpdateUserGroup(ctx, g, prior("on-call", 2)); !errors.Is(err, ErrAlreadyExists) {
 		t.Fatalf("update to a taken handle = %v, want ErrAlreadyExists", err)
 	}
 
 	// A group that is gone reads as changed.
 	gone := newTestUserGroup("group-gone", "gone")
-	if err := s.UpdateUserGroup(ctx, gone, "gone", 1); !errors.Is(err, ErrUserGroupChanged) {
+	if err := s.UpdateUserGroup(ctx, gone, prior("gone", 1)); !errors.Is(err, ErrUserGroupChanged) {
 		t.Fatalf("update of a missing group = %v, want ErrUserGroupChanged", err)
 	}
 }
@@ -176,7 +182,7 @@ func TestUserGroupStore_FaultArms(t *testing.T) {
 	}))
 	for name, err := range map[string]error{
 		"create": failing.CreateUserGroup(ctx, newTestUserGroup("group-2", "x2")),
-		"update": failing.UpdateUserGroup(ctx, g, "oncall", 1),
+		"update": failing.UpdateUserGroup(ctx, g, prior("oncall", 1)),
 		"get":    func() error { _, err := failing.GetUserGroup(ctx, "group-1"); return err }(),
 		"batch":  func() error { _, err := failing.GetUserGroups(ctx, []string{"group-1"}); return err }(),
 		"list":   func() error { _, err := failing.ListUserGroups(ctx); return err }(),
@@ -200,4 +206,78 @@ func TestUserGroupStore_FaultArms(t *testing.T) {
 	assertUnmarshalErr(t, listErr, "user group list")
 	_, batchErr := corrupt.GetUserGroups(ctx, []string{"group-1"})
 	assertUnmarshalErr(t, batchErr, "user group batch")
+}
+
+func TestUserGroupStore_EntraClaimIsUniqueAndMoves(t *testing.T) {
+	db := setupDynamoDB(t)
+	ctx := context.Background()
+	s := NewUserGroupStore(db)
+
+	linked := newTestUserGroup("group-1", "oncall", "u-1")
+	linked.EntraGroupID = "entra-A"
+	if err := s.CreateUserGroup(ctx, linked); err != nil {
+		t.Fatalf("create linked: %v", err)
+	}
+	if got, _ := s.GetUserGroup(ctx, "group-1"); got.EntraGroupID != "entra-A" {
+		t.Fatalf("stored link = %q", got.EntraGroupID)
+	}
+
+	// Another group can't be created on, or linked to, the same Entra group.
+	dup := newTestUserGroup("group-2", "sre")
+	dup.EntraGroupID = "entra-A"
+	if err := s.CreateUserGroup(ctx, dup); !errors.Is(err, ErrEntraGroupLinked) {
+		t.Fatalf("create on a linked Entra group = %v, want ErrEntraGroupLinked", err)
+	}
+	other := newTestUserGroup("group-3", "design")
+	if err := s.CreateUserGroup(ctx, other); err != nil {
+		t.Fatal(err)
+	}
+	stale := *other
+	stale.EntraGroupID = "entra-A"
+	if err := s.UpdateUserGroup(ctx, &stale, other); !errors.Is(err, ErrEntraGroupLinked) {
+		t.Fatalf("link to a linked Entra group = %v, want ErrEntraGroupLinked", err)
+	}
+
+	// Relinking group-1 to entra-B frees entra-A, which group-3 can then take.
+	read, _ := s.GetUserGroup(ctx, "group-1")
+	relinked := *read
+	relinked.EntraGroupID = "entra-B"
+	if err := s.UpdateUserGroup(ctx, &relinked, read); err != nil {
+		t.Fatalf("relink: %v", err)
+	}
+	read3, _ := s.GetUserGroup(ctx, "group-3")
+	take := *read3
+	take.EntraGroupID = "entra-A"
+	if err := s.UpdateUserGroup(ctx, &take, read3); err != nil {
+		t.Fatalf("link to the freed Entra group: %v", err)
+	}
+
+	// Unlinking frees the claim.
+	read, _ = s.GetUserGroup(ctx, "group-1")
+	unlinked := *read
+	unlinked.EntraGroupID = ""
+	if err := s.UpdateUserGroup(ctx, &unlinked, read); err != nil {
+		t.Fatalf("unlink: %v", err)
+	}
+	again := newTestUserGroup("group-4", "again")
+	again.EntraGroupID = "entra-B"
+	if err := s.CreateUserGroup(ctx, again); err != nil {
+		t.Fatalf("create on the unlinked Entra group: %v", err)
+	}
+}
+
+func TestUserGroupStore_ThousandMembersInOneRow(t *testing.T) {
+	db := setupDynamoDB(t)
+	ctx := context.Background()
+	s := NewUserGroupStore(db)
+	members := make([]string, 1000)
+	for i := range members {
+		members[i] = fmt.Sprintf("01JTESTMEMBER%013d", i)
+	}
+	if err := s.CreateUserGroup(ctx, newTestUserGroup("group-big", "big", members...)); err != nil {
+		t.Fatalf("create a 1000-member group: %v", err)
+	}
+	if got, err := s.GetUserGroup(ctx, "group-big"); err != nil || len(got.MemberIDs) != 1000 {
+		t.Fatalf("read back = %d members, %v", len(got.MemberIDs), err)
+	}
 }
