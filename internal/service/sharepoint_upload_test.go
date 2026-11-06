@@ -168,6 +168,11 @@ func TestUploadOfficeFileRefusals(t *testing.T) {
 		{"too big for the workspace", "ch-deal", "a.docx", func(u *officeUpload) { u.limits.maxSize = 4 }, apperr.ErrValidation},
 		{"no such channel", "ch-gone", "a.docx", nil, store.ErrNotFound},
 		{"an archived channel", "ch-old", "a.pptx", nil, apperr.ErrValidation},
+		// Its links are never shared (that would share with everyone): an
+		// upload there would be a link nobody can open.
+		{"~general", generalChannelID, "a.docx", func(u *officeUpload) {
+			u.channels.channels[generalChannelID] = &model.Channel{ID: generalChannelID, Name: "general", Type: model.ChannelTypePublic}
+		}, apperr.ErrValidation},
 		{"not a member", "ch-deal", "a.docx", func(u *officeUpload) { u.access.err = ErrForbidden }, ErrForbidden},
 		{"never signed in with Microsoft", "ch-deal", "a.doc", func(u *officeUpload) { u.tokens.missing["alice"] = true }, ErrMicrosoftSignInRequired},
 	} {

@@ -98,8 +98,9 @@ func (s *SharePointService) UploadOfficeFile(ctx context.Context, userID, parent
 
 // officeFolder is the folder under Ex a parent's Office files go in: a
 // channel's name (its id when the name leaves nothing OneDrive accepts), a
-// group DM's name, else Direct messages. Archived channels, and a group DM
-// since turned into a channel, keep theirs as attachments.
+// group DM's name, else Direct messages. ~general (whose links are never
+// shared: that would share with everyone), archived channels, and a group DM
+// since turned into a channel keep theirs as attachments.
 func (s *SharePointService) officeFolder(ctx context.Context, parentID, parentType string) (string, error) {
 	if parentType == ParentConversation {
 		conv, err := s.d.Conversations.GetConversation(ctx, parentID)
@@ -116,6 +117,9 @@ func (s *SharePointService) officeFolder(ctx context.Context, parentID, parentTy
 	}
 	if parentType != ParentChannel {
 		return "", apperr.Invalid("sharepoint: invalid parent type")
+	}
+	if parentID == generalChannelID {
+		return "", apperr.Invalid("sharepoint: ~general's files aren't shared")
 	}
 	ch, err := s.d.Channels.GetByID(ctx, parentID)
 	if err != nil {
