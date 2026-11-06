@@ -178,6 +178,24 @@ export interface Reminder {
   parentMessageID?: string;
   channelSlug?: string;
   messagePreview?: string;
+  /**
+   * UserIDs are the people the owner added: when it comes due, the reminder
+   * bot replies to the message tagging the owner and them. Without any, the
+   * bot DMs the owner alone.
+   */
+  userIDs?: string[];
+  /**
+   * Everyone: the reminder is for every member of the chat (UserIDs is then
+   * empty) but ExcludedUserIDs, the few the owner left out. The bot's reply
+   * tags @all, and its notifications skip them.
+   */
+  everyone?: boolean;
+  excludedUserIDs?: string[];
+  /**
+   * Note is the owner's own words for context, shown with the reminder
+   * when it comes due.
+   */
+  note?: string;
   remindAt: string /* RFC3339 */;
   createdAt: string /* RFC3339 */;
 }

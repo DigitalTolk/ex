@@ -4,6 +4,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -254,5 +255,70 @@ func TestRedisReminderStore_ClientErrors(t *testing.T) {
 	}
 	if _, err := s.ClaimDueReminders(ctx, 10); err == nil {
 		t.Error("ClaimDue on closed redis should error")
+	}
+}
+
+func TestRedisReminderStore_GetPendingReminder(t *testing.T) {
+	s, _ := setupReminderStore(t)
+	ctx := context.Background()
+	at := time.Now().Add(time.Hour).UTC().Truncate(time.Millisecond)
+	if err := s.ScheduleReminder(ctx, reminderAt("r1", "u-1", at)); err != nil {
+		t.Fatalf("Schedule: %v", err)
+	}
+	got, err := s.GetPendingReminder(ctx, "u-1", "r1")
+	if err != nil || got.ID != "r1" || !got.RemindAt.Equal(at) {
+		t.Fatalf("own reminder = %+v, %v", got, err)
+	}
+	// Someone else's reads exactly like a missing one.
+	if _, err := s.GetPendingReminder(ctx, "u-2", "r1"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("another user's reminder: %v, want ErrNotFound", err)
+	}
+	if _, err := s.GetPendingReminder(ctx, "u-1", "missing"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing reminder: %v, want ErrNotFound", err)
+	}
+}
+
+// An edit moves the reminder in the due queue and the owner's list and saves
+// its people; one the poller already claimed stays gone.
+func TestRedisReminderStore_RescheduleReminder(t *testing.T) {
+	s, client := setupReminderStore(t)
+	ctx := context.Background()
+	at := time.Now().Add(time.Hour).UTC().Truncate(time.Millisecond)
+	r := reminderAt("r1", "u-1", at)
+	if err := s.ScheduleReminder(ctx, r); err != nil {
+		t.Fatalf("Schedule: %v", err)
+	}
+
+	later := at.Add(2 * time.Hour)
+	r.RemindAt, r.UserIDs = later, []string{"u-2"}
+	if err := s.RescheduleReminder(ctx, r); err != nil {
+		t.Fatalf("Reschedule: %v", err)
+	}
+	for _, key := range []string{reminderDueKey(), reminderUserKey("u-1")} {
+		if score := client.ZScore(ctx, key, "r1").Val(); score != float64(later.UnixMilli()) {
+			t.Fatalf("%s score = %v, want the new time", key, score)
+		}
+	}
+	got, err := s.GetPendingReminder(ctx, "u-1", "r1")
+	if err != nil || !got.RemindAt.Equal(later) || len(got.UserIDs) != 1 || got.UserIDs[0] != "u-2" {
+		t.Fatalf("saved = %+v, %v", got, err)
+	}
+	if ttl := client.PTTL(ctx, reminderPayloadKey("r1")).Val(); ttl < time.Until(later) {
+		t.Fatalf("payload TTL %v ends before the new time", ttl)
+	}
+
+	// Claimed meanwhile: not put back.
+	client.ZRem(ctx, reminderDueKey(), "r1")
+	r.RemindAt = later.Add(time.Hour)
+	if err := s.RescheduleReminder(ctx, r); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("claimed reminder: %v, want ErrNotFound", err)
+	}
+	if n := client.ZCard(ctx, reminderDueKey()).Val(); n != 0 {
+		t.Fatalf("due queue has %d, want the claimed reminder left out", n)
+	}
+
+	_ = client.Close()
+	if err := s.RescheduleReminder(ctx, r); err == nil || errors.Is(err, ErrNotFound) {
+		t.Fatalf("closed redis: %v, want a plain error", err)
 	}
 }

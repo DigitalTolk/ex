@@ -12,6 +12,7 @@ import { Bell, BellOff, ArrowRight } from 'lucide-react';
 import { useAtBottomRef } from '@/hooks/useAtBottomRef';
 import { useMarkReadOnReturn } from '@/hooks/useMarkReadOnReturn';
 import { useEventCallback } from '@/hooks/useEventCallback';
+import { useMessageReminders } from '@/hooks/useActivity';
 import { motion } from 'motion/react';
 import { useSwipeDismiss } from '@/hooks/useSwipeDismiss';
 import { usePanelWidth } from '@/hooks/usePanelWidth';
@@ -89,6 +90,7 @@ export function ThreadPanel({
   // And Escape, once nothing above it takes the key.
   useEscapeClose(onClose);
   const isMobile = useIsMobile();
+  const reminders = useMessageReminders();
   // Most-used emoji shelf for the message action bar — same source the
   // channel/conversation message lists use, so the thread sidebar shows
   // (and live-reorders) the same popular reactions.
@@ -630,6 +632,7 @@ export function ThreadPanel({
                     readOnly={readOnly}
                     quickReactions={quickReactions}
                     onEditMessage={isMobile ? setEditingMessage : undefined}
+                    reminder={reminders.get(msg.id)}
                   />
                 </Fragment>
               );

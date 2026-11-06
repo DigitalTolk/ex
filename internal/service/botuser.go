@@ -39,6 +39,14 @@ func WebhookBotUserID(webhookID string) string {
 
 func isBotUserID(id string) bool { return strings.HasPrefix(id, botUserIDPrefix) }
 
+// ReminderBotUserID is the reminder bot's account: it DMs a personal reminder
+// to its owner. Derived like a webhook bot's, from its own separator, so it is
+// the same account on every instance and never collides with one.
+func ReminderBotUserID() string {
+	sum := sha256.Sum256([]byte("ex:reminder-bot-user:v1\x00"))
+	return botUserIDPrefix + botIDEncoding.EncodeToString(sum[:15])
+}
+
 // EnsureBotUser returns the machine account for botID, creating it on first
 // use and renaming it when the webhook's username changes. Conversations
 // created before a rename keep their label: UserConversation.DisplayName is

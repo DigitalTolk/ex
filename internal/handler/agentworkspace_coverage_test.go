@@ -331,6 +331,10 @@ func (f *hwsCovRemStore) CancelRemindersForMessages(context.Context, []string) (
 func (f *hwsCovRemStore) UpdateReminderPreview(context.Context, string, string) ([]string, error) {
 	return nil, nil
 }
+func (f *hwsCovRemStore) GetPendingReminder(context.Context, string, string) (*model.Reminder, error) {
+	return nil, nil
+}
+func (f *hwsCovRemStore) RescheduleReminder(context.Context, *model.Reminder) error { return nil }
 func (f *hwsCovRemStore) CancelAllRemindersForUser(context.Context, string) (int, error) {
 	return 0, nil
 }

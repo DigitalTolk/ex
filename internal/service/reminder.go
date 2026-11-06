@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/DigitalTolk/ex/internal/apperr"
 	"github.com/DigitalTolk/ex/internal/events"
@@ -24,6 +26,19 @@ const reminderMaxHorizon = 365 * 24 * time.Hour
 // iteration; the poller loops until a partial batch drains the queue.
 const reminderClaimBatch = 100
 
+// maxReminderPeople caps how many people one reminder may tag besides its
+// owner — or leave out of one for everyone.
+const maxReminderPeople = 20
+
+// maxReminderNote caps a reminder's note, in characters.
+const maxReminderNote = 500
+
+// The reminder bot's name and avatar emoji, on every message it posts.
+const (
+	reminderBotName  = "Reminder"
+	reminderBotEmoji = "alarm_clock"
+)
+
 // ErrReminderTimeInvalid is returned when a reminder's fire time is not strictly
 // in the future, or is further out than reminderMaxHorizon.
 var ErrReminderTimeInvalid = errors.New("reminder: remind time must be in the future")
@@ -32,6 +47,8 @@ var ErrReminderTimeInvalid = errors.New("reminder: remind time must be in the fu
 type ReminderStore interface {
 	ScheduleReminder(ctx context.Context, r *model.Reminder) error
 	CancelReminder(ctx context.Context, userID, id string) (bool, error)
+	GetPendingReminder(ctx context.Context, userID, id string) (*model.Reminder, error)
+	RescheduleReminder(ctx context.Context, r *model.Reminder) error
 	ListPendingReminders(ctx context.Context, userID string) ([]*model.Reminder, error)
 	ClaimDueReminders(ctx context.Context, limit int) ([]*model.Reminder, error)
 	// CancelRemindersForParent returns how many it cancelled;
@@ -72,6 +89,21 @@ type DirectNotifier interface {
 	NotifyDirect(ctx context.Context, userID string, notif Notification)
 }
 
+// ReminderPoster posts the reminder bot's messages (MessageService).
+type ReminderPoster interface {
+	SendReminder(ctx context.Context, in WebhookMessageInput) (*model.Message, error)
+}
+
+// ReminderBotProvisioner creates the reminder bot's account on first use.
+type ReminderBotProvisioner interface {
+	EnsureBotUser(ctx context.Context, botID, displayName string) (*model.User, error)
+}
+
+// ReminderDMOpener opens the bot's DM with a reminder's owner.
+type ReminderDMOpener interface {
+	GetOrCreateDM(ctx context.Context, userA, userB string) (*model.Conversation, error)
+}
+
 // ReminderInput is the client-supplied request to schedule a reminder.
 type ReminderInput struct {
 	MessageID   string    `json:"messageID"`
@@ -79,6 +111,24 @@ type ReminderInput struct {
 	ParentType  string    `json:"parentType"`
 	ChannelSlug string    `json:"channelSlug"`
 	RemindAt    time.Time `json:"remindAt"`
+	// UserIDs are people to tag besides the owner when it comes due.
+	UserIDs []string `json:"userIDs"`
+	// Everyone reminds every member of the chat instead (UserIDs is then
+	// ignored), all but ExcludedUserIDs.
+	Everyone        bool     `json:"everyone"`
+	ExcludedUserIDs []string `json:"excludedUserIDs"`
+	// Note is optional context, shown with the reminder.
+	Note string `json:"note"`
+}
+
+// ReminderUpdate is an edit of a pending reminder: its new time, people and
+// note.
+type ReminderUpdate struct {
+	RemindAt        time.Time `json:"remindAt"`
+	UserIDs         []string  `json:"userIDs"`
+	Everyone        bool      `json:"everyone"`
+	ExcludedUserIDs []string  `json:"excludedUserIDs"`
+	Note            string    `json:"note"`
 }
 
 // ReminderService schedules per-message reminders and fires them at their due
@@ -92,6 +142,10 @@ type ReminderService struct {
 	events   Publisher
 	owners   ReminderOwnerLookup
 	mentions MentionResolver
+	poster   ReminderPoster
+	bots     ReminderBotProvisioner
+	dms      ReminderDMOpener
+	baseURL  string
 	now      func() time.Time
 }
 
@@ -106,6 +160,16 @@ func NewReminderService(s ReminderStore, messages ReminderMessageStore, access R
 func (s *ReminderService) SetDelivery(activity ActivityAdder, notifier DirectNotifier) {
 	s.activity = activity
 	s.notifier = notifier
+}
+
+// SetBot wires the reminder bot: a reminder comes due as the bot's reply to
+// the message tagging its people, or as the bot's DM to its owner. baseURL
+// makes the DM's link to the message absolute, so it unfurls as a preview.
+func (s *ReminderService) SetBot(poster ReminderPoster, bots ReminderBotProvisioner, dms ReminderDMOpener, baseURL string) {
+	s.poster = poster
+	s.bots = bots
+	s.dms = dms
+	s.baseURL = strings.TrimRight(baseURL, "/")
 }
 
 // SetPublisher wires the reminders.changed event, so every tab and device
@@ -233,10 +297,18 @@ func (s *ReminderService) Schedule(ctx context.Context, userID string, in Remind
 		return nil, apperr.Invalid("reminder: invalid parent type")
 	}
 	now := s.now()
-	if !in.RemindAt.After(now) || in.RemindAt.After(now.Add(reminderMaxHorizon)) {
-		return nil, ErrReminderTimeInvalid
+	if err := s.checkRemindAt(in.RemindAt); err != nil {
+		return nil, err
+	}
+	note, err := reminderNote(in.Note)
+	if err != nil {
+		return nil, err
 	}
 	if err := s.access.CheckAccess(ctx, userID, in.ParentID, in.ParentType); err != nil {
+		return nil, err
+	}
+	people, excluded, err := s.audience(ctx, userID, in.ParentID, in.ParentType, in.Everyone, in.UserIDs, in.ExcludedUserIDs)
+	if err != nil {
 		return nil, err
 	}
 	msg, err := s.messages.GetMessage(ctx, in.ParentID, in.MessageID)
@@ -259,10 +331,129 @@ func (s *ReminderService) Schedule(ctx context.Context, userID string, in Remind
 		ParentMessageID: msg.ParentMessageID,
 		ChannelSlug:     in.ChannelSlug,
 		MessagePreview:  messagePreview(ctx, s.mentions, msg),
+		UserIDs:         people,
+		Everyone:        in.Everyone,
+		ExcludedUserIDs: excluded,
+		Note:            note,
 		RemindAt:        in.RemindAt,
 		CreatedAt:       now,
 	}
 	if err := s.store.ScheduleReminder(ctx, r); err != nil {
+		return nil, err
+	}
+	s.changed(ctx, userID)
+	return r, nil
+}
+
+// checkRemindAt accepts a fire time strictly in the future, within
+// reminderMaxHorizon.
+func (s *ReminderService) checkRemindAt(at time.Time) error {
+	now := s.now()
+	if !at.After(now) || at.After(now.Add(reminderMaxHorizon)) {
+		return ErrReminderTimeInvalid
+	}
+	return nil
+}
+
+// reminderNote tidies a reminder's note: trimmed, and at most
+// maxReminderNote characters.
+func reminderNote(note string) (string, error) {
+	note = strings.TrimSpace(note)
+	if utf8.RuneCountInString(note) > maxReminderNote {
+		return "", apperr.Invalid("reminder: a note is at most %d characters", maxReminderNote)
+	}
+	return note, nil
+}
+
+// audience vets who a reminder is for: the people added (see people), or —
+// for everyone in the chat — only who is left out: each once, never the
+// owner, at most maxReminderPeople. The left-out aren't looked up: leaving
+// out someone who isn't there changes nothing.
+func (s *ReminderService) audience(ctx context.Context, ownerID, parentID, parentType string, everyone bool, userIDs, excludedIDs []string) (people, excluded []string, err error) {
+	if !everyone {
+		people, err = s.people(ctx, ownerID, parentID, parentType, userIDs)
+		return people, nil, err
+	}
+	excluded = distinctIDs(excludedIDs, ownerID)
+	if len(excluded) > maxReminderPeople {
+		return nil, nil, apperr.Invalid("reminder: at most %d people left out", maxReminderPeople)
+	}
+	return nil, excluded, nil
+}
+
+// distinctIDs is ids trimmed, each once, without blanks or `drop`.
+func distinctIDs(ids []string, drop string) []string {
+	seen := map[string]bool{drop: true}
+	var out []string
+	for _, id := range ids {
+		if id = strings.TrimSpace(id); id != "" && !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// people vets the people a reminder will tag: each once, never the owner, at
+// most maxReminderPeople, and each an active person (no bot, and no agent,
+// whom a mention would set to work) who can open the chat — a tag they could
+// not follow would only puzzle them.
+func (s *ReminderService) people(ctx context.Context, ownerID, parentID, parentType string, ids []string) ([]string, error) {
+	out := distinctIDs(ids, ownerID)
+	if len(out) == 0 {
+		return nil, nil
+	}
+	if len(out) > maxReminderPeople {
+		return nil, apperr.Invalid("reminder: at most %d people", maxReminderPeople)
+	}
+	users, err := s.owners.GetUsersByIDs(ctx, out)
+	if err != nil {
+		return nil, fmt.Errorf("reminder: people: %w", err)
+	}
+	byID := make(map[string]*model.User, len(users))
+	for _, u := range users {
+		byID[u.ID] = u
+	}
+	for _, id := range out {
+		u := byID[id]
+		if u == nil || u.IsBot || u.IsAgent() || u.Status == "deactivated" {
+			return nil, apperr.Invalid("reminder: only active people can be added")
+		}
+		if err := s.access.CheckAccess(ctx, id, parentID, parentType); err != nil {
+			if errors.Is(err, ErrForbidden) {
+				return nil, apperr.Invalid("reminder: %s can't open this conversation", u.DisplayName)
+			}
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+// Update changes a pending reminder's time, people and note. Returns
+// store.ErrNotFound when the user has no such pending reminder (it fired, was
+// cancelled, or isn't theirs).
+func (s *ReminderService) Update(ctx context.Context, userID, id string, in ReminderUpdate) (*model.Reminder, error) {
+	if err := s.checkRemindAt(in.RemindAt); err != nil {
+		return nil, err
+	}
+	note, err := reminderNote(in.Note)
+	if err != nil {
+		return nil, err
+	}
+	r, err := s.store.GetPendingReminder(ctx, userID, id)
+	if err != nil {
+		return nil, err
+	}
+	people, excluded, err := s.audience(ctx, userID, r.ParentID, r.ParentType, in.Everyone, in.UserIDs, in.ExcludedUserIDs)
+	if err != nil {
+		return nil, err
+	}
+	r.RemindAt = in.RemindAt
+	r.UserIDs = people
+	r.Everyone = in.Everyone
+	r.ExcludedUserIDs = excluded
+	r.Note = note
+	if err := s.store.RescheduleReminder(ctx, r); err != nil {
 		return nil, err
 	}
 	s.changed(ctx, userID)
@@ -372,8 +563,9 @@ func (s *ReminderService) deactivatedOwners(ctx context.Context, due []*model.Re
 	return out
 }
 
-// fire delivers a claimed reminder: an activity-stream entry plus a desktop +
-// mobile alert.
+// fire delivers a claimed reminder as the reminder bot's post (see post), or,
+// when that can't be posted, privately: an activity-stream entry plus a
+// desktop + mobile alert.
 func (s *ReminderService) fire(ctx context.Context, r *model.Reminder) {
 	// The owner may have left the channel, been removed from it, or seen it
 	// archived since setting this: the alert would link to a page they can
@@ -396,6 +588,161 @@ func (s *ReminderService) fire(ctx context.Context, r *model.Reminder) {
 	if err == nil {
 		r.MessagePreview = messagePreview(ctx, s.mentions, msg)
 	}
+	if err := s.post(ctx, r); err != nil {
+		// A lost reminder is worse than a quiet one: alert the owner privately.
+		slog.WarnContext(ctx, "reminder post failed; alerting the owner privately", "userID", r.UserID, "reminderID", r.ID, "error", err)
+		s.firePrivate(ctx, r)
+		return
+	}
+	slog.InfoContext(ctx, "reminder fired", "userID", r.UserID, "messageID", r.MessageID, "people", len(r.UserIDs))
+}
+
+// errReminderBotUnwired keeps a service without the bot on the private path.
+var errReminderBotUnwired = errors.New("reminder: bot not wired")
+
+// post delivers a reminder as the reminder bot. With people added, the bot
+// replies to the message tagging the owner and every one of them who can
+// still open the chat; for everyone, tagging the owner and @all, its
+// notifications skipping whoever was left out; without, it DMs the owner a
+// link to the message.
+func (s *ReminderService) post(ctx context.Context, r *model.Reminder) error {
+	if s.poster == nil {
+		return errReminderBotUnwired
+	}
+	if len(r.UserIDs) == 0 && !r.Everyone {
+		return s.dmOwner(ctx, r)
+	}
+	root := r.ParentMessageID
+	if root == "" {
+		root = r.MessageID
+	}
+	reminder := "Reminder"
+	if r.ParentMessageID != "" {
+		// A reply in a long thread: point at the very message.
+		reminder = s.messageLink(r, reminder)
+	}
+	body := "⏰ " + reminder + " for " + s.mentionList(ctx, r) + withNote(r.Note)
+	in := WebhookMessageInput{
+		ParentID:        r.ParentID,
+		ParentType:      r.ParentType,
+		Body:            body,
+		Username:        reminderBotName,
+		IconEmoji:       reminderBotEmoji,
+		ParentMessageID: root,
+	}
+	if r.Everyone {
+		in.NotifyExcept = r.ExcludedUserIDs
+	}
+	_, err := s.poster.SendReminder(ctx, in)
+	return err
+}
+
+// dmOwner sends a personal reminder as the bot's DM: a link to the message,
+// which unfurls as its preview.
+func (s *ReminderService) dmOwner(ctx context.Context, r *model.Reminder) error {
+	bot, err := s.bots.EnsureBotUser(ctx, ReminderBotUserID(), reminderBotName)
+	if err != nil {
+		return fmt.Errorf("reminder: bot: %w", err)
+	}
+	conv, err := s.dms.GetOrCreateDM(ctx, bot.ID, r.UserID)
+	if err != nil {
+		return fmt.Errorf("reminder: open DM: %w", err)
+	}
+	body := "⏰ You asked me to remind you about " + s.messageLink(r, "this message")
+	if r.Note != "" {
+		body = "⏰ " + s.messageLink(r, "Reminder") + withNote(r.Note)
+	}
+	_, err = s.poster.SendReminder(ctx, WebhookMessageInput{
+		ParentID:   conv.ID,
+		ParentType: ParentConversation,
+		AuthorID:   bot.ID,
+		Body:       body,
+		Username:   reminderBotName,
+		IconEmoji:  reminderBotEmoji,
+	})
+	return err
+}
+
+// mentionList tags the owner, then — for everyone — @all, naming (never
+// tagging) whoever was left out; else each added person still active and
+// able to open the chat. A failed lookup tags everyone: a stray tag beats a
+// lost one.
+func (s *ReminderService) mentionList(ctx context.Context, r *model.Reminder) string {
+	ids := append([]string{r.UserID}, r.UserIDs...)
+	if r.Everyone {
+		ids = append([]string{r.UserID}, r.ExcludedUserIDs...)
+	}
+	names := map[string]string{}
+	inactive := map[string]bool{}
+	if users, err := s.owners.GetUsersByIDs(ctx, ids); err == nil {
+		for _, u := range users {
+			names[u.ID] = u.DisplayName
+			inactive[u.ID] = u.Status == "deactivated"
+		}
+	}
+	if r.Everyone {
+		return reminderMention(r.UserID, names[r.UserID]) + " and @all" + leftOut(r.ExcludedUserIDs, names)
+	}
+	tags := make([]string, 0, len(ids))
+	for i, id := range ids {
+		if i > 0 && (inactive[id] || errors.Is(s.access.CheckAccess(ctx, id, r.ParentID, r.ParentType), ErrForbidden)) {
+			continue
+		}
+		tags = append(tags, reminderMention(id, names[id]))
+	}
+	return strings.Join(tags, " ")
+}
+
+// leftOut names the people a reminder for everyone leaves out — by count
+// when a name is missing — as plain text, so no tag reaches them.
+func leftOut(ids []string, names map[string]string) string {
+	if len(ids) == 0 {
+		return ""
+	}
+	named := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if names[id] != "" {
+			named = append(named, names[id])
+		}
+	}
+	if len(named) != len(ids) {
+		if len(ids) == 1 {
+			return " (except 1 person)"
+		}
+		return fmt.Sprintf(" (except %d people)", len(ids))
+	}
+	return " (except " + strings.Join(named, ", ") + ")"
+}
+
+// withNote puts a reminder's note after its opening words, as what the
+// reminder is ("Reminder: bring the numbers"); nothing without one.
+func withNote(note string) string {
+	if note == "" {
+		return ""
+	}
+	return ": " + note
+}
+
+// reminderMention writes the "@[id|Name]" mention, its name kept clear of
+// the brackets and bar the syntax uses.
+func reminderMention(id, name string) string {
+	name = strings.TrimSpace(strings.NewReplacer("[", "", "]", "", "|", "").Replace(name))
+	if name == "" {
+		name = id
+	}
+	return "@[" + id + "|" + name + "]"
+}
+
+// messageLink is text linked to the reminded message: the link still shows
+// the message's preview card under the post, without its raw address in the
+// text.
+func (s *ReminderService) messageLink(r *model.Reminder, text string) string {
+	return "[" + text + "](" + s.baseURL + reminderDeepLink(r) + ")"
+}
+
+// firePrivate is the reminder as only its owner sees it: an activity-stream
+// entry plus a desktop + mobile alert.
+func (s *ReminderService) firePrivate(ctx context.Context, r *model.Reminder) {
 	now := s.now()
 	if s.activity != nil {
 		s.activity.AddItem(ctx, r.UserID, &model.ActivityItem{
@@ -415,6 +762,9 @@ func (s *ReminderService) fire(ctx context.Context, r *model.Reminder) {
 		if body == "" {
 			body = "You asked to be reminded about a message."
 		}
+		if r.Note != "" {
+			body = r.Note + "\n" + body
+		}
 		s.notifier.NotifyDirect(ctx, r.UserID, Notification{
 			Kind:       NotificationKindReminder,
 			Title:      "Reminder",
@@ -431,7 +781,6 @@ func (s *ReminderService) fire(ctx context.Context, r *model.Reminder) {
 			CreatedAt: now,
 		})
 	}
-	slog.InfoContext(ctx, "reminder fired", "userID", r.UserID, "messageID", r.MessageID)
 }
 
 // reminderDeepLink builds the in-app URL the alert/activity row links to, matching

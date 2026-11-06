@@ -9,6 +9,7 @@ import {
   refetchActivity,
   useActivity,
   useReminders,
+  useMessageReminders,
   useCreateReminder,
   useCancelReminder,
   useMarkActivityRead,
@@ -64,6 +65,19 @@ describe('useActivity hooks', () => {
     await waitFor(() => expect(result.current.data).toBeDefined());
     expect(result.current.data?.unread).toBe(0);
     expect(result.current.data?.unreadByType).toEqual({});
+  });
+
+  it("useMessageReminders maps each message to its soonest reminder, and nothing to an empty list", async () => {
+    vi.mocked(apiFetch).mockResolvedValue([
+      { id: 'r-1', messageID: 'm-1', remindAt: '2099-01-01T09:00:00Z' },
+      { id: 'r-2', messageID: 'm-2', remindAt: '2099-01-02T09:00:00Z' },
+      { id: 'r-3', messageID: 'm-1', remindAt: '2099-01-03T09:00:00Z' },
+    ]);
+    const { result } = renderHook(() => useMessageReminders(), { wrapper: wrapperFor(makeClient()) });
+    expect(result.current.size).toBe(0);
+    await waitFor(() => expect(result.current.size).toBe(2));
+    expect(result.current.get('m-1')?.id).toBe('r-1');
+    expect(result.current.get('m-2')?.id).toBe('r-2');
   });
 
   it('useReminders coerces a non-array to []', async () => {
