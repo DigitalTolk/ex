@@ -138,11 +138,18 @@ describe('HtmlPreviewPanel in a real browser', () => {
   });
 
   it('never shows a page the file navigated to before its own load', async () => {
+    // Which comes first is the engine's call: Chromium and Linux WebKit
+    // follow `location` before the document finishes loading, but macOS
+    // WebKit on a loaded machine sometimes completes the load first, and is
+    // then in the followed-link case below. Either way the frame may only be
+    // shown once the file's own document has reported its load (`<nonce>:
+    // ready`), which a page it navigated to cannot do.
+    const signals = mockupMessages();
     await mount(`<script>location.href = ${JSON.stringify(outside('early'))};</script><p>x</p>`);
-    const seen = new Set<string>();
+    let shownUnready = false;
     const watch = setInterval(() => {
-      const g = frame()?.dataset.guard;
-      if (g) seen.add(g);
+      const el = frame();
+      if (el?.dataset.guard === 'live' && !signals.includes(`${el.name}:ready`)) shownUnready = true;
     }, 10);
     try {
       await expect.poll(notice, CLOSE).not.toBeNull();
@@ -150,7 +157,7 @@ describe('HtmlPreviewPanel in a real browser', () => {
       clearInterval(watch);
     }
     expect(frame()).toBeNull();
-    expect(seen.has('live')).toBe(false);
+    expect(shownUnready).toBe(false);
   });
 
   it('closes the frame when a link in it is followed, and Reload brings the mockup back', async () => {
