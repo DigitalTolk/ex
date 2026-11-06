@@ -17,9 +17,11 @@ export interface User {
   // Directory attributes synced from Microsoft 365 at SSO login (read-only).
   phone?: string;
   manager?: UserManager;
-  // A machine account (a webhook's or the reminder bot's), and an agent
-  // ("agent"): neither is someone to tag in a reminder.
+  // A machine account (a webhook's, the reminder bot's or an API bot), its
+  // handle, and an agent ("agent"): neither bots nor agents are someone to
+  // tag in a reminder.
   isBot?: boolean;
+  username?: string;
   kind?: string;
 }
 

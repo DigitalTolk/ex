@@ -44,6 +44,7 @@ const ConnectorsPage = lazy(() => import('@/pages/ConnectorsPage'));
 const ProjectsPage = lazy(() => import('@/pages/ProjectsPage'));
 const ProjectDetailPage = lazy(() => import('@/pages/ProjectDetailPage'));
 const AdminAgentsPage = lazy(() => import('@/pages/AdminAgentsPage'));
+const AdminBotsPage = lazy(() => import('@/pages/AdminBotsPage'));
 const SchedulesPage = lazy(() => import('@/pages/SchedulesPage'));
 // Tiny layout shell — not worth its own chunk, and it must be there before
 // any of its lazy children resolve so the tab strip never flashes in late.
@@ -185,6 +186,7 @@ function AppRoutes() {
         <Route path="admin" element={<AdminLayout />}>
           <Route index element={<AdminPage />} />
           <Route path="agents" element={<AdminAgentsPage />} />
+          <Route path="bots" element={<AdminBotsPage />} />
         </Route>
         <Route path="webhooks" element={<IncomingWebhooksPage />} />
         <Route path="emojis" element={<CustomEmojiPage />} />

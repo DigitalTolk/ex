@@ -89,11 +89,14 @@ export function useCreateConversation() {
 // Every caller picks people to add, message or post to, so deactivated
 // accounts are left out (through `select`: the cached rows stay whole, and a
 // live deactivation drops the account from an open picker).
-export function useUserLookup(query: string, options?: { keepPrevious?: boolean }) {
+// `bots` also finds bot accounts: adding to a channel is how a bot gets
+// anywhere, and the only place bots are offered.
+export function useUserLookup(query: string, options?: { keepPrevious?: boolean; bots?: boolean }) {
+  const bots = options?.bots === true;
   return useQuery({
-    queryKey: queryKeys.searchUsers(query),
+    queryKey: bots ? queryKeys.searchInvitable(query) : queryKeys.searchUsers(query),
     queryFn: async ({ signal }) => {
-      const res = await apiFetch<LookupUser[]>(`/api/v1/users?q=${encodeURIComponent(query)}`, { signal });
+      const res = await apiFetch<LookupUser[]>(`/api/v1/users?q=${encodeURIComponent(query)}${bots ? '&bots=true' : ''}`, { signal });
       return Array.isArray(res) ? res : [];
     },
     select: withoutDeactivated<LookupUser>,
@@ -102,7 +105,7 @@ export function useUserLookup(query: string, options?: { keepPrevious?: boolean 
   });
 }
 
-type LookupUser = { id: string; email: string; displayName: string; avatarURL?: string; userStatus?: UserStatus | null; status?: string };
+type LookupUser = { id: string; email: string; displayName: string; avatarURL?: string; userStatus?: UserStatus | null; status?: string; isBot?: boolean; username?: string };
 
 // useAllUsers loads the entire roster into the React Query cache so
 // the mention popup can filter client-side without a per-keystroke

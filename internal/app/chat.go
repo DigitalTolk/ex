@@ -35,6 +35,8 @@ type chat struct {
 	settings      *service.SettingsService
 	unfurl        *service.UnfurlService
 	webhooks      *service.IncomingWebhookService
+	bots          *service.BotService
+	mattermost    *service.MattermostService
 	commands      *service.CommandService
 	// directorySync is nil without the Microsoft 365 integration.
 	directorySync *service.DirectorySyncService
@@ -175,6 +177,14 @@ func (a *App) buildChat(ctx context.Context) error {
 	c.webhooks.SetBotProvisioner(c.users)
 	c.webhooks.SetMembershipResolver(members)
 	c.webhooks.SetPublisher(in.pubsub)
+
+	// ------------------------------------------------------------- Bots + the Mattermost-compatible API
+	// Admins manage bot accounts and their tokens; an integration written
+	// against Mattermost's REST API acts as a bot with one, through the same
+	// services the app uses (the webhooks' Mattermost markup translation
+	// included).
+	c.bots = service.NewBotService(store.NewBotStore(in.db), in.users, c.users, in.cache, in.pubsub)
+	c.mattermost = service.NewMattermostService(c.channels, members, in.users, c.messages, c.conversations, c.webhooks)
 
 	// ------------------------------------------------------------- Microsoft 365 (Graph)
 	// App-only Graph client keyed to the same Azure AD app registration the

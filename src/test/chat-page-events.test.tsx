@@ -941,6 +941,13 @@ describe('ChatPage WebSocket handlers', () => {
     }).not.toThrow();
   });
 
+  it('onBotChanged refetches the bot lists (and their tokens)', () => {
+    const { qc } = renderAt('/');
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+    (capturedOptions.onBotChanged as (d: unknown) => void)({});
+    expect(spy).toHaveBeenCalledWith({ queryKey: ['bots'] });
+  });
+
   it('onProjectChanged refreshes the projects list and every open project', () => {
     const { qc } = renderAt('/');
     const spy = vi.spyOn(qc, 'invalidateQueries');

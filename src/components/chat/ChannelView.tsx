@@ -232,7 +232,7 @@ export function ChannelView() {
     }
     if (usersData) {
       for (const u of usersData) {
-        m[u.id] = { displayName: u.displayName || 'Unknown', avatarURL: u.avatarURL, userStatus: u.userStatus };
+        m[u.id] = { displayName: u.displayName || 'Unknown', avatarURL: u.avatarURL, userStatus: u.userStatus, isBot: u.isBot };
       }
     }
     return m;

@@ -136,6 +136,10 @@ export const EventWebhookChanged = "webhook.changed"; // incoming-webhook list c
 /**
  * Event type constants used across the application.
  */
+export const EventBotChanged = "bot.changed"; // a bot or its tokens changed (admin page); data-less nudge to refetch
+/**
+ * Event type constants used across the application.
+ */
 export const EventProjectChanged = "project.changed"; // a project or its design references changed; data-less nudge to refetch
 /**
  * EventSettingsUpdated tells every client the workspace settings changed

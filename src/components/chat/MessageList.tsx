@@ -64,6 +64,7 @@ export interface UserMapEntry {
   displayName: string;
   avatarURL?: string;
   userStatus?: UserStatus;
+  isBot?: boolean;
 }
 
 type OlderPaging = Pick<MessageListProps, 'hasNextPage' | 'isFetchingNextPage' | 'fetchNextPage'>;

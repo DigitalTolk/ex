@@ -130,4 +130,50 @@ describe('MemberList - inline invite', () => {
     expect(await screen.findByTestId('member-add-user-u-2')).toBeInTheDocument();
     expect(screen.queryByTestId('member-add-user-u-gone')).not.toBeInTheDocument();
   });
+
+  // A bot posts only where it is a member, so this search finds bots too —
+  // shown by their handle, never their undeliverable address.
+  it('offers bots when adding someone, by their handle', async () => {
+    mockApiFetch.mockImplementation((path: string) =>
+      Promise.resolve(
+        path.startsWith('/api/v1/users?q=')
+          ? [
+              { id: 'u-2', displayName: 'Incy Person', email: 'incy@x.com' },
+              { id: 'b-1', displayName: 'Incident Bot', email: 'b-1@bots.ex.invalid', isBot: true, username: 'incident-bot' },
+              { id: 'b-2', displayName: 'Incident Alerts', email: 'b-2@bots.ex.invalid', isBot: true },
+            ]
+          : undefined,
+      ),
+    );
+    const user = userEvent.setup();
+    renderWithProviders(
+      <MemberList members={[adminMember]} channelId="ch-1" currentUserId="admin-1" currentUserRole={1} />,
+    );
+
+    await user.type(screen.getByLabelText('Add member'), 'inc');
+
+    expect(await screen.findByTestId('member-add-user-b-1')).toHaveTextContent('@incident-bot');
+    expect(mockApiFetch.mock.calls.map(([path]) => path)).toContain('/api/v1/users?q=inc&bots=true');
+    expect(screen.getByTestId('member-add-user-u-2')).toHaveTextContent('incy@x.com');
+    // Migrated without a handle: just its name.
+    expect(screen.getByTestId('member-add-user-b-2')).toHaveTextContent('Incident Alerts');
+    expect(screen.getByTestId('member-add-user-b-2')).not.toHaveTextContent('@');
+    expect(screen.getByTestId('member-add-user-b-2')).not.toHaveTextContent('bots.ex.invalid');
+    expect(screen.getByTestId('member-add-user-b-1')).not.toHaveTextContent('bots.ex.invalid');
+  });
+
+  it('labels the bots among the members', () => {
+    mockApiFetch.mockResolvedValue(undefined);
+    renderWithProviders(
+      <MemberList
+        members={[adminMember, { channelID: 'ch-1', userID: 'b-1', role: 'member', displayName: 'Incident Bot', joinedAt: '2026-01-01T00:00:00Z' }]}
+        userMap={{ 'admin-1': { displayName: 'Admin' }, 'b-1': { displayName: 'Incident Bot', isBot: true } }}
+        channelId="ch-1"
+        currentUserId="admin-1"
+        currentUserRole={2}
+      />,
+    );
+    expect(screen.getByTestId('member-name-status-b-1').parentElement).toHaveTextContent('Incident BotBot');
+    expect(screen.getByTestId('member-name-status-admin-1').parentElement).not.toHaveTextContent('Bot');
+  });
 });

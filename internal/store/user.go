@@ -46,6 +46,17 @@ type userItem struct {
 	model.User
 }
 
+// newUserItem is the row a user is stored as, listed in GSI2 by creation time.
+func newUserItem(u *model.User) userItem {
+	return userItem{
+		PK:     userPK(u.ID),
+		SK:     profileSK(),
+		GSI2PK: allUsersGSI2PK(),
+		GSI2SK: u.CreatedAt.Format(time.RFC3339Nano) + "#" + u.ID,
+		User:   *u,
+	}
+}
+
 // userEmailItem stores the email-to-userID mapping.
 type userEmailItem struct {
 	PK     string `dynamodbav:"PK"`
@@ -66,14 +77,7 @@ func (s *UserStoreImpl) CreateUser(ctx context.Context, user *model.User) error 
 		return err
 	}
 
-	item := userItem{
-		PK:     userPK(user.ID),
-		SK:     profileSK(),
-		GSI2PK: allUsersGSI2PK(),
-		GSI2SK: user.CreatedAt.Format(time.RFC3339Nano) + "#" + user.ID,
-		User:   *user,
-	}
-	userAV := mustAttrs(attributevalue.MarshalMap(item))
+	userAV := mustAttrs(attributevalue.MarshalMap(newUserItem(user)))
 
 	emailItem := userEmailItem{
 		PK:     userEmailPK(user.Email),
@@ -241,14 +245,7 @@ func (s *UserStoreImpl) ensureEmailIndex(ctx context.Context, email, userID stri
 
 func (s *UserStoreImpl) UpdateUser(ctx context.Context, user *model.User) error {
 	user.Email = normalizeStoredEmail(user.Email)
-	item := userItem{
-		PK:     userPK(user.ID),
-		SK:     profileSK(),
-		GSI2PK: allUsersGSI2PK(),
-		GSI2SK: user.CreatedAt.Format(time.RFC3339Nano) + "#" + user.ID,
-		User:   *user,
-	}
-	av := mustAttrs(attributevalue.MarshalMap(item))
+	av := mustAttrs(attributevalue.MarshalMap(newUserItem(user)))
 
 	_, err := s.Client.PutItem(ctx, &dynamodb.PutItemInput{
 		TableName:           aws.String(s.Table),
