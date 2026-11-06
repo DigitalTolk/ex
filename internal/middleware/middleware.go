@@ -362,7 +362,8 @@ func RequestID(next http.Handler) http.Handler {
 // inherit this one.
 //
 // frame-src is 'none' unless CSPOptions.FramePath names the one route the
-// page may frame (the preview); see frameSources.
+// page may frame (the HTML preview) or CSPOptions.FrameSrc the SharePoint
+// hosts a file preview loads from; see frameSources.
 const securityHeaderCSP = "default-src 'self'; " +
 	"script-src 'self'; " +
 	"style-src 'self' 'unsafe-inline'; " +
@@ -411,6 +412,10 @@ type CSPOptions struct {
 	// FrameHosts are the deployment's public hosts (host[:port]) that
 	// FramePath is allowed under, besides the host each request names.
 	FrameHosts []string
+	// FrameSrc are https origins the page may frame besides that route:
+	// the SharePoint hosts a file preview loads from ("https://host" or
+	// "https://*.domain"). Anything else is dropped.
+	FrameSrc []string
 }
 
 // trustedTypesReportOnly asks the browser to report — not block — any string
@@ -435,7 +440,7 @@ func SecurityHeadersWithOptions(o CSPOptions) func(http.Handler) http.Handler {
 	// Host); everything around it is fixed.
 	const noFrames = "frame-src 'none'"
 	beforeFrames, afterFrames, _ := strings.Cut(csp, noFrames)
-	frames := newFrameSources(o.FramePath, o.FrameHosts)
+	frames := newFrameSources(o.FramePath, o.FrameHosts, o.FrameSrc)
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			h := w.Header()

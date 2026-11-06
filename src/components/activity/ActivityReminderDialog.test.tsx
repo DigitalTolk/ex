@@ -49,6 +49,7 @@ describe('ActivityReminderDialog', () => {
     // The dialog's module loads on its first open.
     expect(await screen.findByRole('dialog')).toBeInTheDocument();
     fireEvent.click(screen.getByTestId('reminder-quick-in1h'));
+    fireEvent.change(screen.getByTestId('reminder-note'), { target: { value: 'reply to Bob' } });
     fireEvent.click(screen.getByTestId('reminder-confirm'));
     await waitFor(() =>
       expect(apiFetch).toHaveBeenCalledWith(
@@ -57,7 +58,10 @@ describe('ActivityReminderDialog', () => {
       ),
     );
     const body = JSON.parse(vi.mocked(apiFetch).mock.calls[0][1]!.body as string);
-    expect(body).toMatchObject({ parentID: 'ch-1', parentType: 'channel', channelSlug: 'general' });
+    expect(body).toMatchObject({ parentID: 'ch-1', parentType: 'channel', channelSlug: 'general', note: 'reply to Bob' });
+    // No people picker here: for you alone.
+    expect(body.everyone).toBeUndefined();
+    expect(body.userIDs).toBeUndefined();
     await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
 

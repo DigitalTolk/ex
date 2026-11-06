@@ -405,6 +405,39 @@ describe('MessageItem browser behavior', () => {
     expect(marker?.textContent).toBe('(edited)');
   });
 
+  // A message you set a reminder on carries a ⏰: in the header beside the
+  // time, or at the end of a grouped (headerless) message's text, after any
+  // "(edited)".
+  it('marks a message you have a reminder on, with a header or without', async () => {
+    const reminder = { id: 'r-1', userID: 'user-1', messageID: 'msg-1', parentID: 'channel-1', parentType: 'channel' as const, remindAt: '2099-01-01T09:00:00Z', createdAt: '' };
+    const { rerender } = await renderWithProviders(
+      <MessageItem message={makeMessage()} firstInGroup authorName="Alice" isOwn={false} channelId="channel-1" currentUserId="user-1" reminder={reminder} />,
+    );
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="message-reminder-mark"]')).not.toBeNull());
+
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await rerender(
+      <QueryClientProvider client={qc}>
+        <BrowserRouter>
+          <MessageItem message={makeMessage({ body: 'fixed a typo', editedAt: '2026-07-13T10:00:00Z' })} firstInGroup={false} authorName="Alice" isOwn={false} channelId="channel-1" currentUserId="user-1" reminder={reminder} />
+        </BrowserRouter>
+      </QueryClientProvider>,
+    );
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="grouped-edited-marker"]')).not.toBeNull());
+    expect(document.querySelectorAll('[data-testid="message-reminder-mark"]')).toHaveLength(1);
+
+    await rerender(
+      <QueryClientProvider client={qc}>
+        <BrowserRouter>
+          <MessageItem message={makeMessage({ body: 'pristine' })} firstInGroup={false} authorName="Alice" isOwn={false} channelId="channel-1" currentUserId="user-1" reminder={reminder} />
+        </BrowserRouter>
+      </QueryClientProvider>,
+    );
+    await vi.waitFor(() => expect(document.body.textContent).toContain('pristine'));
+    expect(document.querySelector('[data-testid="grouped-edited-marker"]')).toBeNull();
+    expect(document.querySelector('[data-testid="message-reminder-mark"]')).not.toBeNull();
+  });
+
   it('an unedited grouped message shows no edited marker', async () => {
     await renderWithProviders(
       <MessageItem

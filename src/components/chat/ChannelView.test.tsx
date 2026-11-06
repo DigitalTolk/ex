@@ -55,7 +55,8 @@ let channelQuery: { data?: Channel; error?: Error; isLoading?: boolean };
 let userChannels: { channelID: string; channelName: string; channelType?: string }[] = [];
 const messagesFor = vi.fn();
 
-vi.mock('@/context/AuthContext', () => ({
+vi.mock('@/context/AuthContext', () => {
+  const auth = {
   useAuth: () => ({
     user: { id: 'u-1', displayName: 'Alice', email: 'a@a.com', systemRole: 'member', status: 'active' },
     isAuthenticated: true,
@@ -64,7 +65,9 @@ vi.mock('@/context/AuthContext', () => ({
     logout: vi.fn(),
     setAuth: vi.fn(),
   }),
-}));
+};
+  return { ...auth, useOptionalAuth: auth.useAuth };
+});
 
 vi.mock('@/context/UnreadContext', () => ({
   useUnread: () => ({

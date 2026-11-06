@@ -1,9 +1,11 @@
 import { useState, type ChangeEvent, type Dispatch, type SetStateAction } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import type { DraftAttachment } from '@/components/chat/AttachmentChip';
 import { uploadAttachment, useDeleteDraftAttachment } from '@/hooks/useAttachments';
 import { isImageAttachment } from '@/lib/file-helpers';
 import { MAX_ATTACHMENTS_PER_MESSAGE } from '@/lib/limits';
 import { ApiError } from '@/lib/api';
+import { isOfficeFile, keepsOfficeFilesInOneDrive, officeFileLink, putOfficeFile, type OfficeParent } from '@/lib/office-upload';
 
 // Uploads run at most this many at a time.
 const UPLOAD_POOL_SIZE = 4;
@@ -12,13 +14,17 @@ interface ComposerUploadsOptions {
   drafts: DraftAttachment[];
   setDrafts: Dispatch<SetStateAction<DraftAttachment[]>>;
   markLocallyEdited: () => void;
+  // Where Office files may go to the user's OneDrive from (see
+  // lib/office-upload). Unset, every file is attached.
+  officeParent?: OfficeParent;
 }
 
 // useComposerUploads turns picked, pasted and dropped files into attachment
 // chips: each file gets a chip with a progress bar at once, uploads run in a
 // small pool, a failed file drops only its own chip, and removing a chip
 // deletes its draft attachment on the server.
-export function useComposerUploads({ drafts, setDrafts, markLocallyEdited }: ComposerUploadsOptions) {
+export function useComposerUploads({ drafts, setDrafts, markLocallyEdited, officeParent }: ComposerUploadsOptions) {
+  const queryClient = useQueryClient();
   const [isUploading, setIsUploading] = useState(false);
   const [uploadError, setUploadError] = useState('');
   const deleteDraft = useDeleteDraftAttachment();
@@ -66,9 +72,31 @@ export function useComposerUploads({ drafts, setDrafts, markLocallyEdited }: Com
     // captured (allSettled-style) so one bad file doesn't abort siblings.
     const errors: string[] = [];
     let cursor = 0;
+    const oneDrive = officeParent && keepsOfficeFilesInOneDrive(queryClient) ? officeParent : null;
+    const setProgress = (id: string, fraction: number) =>
+      setDrafts((prev) => prev.map((d) => (d.id === id ? { ...d, progress: fraction } : d)));
     const runOne = async (idx: number) => {
       const file = files[idx];
       const tempID = tempIDs[idx];
+      if (oneDrive && isOfficeFile(file.name)) {
+        setDrafts((prev) => prev.map((d) => (d.id === tempID ? { ...d, destination: 'OneDrive' } : d)));
+        try {
+          // The server passes the bytes on to Microsoft as they come and
+          // answers once OneDrive has the file, so the chip stays short of
+          // done until the link is back.
+          const up = await putOfficeFile(oneDrive, file, (fraction) => setProgress(tempID, Math.min(fraction, 0.99)));
+          // In OneDrive: the chip stays, and the message carries its link
+          // instead of the file.
+          setDrafts((prev) =>
+            prev.map((d) => (d.id === tempID ? { ...d, filename: up.name, size: up.size, progress: 1, link: officeFileLink(up) } : d)),
+          );
+          return;
+        } catch {
+          // Not this time (no Microsoft sign-in, OneDrive refused it, …):
+          // attach it like any other file.
+          setDrafts((prev) => prev.map((d) => (d.id === tempID ? { ...d, progress: 0, destination: undefined } : d)));
+        }
+      }
       // currentID flips from the temp id to the server-issued id once
       // init resolves. Progress callbacks use this so they can find the
       // chip whether or not the swap has happened yet.
@@ -95,12 +123,8 @@ export function useComposerUploads({ drafts, setDrafts, markLocallyEdited }: Com
               }),
             );
           },
-          onProgress: (fraction) => {
-            // Match by the live id — temp before init, server-issued after.
-            setDrafts((prev) =>
-              prev.map((d) => (d.id === currentID ? { ...d, progress: fraction } : d)),
-            );
-          },
+          // Match by the live id — temp before init, server-issued after.
+          onProgress: (fraction) => setProgress(currentID, fraction),
         });
       } catch (err) {
         errors.push(err instanceof Error ? err.message : 'Upload failed');
@@ -143,6 +167,8 @@ export function useComposerUploads({ drafts, setDrafts, markLocallyEdited }: Com
     if (target?.localURL) URL.revokeObjectURL(target.localURL);
     markLocallyEdited();
     setDrafts((d) => d.filter((x) => x.id !== id));
+    // A OneDrive file's chip is only its link; the file stays the user's.
+    if (target?.link) return;
     try {
       await deleteDraft.mutateAsync(id);
     } catch (err) {

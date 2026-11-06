@@ -151,6 +151,52 @@ func (s *RedisReminderStore) ListPendingReminders(ctx context.Context, userID st
 	return reminders, nil
 }
 
+// GetPendingReminder returns userID's reminder id. ErrNotFound when there is
+// none — fired, cancelled, or someone else's (never leaking that it exists).
+func (s *RedisReminderStore) GetPendingReminder(ctx context.Context, userID, id string) (*model.Reminder, error) {
+	r, err := s.getReminder(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if r.UserID != userID {
+		return nil, ErrNotFound
+	}
+	return r, nil
+}
+
+// rescheduleScript rewrites a reminder still waiting in the due queue: its
+// payload and its place in the due queue and the owner's index. A reminder the
+// poller has claimed (gone from the due queue) is left alone, so an edit racing
+// the fire can never put it back. KEYS[1]=due queue, KEYS[2]=owner index,
+// KEYS[3]=payload; ARGV[1]=id, ARGV[2]=remindAt ms, ARGV[3]=payload JSON,
+// ARGV[4]=payload TTL ms. Returns 1 when rewritten, 0 when no longer pending.
+var rescheduleScript = redis.NewScript(`
+if not redis.call('ZSCORE', KEYS[1], ARGV[1]) then
+  return 0
+end
+redis.call('SET', KEYS[3], ARGV[3], 'PX', ARGV[4])
+redis.call('ZADD', KEYS[1], ARGV[2], ARGV[1])
+redis.call('ZADD', KEYS[2], ARGV[2], ARGV[1])
+return 1
+`)
+
+// RescheduleReminder saves an edited pending reminder: its time and people.
+// Returns ErrNotFound when it already fired or was cancelled.
+func (s *RedisReminderStore) RescheduleReminder(ctx context.Context, r *model.Reminder) error {
+	ttl := max(time.Until(r.RemindAt)+reminderPayloadBuffer, reminderPayloadBuffer)
+	res, err := redisx.RunScript(ctx, s.client, rescheduleScript,
+		[]string{reminderDueKey(), reminderUserKey(r.UserID), reminderPayloadKey(r.ID)},
+		r.ID, r.RemindAt.UnixMilli(), mustJSON(json.Marshal(r)), ttl.Milliseconds(),
+	).Int()
+	if err != nil {
+		return fmt.Errorf("store: reschedule reminder: %w", err)
+	}
+	if res == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // CancelReminder removes a pending reminder owned by userID. Returns false when
 // no such reminder exists for the user (already fired, cancelled, or not theirs).
 func (s *RedisReminderStore) CancelReminder(ctx context.Context, userID, id string) (bool, error) {

@@ -47,9 +47,20 @@ type fakeReminderSvc struct {
 	pending   []*model.Reminder
 	listErr   error
 	cancelErr error
+	updated   *model.Reminder
+	updateErr error
+	updateIn  service.ReminderUpdate
+	updateID  string
+	schedIn   service.ReminderInput
 }
 
-func (f *fakeReminderSvc) Schedule(context.Context, string, service.ReminderInput) (*model.Reminder, error) {
+func (f *fakeReminderSvc) Update(_ context.Context, _, id string, in service.ReminderUpdate) (*model.Reminder, error) {
+	f.updateID, f.updateIn = id, in
+	return f.updated, f.updateErr
+}
+
+func (f *fakeReminderSvc) Schedule(_ context.Context, _ string, in service.ReminderInput) (*model.Reminder, error) {
+	f.schedIn = in
 	return f.scheduled, f.schedErr
 }
 func (f *fakeReminderSvc) ListPending(context.Context, string) ([]*model.Reminder, error) {
@@ -149,10 +160,13 @@ func TestActivityHandler_CreateReminder(t *testing.T) {
 	h, jwt := setupActivityHandler(t, &fakeActivitySvc{}, good)
 	handler := middleware.Auth(jwt)(http.HandlerFunc(h.CreateReminder))
 	rec := httptest.NewRecorder()
-	body := `{"messageID":"m-1","parentID":"ch-1","parentType":"channel","remindAt":"` + now.Format(time.RFC3339) + `"}`
+	body := `{"messageID":"m-1","parentID":"ch-1","parentType":"channel","remindAt":"` + now.Format(time.RFC3339) + `","userIDs":["u-2"],"everyone":true,"excludedUserIDs":["u-3"],"note":"bring the numbers"}`
 	handler.ServeHTTP(rec, authedReq(t, jwt, http.MethodPost, "/api/v1/reminders", body))
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("CreateReminder = %d %s", rec.Code, rec.Body.String())
+	}
+	if in := good.schedIn; in.MessageID != "m-1" || len(in.UserIDs) != 1 || !in.Everyone || len(in.ExcludedUserIDs) != 1 || in.Note != "bring the numbers" {
+		t.Fatalf("scheduled with %+v", in)
 	}
 }
 
@@ -312,5 +326,42 @@ func TestActivityHandler_ItemsUnauthorized(t *testing.T) {
 		if rec.Code != http.StatusUnauthorized {
 			t.Errorf("%s without a user = %d, want 401", name, rec.Code)
 		}
+	}
+}
+
+func TestActivityHandler_UpdateReminder(t *testing.T) {
+	later := time.Now().Add(2 * time.Hour).UTC().Truncate(time.Second)
+	svc := &fakeReminderSvc{updated: &model.Reminder{ID: "r1", RemindAt: later, UserIDs: []string{"u-2"}}}
+	h, jwt := setupActivityHandler(t, &fakeActivitySvc{}, svc)
+	mux := http.NewServeMux()
+	mux.Handle("PATCH /api/v1/reminders/{id}", middleware.Auth(jwt)(http.HandlerFunc(h.UpdateReminder)))
+
+	rec := httptest.NewRecorder()
+	body := `{"remindAt":"` + later.Format(time.RFC3339) + `","userIDs":["u-2"],"everyone":true,"excludedUserIDs":["u-3"]}`
+	mux.ServeHTTP(rec, authedReq(t, jwt, http.MethodPatch, "/api/v1/reminders/r1", body))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"userIDs":["u-2"]`) {
+		t.Fatalf("UpdateReminder = %d %s", rec.Code, rec.Body.String())
+	}
+	if svc.updateID != "r1" || !svc.updateIn.RemindAt.Equal(later) || len(svc.updateIn.UserIDs) != 1 || !svc.updateIn.Everyone || len(svc.updateIn.ExcludedUserIDs) != 1 {
+		t.Fatalf("service got %q %+v", svc.updateID, svc.updateIn)
+	}
+
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, authedReq(t, jwt, http.MethodPatch, "/api/v1/reminders/r1", `{bad`))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("bad body = %d", rec.Code)
+	}
+
+	svc.updateErr = store.ErrNotFound
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, authedReq(t, jwt, http.MethodPatch, "/api/v1/reminders/r1", body))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("gone reminder = %d", rec.Code)
+	}
+
+	rec = httptest.NewRecorder()
+	h.UpdateReminder(rec, httptest.NewRequest(http.MethodPatch, "/api/v1/reminders/r1", strings.NewReader(body)))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("no user = %d", rec.Code)
 	}
 }

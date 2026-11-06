@@ -234,9 +234,10 @@ func (a *App) buildChat(ctx context.Context) error {
 	c.commands.SetDraftClearer(c.drafts)
 
 	// ------------------------------------------------------------- Activity + reminders
-	// Reaction hints land in the message author's activity stream; reminders
-	// fire into it at their due time plus a desktop/mobile alert
-	// (NotifyDirect, wired with the notifier).
+	// Reaction hints land in the message author's activity stream. Reminders
+	// come due as the reminder bot's posts; one the bot can't post falls back
+	// to the owner's activity stream plus a desktop/mobile alert (NotifyDirect,
+	// wired with the notifier).
 	c.activity = service.NewActivityService(store.NewRedisActivityStore(in.cache.Client()), in.pubsub)
 	c.activity.SetChannelResolver(c.channels)      // snapshot channel slug onto reaction activity items
 	c.activity.SetMemberLister(c.messages)         // who holds items about an edited/deleted message
@@ -256,6 +257,9 @@ func (a *App) buildChat(ctx context.Context) error {
 	c.activity.SetMentionResolver(c.mentions)
 	c.activity.SetDeactivatedAccounts(c.users)
 	c.reminders.SetMentionResolver(c.mentions)
+	// Due reminders are the reminder bot's posts: a reply tagging the people
+	// added, or a DM to the owner linking the message.
+	c.reminders.SetBot(c.messages, c.users, c.conversations, cfg.BaseURL)
 	// Scheduled messages: composed now, posted at their time through the
 	// normal send path (notifications included).
 	c.scheduled = service.NewScheduledMessageService(store.NewScheduledMessageStore(in.db), c.messages, c.attachments, in.pubsub)

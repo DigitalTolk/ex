@@ -119,6 +119,32 @@ describe('FilesPanel browser behaviour', () => {
     await expect.element(screen.getByTestId('image-lightbox')).toBeVisible();
   });
 
+  it('opens a SharePoint file as it is, and moves on to the attachments beside it', async () => {
+    const budget = {
+      id: 'f-1',
+      name: 'Budget.xlsx',
+      size: 9,
+      webURL: 'https://contoso.sharepoint.com/sites/team/Budget.xlsx',
+      editURL: 'https://contoso.sharepoint.com/sites/team/_layouts/15/Doc.aspx?sourcedoc=%7Bu-1%7D&action=edit',
+      downloadURL: 'https://contoso.sharepoint.com/sites/team/_layouts/15/download.aspx?UniqueId=u-1',
+    };
+    apiFetchMock.mockReset();
+    apiFetchMock.mockImplementation(async (url: string) =>
+      url.startsWith('/api/v1/sharepoint/preview')
+        ? { url: 'about:blank#viewer' }
+        : { files: [{ attachmentID: 'sp:f-1', messageID: 'm-sp', authorID: 'u-1', createdAt: '2026-05-02T12:00:00Z', sharePoint: budget }, file('spec')] },
+    );
+    const screen = await renderPanel();
+    await screen.getByRole('button', { name: 'Open Budget.xlsx' }).click();
+    await expect.element(screen.getByTestId('sharepoint-preview')).toHaveAttribute('src', 'about:blank#viewer');
+    expect(requested()).toContain('/api/v1/sharepoint/preview?parentType=channel&parentID=ch-1&fileID=f-1');
+    await expect.element(screen.getByTestId('image-lightbox-edit')).toHaveAttribute('href', budget.editURL);
+    await expect.element(screen.getByTestId('image-lightbox-download')).toHaveAttribute('href', budget.downloadURL);
+    await screen.getByTestId('image-lightbox-next').click();
+    await expect.element(screen.getByTestId('image-lightbox-pdf')).toBeInTheDocument();
+    expect(document.querySelector('[data-testid="image-lightbox-edit"]')).toBeNull();
+  });
+
   it('loads the next page when the list is scrolled to its end', async () => {
     const first = Array.from({ length: 30 }, (_, i) => file(`f${String(i).padStart(2, '0')}`));
     setupRoutes({
@@ -134,6 +160,24 @@ describe('FilesPanel browser behaviour', () => {
     list.parentElement!.scrollTop = list.parentElement!.scrollHeight;
     await expect.element(screen.getByText('older.pdf')).toBeInTheDocument();
     expect(requested()).toEqual(['/api/v1/channels/ch-1/files', '/api/v1/channels/ch-1/files?cursor=c2']);
+  });
+
+  // While the first page loads the list is empty, so its end is on screen.
+  // When a full page lands and pushes it out of view, that must not count as
+  // having reached the end.
+  it('loads no second page when a slow first page fills the panel', async () => {
+    const first = Array.from({ length: 30 }, (_, i) => file(`f${String(i).padStart(2, '0')}`));
+    apiFetchMock.mockReset();
+    apiFetchMock.mockImplementation((url: string) =>
+      url.includes('cursor=')
+        ? Promise.resolve({ files: [file('older')] })
+        : new Promise((resolve) => setTimeout(() => resolve({ files: first, nextCursor: 'c2' }), 300)),
+    );
+    const screen = await renderPanel();
+    await expect.element(screen.getByText('f00.pdf')).toBeVisible();
+    // Long enough for an observer to report the end, were it still watched.
+    await new Promise((r) => setTimeout(r, 300));
+    expect(requested()).toEqual(['/api/v1/channels/ch-1/files']);
   });
 
   it('keeps loading while a short page leaves the end of the list in view', async () => {

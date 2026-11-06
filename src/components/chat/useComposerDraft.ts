@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import type { DraftAttachment } from '@/components/chat/AttachmentChip';
 import type { WysiwygEditorHandle } from '@/components/chat/markdown/MarkdownComposer';
+import { composerValue } from '@/lib/office-upload';
 import type { MessageInputValue } from './MessageInput';
 
 // How long a composer must have been hidden before, on waking, it drops its
@@ -53,10 +54,7 @@ export function useComposerDraft({
   const locallyEditedDraftRef = useRef(false);
   const applyingServerDraftRef = useRef(false);
   const focusKeyMountedRef = useRef(false);
-  const latestDraftValueRef = useRef<MessageInputValue>({
-    body: initialBody,
-    attachmentIDs: initialDrafts.map((d) => d.id),
-  });
+  const latestDraftValueRef = useRef<MessageInputValue>(composerValue(initialBody, initialDrafts));
   const hasInitialDraftValueRef = useRef(false);
   const scopedDraftChangeRef = useRef(onDraftChange);
   const activeDraftFocusKeyRef = useRef(focusKey);
@@ -68,7 +66,9 @@ export function useComposerDraft({
     // No client timestamp rides along anymore: the server orders saves vs
     // sends by generation tokens, so a delayed flush can never out-rank a
     // later clear no matter what clock it carries.
-    latestDraftValueRef.current = { body, attachmentIDs: drafts.map((d) => d.id) };
+    // A OneDrive file's link is saved in the draft's text, so leaving before
+    // sending loses nothing.
+    latestDraftValueRef.current = composerValue(body, drafts);
   }, [body, drafts]);
 
   useEffect(() => {
@@ -218,10 +218,7 @@ export function useComposerDraft({
     if (!applyingServerDraftRef.current && md !== body) {
       locallyEditedDraftRef.current = true;
     }
-    latestDraftValueRef.current = {
-      body: md,
-      attachmentIDs: drafts.map((d) => d.id),
-    };
+    latestDraftValueRef.current = composerValue(md, drafts);
     setBody(md);
   };
 

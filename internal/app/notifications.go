@@ -20,6 +20,8 @@ type notifications struct {
 	taskRedis *redis.Client
 	queue     *service.AsynqPushScheduler
 	worker    *service.AsynqPushWorker
+	// sharePoint shares posted SharePoint links; nil unless configured.
+	sharePoint *service.SharePointService
 }
 
 // startTaskWorker is a seam over the worker start: a fresh asynq server only
@@ -77,6 +79,7 @@ func (a *App) buildNotifications(context.Context) error {
 	n.worker = service.NewAsynqPushWorker(n.taskRedis, pushHandler,
 		service.AsynqPushWorkerConfig{Concurrency: cfg.PushWorkerConcurrency})
 	n.worker.Handle(service.TaskTypeNotifyCheck, n.svc.NotifyCheckTaskHandler())
+	a.wireSharePoint()
 	if err := startTaskWorker(n.worker); err != nil {
 		slog.Error("durable task worker failed to start — scheduled pushes and notification checks will wait for another instance", "error", err)
 	} else {

@@ -63,6 +63,7 @@ vi.mock('@/hooks/useMessages', () => ({
 }));
 vi.mock('@/hooks/useActivity', () => ({
   useCreateReminder: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false }),
+  useMessageReminders: () => new Map(),
 }));
 vi.mock('@/hooks/useAttachments', () => ({
   uploadAttachment: vi.fn(),

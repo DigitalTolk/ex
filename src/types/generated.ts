@@ -178,6 +178,24 @@ export interface Reminder {
   parentMessageID?: string;
   channelSlug?: string;
   messagePreview?: string;
+  /**
+   * UserIDs are the people the owner added: when it comes due, the reminder
+   * bot replies to the message tagging the owner and them. Without any, the
+   * bot DMs the owner alone.
+   */
+  userIDs?: string[];
+  /**
+   * Everyone: the reminder is for every member of the chat (UserIDs is then
+   * empty) but ExcludedUserIDs, the few the owner left out. The bot's reply
+   * tags @all, and its notifications skip them.
+   */
+  everyone?: boolean;
+  excludedUserIDs?: string[];
+  /**
+   * Note is the owner's own words for context, shown with the reminder
+   * when it comes due.
+   */
+  note?: string;
   remindAt: string /* RFC3339 */;
   createdAt: string /* RFC3339 */;
 }
@@ -2446,6 +2464,91 @@ export interface WorkspaceSettings {
  * overridden it (50 MiB).
  */
 export const DefaultMaxUploadBytes: number /* int64 */ = 50 * 1024 * 1024;
+
+//////////
+// source: sharepoint.go
+
+/**
+ * SharePointStatus is how far sharing a posted SharePoint link with its
+ * channel or conversation has got.
+ */
+export type SharePointStatus = string;
+export const SharePointPending: SharePointStatus = "pending";
+export const SharePointShared: SharePointStatus = "shared";
+export const SharePointFailed: SharePointStatus = "failed";
+/**
+ * SharePointProblem says why a link was not shared.
+ */
+export type SharePointProblem = string;
+/**
+ * SharePointSignIn: the poster's Microsoft sign-in has to be renewed —
+ * none is stored, or it expired or was revoked.
+ */
+export const SharePointSignIn: SharePointProblem = "sign_in";
+/**
+ * SharePointDenied: the poster may not share the file.
+ */
+export const SharePointDenied: SharePointProblem = "denied";
+/**
+ * SharePointNotFound: the link doesn't lead to a file the poster can see.
+ */
+export const SharePointNotFound: SharePointProblem = "not_found";
+/**
+ * SharePointUnavailable: Microsoft 365 could not be reached.
+ */
+export const SharePointUnavailable: SharePointProblem = "unavailable";
+/**
+ * SharePointFile is a SharePoint or OneDrive file (or folder) shared with a
+ * channel or conversation.
+ */
+export interface SharePointFile {
+  id: string;
+  name: string;
+  size: number /* int64 */;
+  folder?: boolean;
+  mimeType?: string;
+  webURL: string;
+  /**
+   * EditURL opens the file for editing in Office for the web; empty for
+   * files Office doesn't edit.
+   */
+  editURL?: string;
+  /**
+   * DownloadURL downloads the file from SharePoint; empty for folders and
+   * items Microsoft 365 gave no SharePoint ids.
+   */
+  downloadURL?: string;
+}
+/**
+ * SharePointLink is a SharePoint link as posted in a channel or conversation:
+ * the file it leads to, once known, and how sharing it went. Problem,
+ * SharedWith and NotShared are filled in only for the person who posted it.
+ */
+export interface SharePointLink {
+  url: string;
+  status: SharePointStatus;
+  posterID: string;
+  file?: SharePointFile;
+  problem?: SharePointProblem;
+  /**
+   * SharedWith counts the members who have the file through this link.
+   */
+  sharedWith?: number /* int */;
+  /**
+   * NotShared lists the members it could not be shared with: guests,
+   * accounts outside the directory, and members Microsoft 365 refused.
+   */
+  notShared?: string[];
+}
+/**
+ * SharePointChangedEvent is the sharepoint.changed payload: these links in
+ * the parent changed state.
+ */
+export interface SharePointChangedEvent {
+  parentID: string;
+  parentType: string;
+  urls: string[];
+}
 
 //////////
 // source: thread_follow.go

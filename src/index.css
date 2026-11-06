@@ -198,6 +198,14 @@ body > :not(#root) {
   /* Caution accent (amber) — for "notify everyone" group mentions etc. Matches
      the amber the pinned-message affordance already uses. */
   --color-caution: #FEF3C7;
+  /* File-type tiles (SharePoint files): documents, spreadsheets,
+   * presentations and PDFs each on their own colour with a white glyph, the
+   * same in both themes (no dark override). */
+  --color-file-document: #2563EB;
+  --color-file-spreadsheet: #16A34A;
+  --color-file-presentation: #EA580C;
+  --color-file-pdf: #DC2626;
+  --color-file-foreground: #FFFFFF;
   --color-caution-foreground: #92400E;
   /* In-app notification banner (Toaster kind="notification"). It must never
    * blend into the surface it covers, so it gets its own distinct palette per

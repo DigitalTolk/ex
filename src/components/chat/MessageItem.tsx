@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type FocusEvent, type PointerEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { SmilePlus, MoreHorizontal, AlarmClock, Eye, Pin, Zap, type LucideIcon } from 'lucide-react';
+import { SmilePlus, MoreHorizontal, AlarmClock, Eye, Pin, Zap, type LucideIcon, Users } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { MessageInput, type MessageInputValue } from '@/components/chat/MessageInput';
 import type { DraftAttachment } from '@/components/chat/AttachmentChip';
@@ -21,13 +21,14 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { LazyReminderDialog as ReminderDialog } from '@/components/chat/LazyReminderDialog';
 import { WatcherDialog } from '@/components/chat/WatcherDialog';
+import { ReminderMark } from '@/components/chat/ReminderMark';
 import { NotSentMark } from '@/components/chat/MessageSendState';
 import { useMessageRowData, useProvidedMessageRowData, type MessageRowData } from '@/hooks/useMessageRowData';
 import { EmojiPicker } from '@/components/EmojiPicker';
 import { UserHoverCard } from '@/components/UserHoverCard';
 import { UserAvatar } from '@/components/UserAvatar';
 import { useEditMessage, useToggleReaction } from '@/hooks/useMessages';
-import { renderMarkdown } from '@/lib/markdown';
+import { renderMarkdown, type RenderOpts } from '@/lib/markdown';
 import { isEmojiOnlyMessage } from '@/lib/emoji-shortcodes';
 import { recordEmojiUse } from '@/lib/emoji-frequency';
 import { padQuickReactions } from '@/lib/quick-reactions';
@@ -40,6 +41,9 @@ import { EmojiGlyph } from '@/components/EmojiGlyph';
 import { MessageAttachments } from '@/components/chat/MessageAttachments';
 import { ThreadActionBar } from '@/components/chat/ThreadActionBar';
 import { UnfurlCard } from '@/components/chat/UnfurlCard';
+import { SharePointAnchor, SharePointCard } from '@/components/chat/SharePointCard';
+import { useSharePointHosts } from '@/hooks/useSharePoint';
+import { isSharePointURL, sharePointURLs } from '@/lib/sharepoint';
 import { MessageRichAttachments } from '@/components/chat/MessageRichAttachments';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { extractURLs, formatLongDateTime, formatRelative } from '@/lib/format';
@@ -61,7 +65,7 @@ import { useMobileBackClose } from '@/hooks/useMobileBackClose';
 import { useTransientOverlayCleanup } from '@/hooks/useTransientOverlayCleanup';
 import { useIsOnline } from '@/stores/presence';
 import { useMessageActions, type MessageAction } from '@/components/chat/useMessageActions';
-import type { Message, UserStatus } from '@/types';
+import type { Message, Reminder, UserStatus } from '@/types';
 
 // Module-level Set so MessageList/ThreadPanel don't need to thread a
 // context through every callsite. Listeners are MessageItems with an
@@ -254,6 +258,8 @@ interface MessageItemProps {
   // This root's thread has replies the viewer hasn't read: its reply bar
   // says so.
   threadHasNew?: boolean;
+  // Your pending reminder on this message, shown as a ⏰ (ReminderMark).
+  reminder?: Reminder;
 }
 
 function formatTime(dateStr: string): string {
@@ -380,6 +386,7 @@ function MessageItemImpl({
   onContentHeightChange,
   quickReactions,
   threadHasNew,
+  reminder,
 }: MessageItemProps & { rowData: MessageRowData }) {
   const isWebhook = !!message.webhookUsername;
   // Per-author presence subscription: only rows whose author actually
@@ -498,7 +505,7 @@ function MessageItemImpl({
 
   // Everything that can be done to the message, for the desktop menu and the
   // mobile sheet alike.
-  const { actions, reminderPresets, deleteDialog, reminderDialog, watcherDialog } = useMessageActions({
+  const { actions, reminderPresets, reminderAllPresets, deleteDialog, reminderDialog, watcherDialog } = useMessageActions({
     message,
     channelId,
     channelSlug,
@@ -637,6 +644,27 @@ function MessageItemImpl({
   // The unfurl scan walks the whole body; memoize so it only runs when the
   // body changes, not on unrelated re-renders.
   const bodyURLs = useMemo(() => extractURLs(message.body), [message.body]);
+  // SharePoint links show as their files (one card each) instead of a link
+  // preview, and open for editing — only once the message has a parent to
+  // ask about them in.
+  const sharePointHosts = useSharePointHosts();
+  const hasParent = !!(channelId || conversationId);
+  const sharePointLinks = useMemo(
+    () => (hasParent ? sharePointURLs(message.body, sharePointHosts) : []),
+    [hasParent, message.body, sharePointHosts],
+  );
+  const sharePointParent = useMemo(() => ({ channelId, conversationId }), [channelId, conversationId]);
+  // The lightbox header's "where": its files and SharePoint cards.
+  const postedIn = channelSlug ? `~${channelSlug}` : conversationId ? 'Direct message' : undefined;
+  const renderLink = useCallback(
+    (href: string, children: ReactNode) =>
+      hasParent && isSharePointURL(href, sharePointHosts) ? (
+        <SharePointAnchor href={href} parent={{ channelId, conversationId }} className="text-link transition-colors hover:text-link/80">
+          {children}
+        </SharePointAnchor>
+      ) : undefined,
+    [hasParent, sharePointHosts, channelId, conversationId],
+  );
 
   // Recomputed only when the reactions map changes, not on every re-render
   // (presence/hover ticks would otherwise re-filter on each paint).
@@ -796,7 +824,7 @@ function MessageItemImpl({
         </motion.div>
         {/* Everything else as a short list. */}
         <motion.div className="flex flex-col divide-y divide-border/60 rounded-2xl bg-muted" {...sheetSection(2)}>
-          {[actions.activity, actions.pin, actions.markUnread, actions.watch, actions.edit, actions.delete].map(
+          {[actions.activity, actions.remindAll, actions.pin, actions.markUnread, actions.watch, actions.edit, actions.delete].map(
             (action) =>
               action && (
                 <button
@@ -1009,6 +1037,7 @@ function MessageItemImpl({
               Pinned
             </span>
           )}
+          {reminder && <ReminderMark reminder={reminder} />}
           {myWatchers.length > 0 && (
             <button
               type="button"
@@ -1072,26 +1101,51 @@ function MessageItemImpl({
                 currentUserId={currentUserId}
                 onContentHeightChange={onContentHeightChange}
                 openTag={openTag}
+                renderLink={renderLink}
                 // Grouped rows have no header (that's where the header rows
                 // show "(edited)"), so the marker rides the end of the text's
                 // last line instead, Slack-style.
                 trailing={
-                  !firstInGroup && message.editedAt ? (
-                    <span data-testid="grouped-edited-marker" className="ml-1 text-xs text-muted-foreground">
-                      (edited)
-                    </span>
+                  !firstInGroup && (message.editedAt || reminder) ? (
+                    <>
+                      {message.editedAt && (
+                        <span data-testid="grouped-edited-marker" className="ml-1 text-xs text-muted-foreground">
+                          (edited)
+                        </span>
+                      )}
+                      {reminder && (
+                        <span className="ml-1 inline-flex align-middle">
+                          <ReminderMark reminder={reminder} />
+                        </span>
+                      )}
+                    </>
                   ) : undefined
                 }
               />
             </div>
+            {sharePointLinks.map((url) => (
+              <SharePointCard
+                key={url}
+                url={url}
+                parent={sharePointParent}
+                currentUserId={currentUserId}
+                nameOf={(id) => userMap?.get(id)?.displayName ?? 'Unknown'}
+                authorName={displayAuthorName}
+                authorAvatarURL={displayAuthorAvatarURL}
+                postedIn={postedIn}
+                postedAt={message.createdAt}
+                onContentHeightChange={onContentHeightChange}
+              />
+            ))}
             {(() => {
               if (message.noUnfurl) return null;
-              // First URL in the body (skipping code) gets a preview
-              // card. Capped at one to keep messages compact.
-              const urls = bodyURLs;
-              return urls[0] ? (
+              // First URL in the body (skipping code) that isn't a SharePoint
+              // file gets a preview card. Capped at one to keep messages
+              // compact.
+              const url = bodyURLs.find((u) => !isSharePointURL(u, sharePointHosts));
+              return url ? (
                 <UnfurlCard
-                  url={urls[0]}
+                  url={url}
                   messageId={message.id}
                   channelId={channelId}
                   conversationId={conversationId}
@@ -1108,13 +1162,7 @@ function MessageItemImpl({
 	                messageID={message.id}
 	                authorName={displayAuthorName}
                 authorAvatarURL={displayAuthorAvatarURL}
-                postedIn={
-                  channelSlug
-                    ? `~${channelSlug}`
-                    : conversationId
-                      ? 'Direct message'
-                      : undefined
-                }
+                postedIn={postedIn}
                 postedAt={message.createdAt}
                 onContentHeightChange={onContentHeightChange}
               />
@@ -1301,6 +1349,21 @@ function MessageItemImpl({
                   </DropdownMenuItem>
                 </DropdownMenuSubContent>
               </DropdownMenuSub>
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger data-testid="remind-all-trigger">
+                  <Users className="mr-2 h-4 w-4" /> Remind all
+                </DropdownMenuSubTrigger>
+                <DropdownMenuSubContent>
+                  {reminderAllPresets.map((preset) => (
+                    <DropdownMenuItem key={preset.key} onClick={preset.run} data-testid={`remind-all-${preset.key}`}>
+                      {preset.label}
+                    </DropdownMenuItem>
+                  ))}
+                  <DropdownMenuItem onClick={actions.remindAll.run} data-testid="remind-all-custom">
+                    Custom…
+                  </DropdownMenuItem>
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
               {[actions.watch, actions.edit, actions.delete].map(
                 (action) => action && <MenuAction key={action.label} action={action} />,
               )}
@@ -1330,6 +1393,8 @@ function MessageItemImpl({
           onOpenChange={reminderDialog.setOpen}
           initialValue={reminderDialog.seed}
           onConfirm={reminderDialog.schedule}
+          people={reminderDialog.people}
+          note=""
         />
       )}
       {watcherDialog.open && (
@@ -1413,6 +1478,7 @@ interface MessageBodyProps {
   openTag: (tag: string) => void;
   // Rendered at the end of the body's last line (see RenderOpts.trailing).
   trailing?: ReactNode;
+  renderLink?: RenderOpts['renderLink'];
 }
 
 const MessageBody = memo(function MessageBody({
@@ -1423,6 +1489,7 @@ const MessageBody = memo(function MessageBody({
   onContentHeightChange,
   openTag,
   trailing,
+  renderLink,
 }: MessageBodyProps) {
   // Marker syntax is plain text anyone can type, so a card renders only for
   // a post an agent run made (agentRunID is stamped by the server, never
@@ -1451,6 +1518,7 @@ const MessageBody = memo(function MessageBody({
         onMediaLoad: onContentHeightChange,
         onTagClick: openTag,
         trailing,
+        renderLink,
         renderUserMention: (userId, displayName, _isSelf, pill) => (
           <UserHoverCard
             key={`mention-${userId}-${message.id}`}

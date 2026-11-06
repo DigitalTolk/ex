@@ -175,6 +175,9 @@ type AsynqPushWorkerConfig struct {
 	Concurrency              int
 	DelayedTaskCheckInterval time.Duration
 	ShutdownTimeout          time.Duration
+	// Queues are the queues this worker takes tasks from, by priority; nil
+	// is asynq's "default" queue, where pushes and notification checks go.
+	Queues map[string]int
 }
 
 // defaultPushWorkerConcurrency replaces the old hardcoded 4-goroutine pool.
@@ -211,6 +214,7 @@ func NewAsynqPushWorker(rdb redis.UniversalClient, handler func(context.Context,
 		LogLevel:                 asynq.WarnLevel,
 		DelayedTaskCheckInterval: cfg.DelayedTaskCheckInterval,
 		ShutdownTimeout:          cfg.ShutdownTimeout,
+		Queues:                   cfg.Queues,
 	})
 	return &AsynqPushWorker{srv: srv, handler: handler, extra: map[string]func(context.Context, *asynq.Task) error{}}
 }

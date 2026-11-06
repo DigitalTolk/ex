@@ -135,6 +135,9 @@ type MessageService struct {
 	fanOutSlots chan struct{}
 	// safetyNet durably re-checks every fan-out (SetNotifySafetyNet).
 	safetyNet NotifySafetyNet
+	// sharePoint shares posted SharePoint links (SetSharePoint); nil unless
+	// SharePoint sharing is configured.
+	sharePoint MessageSharePoint
 	// afterThreadMarkersDropped observes each finished dropThreadMarkers
 	// (tests only).
 	afterThreadMarkersDropped func(userID string)
@@ -357,6 +360,19 @@ type NotifySafetyNet interface {
 
 // SetNotifySafetyNet wires the durable fan-out check.
 func (s *MessageService) SetNotifySafetyNet(n NotifySafetyNet) { s.safetyNet = n }
+
+// MessageSharePoint shares the SharePoint links messages carry and lists the
+// files they shared (SharePointService).
+type MessageSharePoint interface {
+	MessageSent(ctx context.Context, msg *model.Message, parentType string)
+	MessageEdited(ctx context.Context, before, after *model.Message, parentType string)
+	MessagesDeleted(ctx context.Context, parentID, parentType string, ids []string)
+	Files(ctx context.Context, parentID string) ([]SharePointFileEntry, error)
+}
+
+// SetSharePoint wires SharePoint link sharing. Optional: only when it is
+// configured.
+func (s *MessageService) SetSharePoint(sp MessageSharePoint) { s.sharePoint = sp }
 
 // NotificationsWired reports whether the alert pipeline is complete — a
 // notifier, and the durable safety net behind it. Boot refuses to serve
@@ -852,6 +868,10 @@ func (s *MessageService) sendRun(ctx context.Context, authorID, accessorID, pare
 
 	s.indexMessage(ctx, msg, parentType)
 
+	if s.sharePoint != nil {
+		s.sharePoint.MessageSent(ctx, msg, parentType)
+	}
+
 	// Thread reply: republish the authoritative parent so subscribers see
 	// the new replyCount / avatar stack without a re-fetch. The metadata
 	// itself was already persisted before message.new to keep /threads
@@ -905,9 +925,30 @@ type WebhookMessageInput struct {
 	// WebhookID is the posting webhook, stamped on the message so its threads
 	// stay its own.
 	WebhookID string
+	// NotifyExcept are members the post's notifications skip (a reminder for
+	// everyone but them).
+	NotifyExcept []string
 }
 
 func (s *MessageService) SendWebhook(ctx context.Context, in WebhookMessageInput) (*model.Message, error) {
+	return s.sendMachine(ctx, in, func(parentID, authorID string) error {
+		return s.checkWebhookThreadRoot(ctx, parentID, in.ParentMessageID, authorID, in.WebhookID)
+	})
+}
+
+// SendReminder posts the reminder bot's message: a DM as the bot account, or a
+// channel reply as the shared sentinel under the bot's name. Unlike a webhook
+// (an unauthenticated URL, kept to its own threads) it is the server's own
+// post, so it may reply in any live thread.
+func (s *MessageService) SendReminder(ctx context.Context, in WebhookMessageInput) (*model.Message, error) {
+	return s.sendMachine(ctx, in, func(parentID, _ string) error {
+		return s.checkLiveThreadRoot(ctx, parentID, in.ParentMessageID)
+	})
+}
+
+// sendMachine posts a message no person typed (a webhook's or the reminder
+// bot's). checkRoot vets in.ParentMessageID when the post is a thread reply.
+func (s *MessageService) sendMachine(ctx context.Context, in WebhookMessageInput, checkRoot func(parentID, authorID string) error) (*model.Message, error) {
 	parentID := in.ParentID
 	if parentID == "" {
 		parentID = in.ChannelID
@@ -936,7 +977,7 @@ func (s *MessageService) SendWebhook(ctx context.Context, in WebhookMessageInput
 		return nil, err
 	}
 	if in.ParentMessageID != "" {
-		if err := s.checkWebhookThreadRoot(ctx, parentID, in.ParentMessageID, authorID, in.WebhookID); err != nil {
+		if err := checkRoot(parentID, authorID); err != nil {
 			return nil, err
 		}
 	}
@@ -951,6 +992,7 @@ func (s *MessageService) SendWebhook(ctx context.Context, in WebhookMessageInput
 		WebhookIconEmoji:   in.IconEmoji,
 		MessageAttachments: in.Attachments,
 		WebhookID:          in.WebhookID,
+		NotifyExcept:       in.NotifyExcept,
 		CreatedAt:          time.Now(),
 	}
 	if msg.WebhookUsername == "" {
@@ -1031,6 +1073,25 @@ func (s *MessageService) checkWebhookThreadRoot(ctx context.Context, parentID, r
 	recentLegacySentinelRoot := root.WebhookID == "" && authorID == WebhookAuthorID && time.Since(root.CreatedAt) < legacyWebhookRootGrace
 	if root.AuthorID != authorID || root.System || (root.WebhookID != webhookID && !legacyBotRoot && !recentLegacySentinelRoot) {
 		return fmt.Errorf("%w: root was not posted by this webhook", ErrInvalidThreadRoot)
+	}
+	return nil
+}
+
+// checkLiveThreadRoot gates a reminder reply: its root must still be a live
+// top-level message.
+func (s *MessageService) checkLiveThreadRoot(ctx context.Context, parentID, rootID string) error {
+	root, err := s.messages.GetMessage(ctx, parentID, rootID)
+	if errors.Is(err, store.ErrNotFound) {
+		return fmt.Errorf("%w: root not found", ErrInvalidThreadRoot)
+	}
+	if err != nil {
+		return fmt.Errorf("message: thread root: %w", err)
+	}
+	if root.Deleted {
+		return ErrThreadDeleted
+	}
+	if root.ParentMessageID != "" {
+		return fmt.Errorf("%w: root is itself a reply", ErrInvalidThreadRoot)
 	}
 	return nil
 }
@@ -1728,6 +1789,9 @@ func (s *MessageService) Edit(ctx context.Context, userID, parentID, parentType,
 		if s.reminders != nil {
 			s.reminders.MessageEdited(ctx, &edited, parentType)
 		}
+		if s.sharePoint != nil {
+			s.sharePoint.MessageEdited(ctx, msg, &edited, parentType)
+		}
 	}
 
 	s.indexMessage(ctx, &edited, parentType)
@@ -1781,6 +1845,9 @@ func (s *MessageService) Delete(ctx context.Context, userID, parentID, parentTyp
 	}
 	if s.reminders != nil {
 		s.reminders.MessagesDeleted(ctx, parentID, parentType, deleted)
+	}
+	if s.sharePoint != nil {
+		s.sharePoint.MessagesDeleted(ctx, parentID, parentType, deleted)
 	}
 
 	// Sweep the agent-run activity logs for this chat: the runs it invoked and

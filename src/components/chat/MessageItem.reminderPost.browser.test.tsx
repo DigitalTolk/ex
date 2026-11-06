@@ -7,6 +7,7 @@ import { MessageItem } from './MessageItem';
 import type { Message } from '@/types';
 import { hoverRow } from '@/test/hover';
 import { pickTomorrow, tomorrow } from '@/test/reminder-picker';
+import { wheelTo } from '@/test/wheel-time';
 
 // Unlike MessageItem.reminder.browser.test (which mocks useActivity to spy on
 // mutate), this drives the REAL useCreateReminder hook and only stubs apiFetch,
@@ -58,6 +59,13 @@ function reminderPosts(): Array<[string, { method?: string; body: string }]> {
 beforeEach(() => apiFetchMock.mockClear());
 afterEach(() => cleanup());
 
+
+// Turns the time wheels to `hour`:00 by tapping their rows.
+async function wheelMorning(hour: number) {
+  await vi.waitFor(() => expect(document.querySelector('[data-testid="reminder-wheel-minute"]')).not.toBeNull());
+  wheelTo(hour, 0);
+}
+
 describe('MessageItem "Remind me" — real POST', () => {
   it('a preset issues POST /api/v1/reminders with the message + future time', async () => {
     if (window.innerWidth <= 767) return; // desktop menu
@@ -87,7 +95,7 @@ describe('MessageItem "Remind me" — real POST', () => {
     await userEvent.click(screen.getByTestId('remind-me-trigger'));
     await userEvent.click(screen.getByTestId('remind-custom'));
     await pickTomorrow();
-    await userEvent.fill(screen.getByTestId('reminder-time'), '09:00');
+    await wheelMorning(9);
     await userEvent.click(screen.getByTestId('reminder-confirm'));
 
     await vi.waitFor(() => expect(reminderPosts().length).toBe(1));
@@ -105,7 +113,7 @@ describe('MessageItem "Remind me" — real POST', () => {
     await vi.waitFor(() => expect(document.querySelector('[data-testid="mobile-message-actions"]')).not.toBeNull(), { timeout: 2000 });
     await userEvent.click(document.querySelector('[data-testid="mobile-remind"]') as HTMLButtonElement);
     await pickTomorrow();
-    await userEvent.fill(document.querySelector('[data-testid="reminder-time"]') as HTMLInputElement, '09:00');
+    await wheelMorning(9);
     // On mobile the confirm lives in the dialog's top-right header (the iOS
     // date wheel covers a bottom footer).
     await userEvent.click(document.querySelector('[data-slot="dialog-mobile-action"]') as HTMLButtonElement);

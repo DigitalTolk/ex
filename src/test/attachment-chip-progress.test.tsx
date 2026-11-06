@@ -20,6 +20,14 @@ describe('AttachmentChip — upload progress', () => {
     expect(screen.getByText('42%')).toBeInTheDocument();
   });
 
+  it('names where the file is going while it uploads, and not once it is there', () => {
+    const { rerender } = render(<AttachmentChip att={makeDraft({ filename: 'a.docx', progress: 0.3, destination: 'OneDrive' })} />);
+    expect(screen.getByRole('progressbar', { name: 'Uploading a.docx to OneDrive' })).toBeInTheDocument();
+    expect(screen.getByText(/· to OneDrive/)).toBeInTheDocument();
+    rerender(<AttachmentChip att={makeDraft({ filename: 'a.docx', progress: 1, destination: 'OneDrive' })} />);
+    expect(screen.queryByText(/to OneDrive/)).toBeNull();
+  });
+
   it('hides the progressbar when progress is undefined (no upload in flight)', () => {
     render(<AttachmentChip att={makeDraft()} />);
     expect(screen.queryByRole('progressbar')).toBeNull();

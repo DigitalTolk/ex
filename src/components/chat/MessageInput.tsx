@@ -21,6 +21,7 @@ import { useComposerUploads } from './useComposerUploads';
 import { useLinkDialog } from './useLinkDialog';
 import { useSlashCommands } from './useSlashCommands';
 import { useTypingPing } from './useTypingPing';
+import { useOptionalAuth } from '@/context/AuthContext';
 
 export interface MessageInputValue {
   body: string;
@@ -134,10 +135,14 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     onDraftChange,
     suppressAutoFocus,
   });
+  // Only a Microsoft sign-in can keep files in OneDrive; a guest's are
+  // attached without asking.
+  const signedInWithMicrosoft = useOptionalAuth()?.user?.authProvider === 'oidc';
   const { isUploading, uploadError, uploadFiles, handleFileUpload, removeDraft } = useComposerUploads({
     drafts,
     setDrafts,
     markLocallyEdited,
+    officeParent: signedInWithMicrosoft && typingParentType && typingParentID ? { type: typingParentType, id: typingParentID } : undefined,
   });
   const {
     editorFocused,

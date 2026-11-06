@@ -1,10 +1,14 @@
 import { createElement, lazy, Suspense, useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronLeft, ChevronRight, Download, X, ZoomIn, ZoomOut } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Download, SquarePen, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { getInitials, formatLongDateTime, formatBytes } from '@/lib/format';
 import { iconForAttachment, isImageContentType, isPdfAttachment, isVideoAttachment } from '@/lib/file-helpers';
 import { VideoPreview } from './VideoPreview';
+import { FileTypeIcon } from './FileTypeIcon';
+import { SharePointPreview } from './SharePointPreview';
+import type { SharePointParent } from '@/hooks/useSharePoint';
+import { externalHref } from '@/lib/url-safety';
 import { useTransientOverlayCleanup } from '@/hooks/useTransientOverlayCleanup';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useZoomWheel } from '@/hooks/useZoomWheel';
@@ -37,6 +41,10 @@ export interface LightboxImage {
   filename: string;
   contentType: string;
   size: number;
+  // A SharePoint file a posted link shared: it shows as it is in its own
+  // viewer, opens for editing in Office for the web (editURL), and
+  // downloads from SharePoint (downloadURL).
+  sharePoint?: { parent: SharePointParent; fileID: string; editURL?: string };
 }
 
 interface ImageLightboxProps {
@@ -71,8 +79,10 @@ export function ImageLightbox({
   useMobileBackClose(open, onClose);
   const safeIndex = total === 0 ? 0 : ((index % total) + total) % total;
   const current = images[safeIndex];
-  const isImage = current ? isImageContentType(current.contentType) : false;
-  const isPdf = !!current && !isImage && isPdfAttachment(current.contentType, current.filename);
+  // A SharePoint file shows in its own viewer, whatever its type.
+  const sharePoint = current?.sharePoint;
+  const isImage = !!current && !sharePoint && isImageContentType(current.contentType);
+  const isPdf = !!current && !isImage && !sharePoint && isPdfAttachment(current.contentType, current.filename);
   const lightboxRef = useRef<HTMLDivElement>(null);
   const imageKey = current ? `${current.url}\u0000${safeIndex}` : '';
   const [zoomState, setZoomState] = useState({ key: '', value: 1 });
@@ -195,7 +205,12 @@ export function ImageLightbox({
   if (!open || typeof document === 'undefined' || !current) return null;
 
   const iconType = iconForAttachment(current.contentType, current.filename);
-  const isVideo = !isImage && !isPdf && isVideoAttachment(current.contentType, current.filename);
+  const isVideo = !isImage && !isPdf && !sharePoint && isVideoAttachment(current.contentType, current.filename);
+  // A SharePoint file downloads from SharePoint, in a new tab (the browser
+  // there holds the Microsoft sign-in).
+  const downloadLink = sharePoint
+    ? { href: externalHref(current.downloadURL ?? current.url), target: '_blank', rel: 'noopener noreferrer' }
+    : { href: current.downloadURL ?? current.url, download: current.filename };
   const swipeStageStyle = swipeDrag.x !== 0 || swipeDrag.y !== 0
     ? { transform: `translate3d(${Math.round(swipeDrag.x)}px, ${Math.round(swipeDrag.y)}px, 0)`, transition: 'none' }
     : undefined;
@@ -373,14 +388,22 @@ export function ImageLightbox({
       data-testid="image-lightbox-fileinfo"
       className="flex flex-col items-center gap-4 rounded-lg bg-card p-8 text-card-foreground shadow-2xl"
     >
-      {createElement(iconType, { className: 'h-20 w-20 text-muted-foreground' })}
+      {sharePoint ? (
+        <FileTypeIcon
+          name={current.filename}
+          mimeType={current.contentType}
+          className="h-20 w-20 rounded-lg"
+          iconClassName="h-10 w-10"
+        />
+      ) : (
+        createElement(iconType, { className: 'h-20 w-20 text-muted-foreground' })
+      )}
       <div className="text-center">
         <p className="break-all text-sm font-semibold">{current.filename}</p>
         <p className="mt-1 text-xs text-muted-foreground">{formatBytes(current.size)}</p>
       </div>
       <a
-        href={current.downloadURL ?? current.url}
-        download={current.filename}
+        {...downloadLink}
         onClick={(e) => e.stopPropagation()}
         data-testid="image-lightbox-file-download"
         className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
@@ -450,9 +473,20 @@ export function ImageLightbox({
             </button>
           </div>
         )}
+        {sharePoint?.editURL && (
+          <a
+            href={externalHref(sharePoint.editURL)}
+            target="_blank"
+            rel="noopener noreferrer"
+            data-testid="image-lightbox-edit"
+            className="flex h-9 items-center gap-1.5 rounded-md px-3 text-sm font-medium text-white/80 hover:bg-white/15 hover:text-white"
+          >
+            <SquarePen className="h-4 w-4" />
+            Edit
+          </a>
+        )}
         <a
-          href={current.downloadURL ?? current.url}
-          download={current.filename}
+          {...downloadLink}
           onClick={(e) => e.stopPropagation()}
           onDoubleClick={() => setCurrentZoom((value) => (value > 1 ? 1 : 2))}
           aria-label={`Download ${current.filename}`}
@@ -559,6 +593,26 @@ export function ImageLightbox({
                 onZoomChange={(value) => setZoomState({ key: imageKey, value })}
               />
             </Suspense>
+          </div>
+        ) : sharePoint ? (
+          <div
+            // The viewer takes the pointer, not the stage's swipe-to-close.
+            onClick={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
+            onPointerMove={(e) => e.stopPropagation()}
+            onPointerUp={(e) => e.stopPropagation()}
+            onPointerCancel={(e) => e.stopPropagation()}
+            data-testid="image-lightbox-sharepoint"
+            className="flex h-full w-full max-w-5xl items-center justify-center"
+          >
+            {/* key: a different file is a fresh preview. */}
+            <SharePointPreview
+              key={sharePoint.fileID}
+              parent={sharePoint.parent}
+              fileID={sharePoint.fileID}
+              title={current.filename}
+              fallback={fileCard}
+            />
           </div>
         ) : isVideo ? (
           <div

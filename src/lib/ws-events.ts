@@ -19,6 +19,7 @@ import {
   runUpdatedSchema,
   serverVersionSchema,
   sessionRenewedSchema,
+  sharePointChangedSchema,
   threadUpdatedSchema,
   typingSchema,
   userChannelUpdatedSchema,
@@ -76,6 +77,7 @@ export const wsEventSchemas = {
   [EventType.RunUpdated]: runUpdatedSchema,
   [EventType.RunProgress]: runProgressSchema,
   [EventType.RunApproval]: runApprovalSchema,
+  [EventType.SharePointChanged]: sharePointChangedSchema,
 } satisfies { [K in EventTypeName]: z.ZodType };
 
 export type WSEventPayloads = { [K in EventTypeName]: z.output<(typeof wsEventSchemas)[K]> };
