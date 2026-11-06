@@ -8,6 +8,9 @@ vi.mock('@/lib/api', () => ({
 }));
 
 import { HASH_CHUNK_BYTES, sha256File, uploadAttachment } from '@/hooks/useAttachments';
+import { dropTimersLeftByUploads } from './upload-timers';
+
+dropTimersLeftByUploads();
 
 class MockXMLHttpRequest {
   static uploads: Array<{ url: string; contentType: string; body: unknown }> = [];
@@ -121,6 +124,28 @@ describe('uploadAttachment processing', () => {
 
     const [, init] = apiFetchMock.mock.calls.find(([path]) => path === '/api/v1/attachments/url')!;
     expect(JSON.parse(init.body as string)).toMatchObject({ filename: 'IMG_0001.HEIC', contentType: 'image/heic' });
+  });
+
+  // Uppy schedules a check of navigator.onLine 3 s out and never cancels it.
+  // It must be on the clock these tests drop when they end (upload-timers):
+  // left running it outlived the file and threw once jsdom was gone.
+  it("leaves Uppy's pending online check on the clock the test drops", async () => {
+    routeUpload({
+      id: 'att-timer',
+      key: 'attachments/att-timer',
+      multipartUploadId: '',
+      alreadyExists: false,
+      filename: 'photo.png',
+      contentType: 'image/png',
+      size: 5,
+    });
+
+    await uploadAttachment(new File(['photo'], 'photo.png', { type: 'image/png' }));
+
+    const onLine = vi.spyOn(window.navigator, 'onLine', 'get');
+    vi.advanceTimersByTime(3000);
+    expect(onLine).toHaveBeenCalled();
+    onLine.mockRestore();
   });
 
   it('processes deduped existing attachments without re-uploading bytes', async () => {

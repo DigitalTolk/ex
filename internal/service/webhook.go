@@ -394,6 +394,7 @@ func (s *IncomingWebhookService) ExecuteMessage(ctx context.Context, id string, 
 		Attachments:     attachments,
 		ParentMessageID: strings.TrimSpace(payload.RootID),
 		WebhookID:       wh.ID,
+		OwnerID:         wh.CreatedBy,
 	})
 }
 

@@ -107,6 +107,8 @@ export interface Message {
   webhookUsername?: string;
   webhookAvatarURL?: string;
   webhookIconEmoji?: string;
+  // Who set up the webhook that posted it; named by the integration card.
+  webhookOwnerID?: string;
   messageAttachments?: MessageAttachment[];
   // Agent-authored messages carry the human whose invocation produced them
   // (agents are shared — "gg" alone doesn't say whose task it served).

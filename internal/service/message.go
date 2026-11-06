@@ -908,6 +908,8 @@ type WebhookMessageInput struct {
 	// NotifyExcept are members the post's notifications skip (a reminder for
 	// everyone but them).
 	NotifyExcept []string
+	// OwnerID is who set the webhook up, named by the post's integration card.
+	OwnerID string
 }
 
 func (s *MessageService) SendWebhook(ctx context.Context, in WebhookMessageInput) (*model.Message, error) {
@@ -973,6 +975,7 @@ func (s *MessageService) sendMachine(ctx context.Context, in WebhookMessageInput
 		MessageAttachments: in.Attachments,
 		WebhookID:          in.WebhookID,
 		NotifyExcept:       in.NotifyExcept,
+		WebhookOwnerID:     in.OwnerID,
 		CreatedAt:          time.Now(),
 	}
 	if msg.WebhookUsername == "" {

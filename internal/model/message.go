@@ -67,6 +67,11 @@ type Message struct {
 	// webhooks all author as the shared "webhook" sentinel, so this is what
 	// lets a webhook continue only ITS OWN threads. Internal only.
 	WebhookID string `json:"-" dynamodbav:"webhookID,omitempty"`
+	// WebhookOwnerID is the person who set up the webhook that posted the
+	// message: the integration card names them. The author can't, being the
+	// "webhook" sentinel (or the webhook's bot, in a DM). Empty on posts from
+	// before it was recorded.
+	WebhookOwnerID string `json:"webhookOwnerID,omitempty" dynamodbav:"webhookOwnerID,omitempty"`
 	// AgentInvokerID attributes an agent-authored message to the human whose
 	// invocation produced it. Agents are shared ("gg" belongs to no one), so
 	// a reader — human or another agent's context bundle — needs this to say

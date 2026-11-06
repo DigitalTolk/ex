@@ -86,6 +86,15 @@ func (h *BotHandler) Update(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, botAccount(bot))
 }
 
+// Delete answers DELETE /api/v1/admin/bots/{id}.
+func (h *BotHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	if err := h.svc.Delete(r.Context(), botActor(r), pathParam(r, "id")); err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // Enable answers POST /api/v1/admin/bots/{id}/enable.
 func (h *BotHandler) Enable(w http.ResponseWriter, r *http.Request) { h.setEnabled(w, r, true) }
 

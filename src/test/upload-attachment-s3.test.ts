@@ -7,6 +7,9 @@ vi.mock('@/lib/api', () => ({
 }));
 
 import { MULTIPART_THRESHOLD_BYTES, signUploadRequest, uploadAttachment } from '@/hooks/useAttachments';
+import { dropTimersLeftByUploads } from './upload-timers';
+
+dropTimersLeftByUploads();
 
 // The real Uppy S3 plugin runs against this fake bucket, so the test covers
 // the actual request sequence the browser makes: what it asks the server to
