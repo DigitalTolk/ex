@@ -46,6 +46,7 @@ func NewRouter(d *Deps) http.Handler {
 	searchH := d.Search
 	webhookH := d.Webhook
 	botH := d.Bot
+	userGroupH := d.UserGroup
 	mattermostH := d.Mattermost
 	activityH := d.Activity
 	commandH := d.Command
@@ -326,6 +327,25 @@ func NewRouter(d *Deps) http.Handler {
 		// spam amplification (a touch higher than the auth limit since busy
 		// integrations legitimately post more often).
 		mux.Handle("POST /hooks/{id}", middleware.WrapFunc(webhookH.Execute, middleware.RateLimit(d.RateLimiter, middleware.PerMinute("webhook", 60, 60))))
+	}
+	if userGroupH != nil {
+		// Every member reads groups; managing them is the service's call.
+		// Handle availability sits under its own prefix so it can't shadow
+		// /usergroups/{id}.
+		mux.Handle("GET /api/v1/usergroups", middleware.WrapFunc(userGroupH.List, authMW))
+		mux.Handle("POST /api/v1/usergroups", middleware.WrapFunc(userGroupH.Create, authMW, writeLimit))
+		mux.Handle("GET /api/v1/usergroups/{id}", middleware.WrapFunc(userGroupH.Get, authMW))
+		mux.Handle("PATCH /api/v1/usergroups/{id}", middleware.WrapFunc(userGroupH.Update, authMW, writeLimit))
+		mux.Handle("POST /api/v1/usergroups/{id}/enable", middleware.WrapFunc(userGroupH.Enable, authMW, writeLimit))
+		mux.Handle("POST /api/v1/usergroups/{id}/disable", middleware.WrapFunc(userGroupH.Disable, authMW, writeLimit))
+		mux.Handle("GET /api/v1/usergroup-handles/{handle}", middleware.WrapFunc(userGroupH.HandleAvailable, authMW))
+		mux.Handle("GET /api/v1/usergroup-permissions", middleware.WrapFunc(userGroupH.Permissions, authMW))
+		// Microsoft 365 links (admins; the service decides).
+		mux.Handle("GET /api/v1/usergroup-sources/microsoft", middleware.WrapFunc(userGroupH.SearchMicrosoft, authMW))
+		mux.Handle("GET /api/v1/usergroup-sources/microsoft/{entraId}/preview", middleware.WrapFunc(userGroupH.PreviewMicrosoft, authMW))
+		mux.Handle("POST /api/v1/usergroups/{id}/link", middleware.WrapFunc(userGroupH.Link, authMW, writeLimit))
+		mux.Handle("POST /api/v1/usergroups/{id}/sync", middleware.WrapFunc(userGroupH.Sync, authMW, writeLimit))
+		mux.Handle("GET /api/v1/users/{id}/usergroups", middleware.WrapFunc(userGroupH.ForUser, authMW))
 	}
 	if botH != nil {
 		// Admin-only (the service decides).

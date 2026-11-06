@@ -68,6 +68,9 @@ export const conversationConvertedSchema = z.looseObject({
 // Go map payload.
 export const presenceSchema = z.object({ userID: id, online: z.boolean() });
 
+// Go map payload: the user group that was created or changed.
+export const userGroupChangedSchema = z.object({ groupId: id });
+
 // Go map payload. `parentMessageID` is set only when the typing happened
 // inside a thread reply composer; absent for ordinary channel/DM typing. Both
 // shapes share a topic on the wire — the receiver routes by presence/absence.
@@ -234,7 +237,9 @@ const activityItemSchema = z.looseObject({
   webhook: z.boolean().optional(),
   emoji: z.string().optional(),
   parentName: z.string().optional(),
-  mentionKind: z.enum(['user', 'all', 'here', 'keyword']).optional(),
+  mentionKind: z.enum(['user', 'all', 'here', 'keyword', 'usergroup']).optional(),
+  userGroupID: z.string().optional(),
+  userGroupHandle: z.string().optional(),
   read: z.boolean().optional(),
 });
 export const activityNewSchema = z.looseObject({ item: activityItemSchema });

@@ -36,6 +36,11 @@ const (
 
 	// MaxDisplayNameChars caps a user's display name in codepoints.
 	MaxDisplayNameChars = 80
+
+	// MaxUserGroupNameChars / MaxUserGroupDescriptionChars cap a user
+	// group's name and description in codepoints.
+	MaxUserGroupNameChars        = 80
+	MaxUserGroupDescriptionChars = 250
 )
 
 // channelNamePattern is the slug-style identifier we accept for channel

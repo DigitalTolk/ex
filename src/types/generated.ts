@@ -58,6 +58,11 @@ export const MentionKindAll: MentionKind = "all"; // @all / @channel
 export const MentionKindHere: MentionKind = "here"; // @here
 export const MentionKindKeyword: MentionKind = "keyword"; // matched one of the user's notification keywords
 /**
+ * MentionKindUserGroup: mentioned through a user group they belong to
+ * (UserGroupID / UserGroupHandle name it).
+ */
+export const MentionKindUserGroup: MentionKind = "usergroup";
+/**
  * ActivityItem is one entry in a user's personal activity stream (Slack-style
  * Activity tab). It is a denormalized hint: it carries enough context (preview
  * + parent + message id) to render a row and deep-link to the source message
@@ -113,6 +118,12 @@ export interface ActivityItem {
    * MentionKind is set on ActivityMention items.
    */
   mentionKind?: MentionKind;
+  /**
+   * UserGroupID / UserGroupHandle name the group of a MentionKindUserGroup
+   * item; the handle is snapshotted so the row renders without a lookup.
+   */
+  userGroupID?: string;
+  userGroupHandle?: string;
 }
 /**
  * ActivityFeedItem is an ActivityItem as listed to its owner: the stored item
@@ -2645,6 +2656,110 @@ export interface MarkUnreadResult {
   unreadCount: number /* int64 */;
   threadRootID?: string;
   seenAt?: string /* RFC3339 */;
+}
+
+//////////
+// source: usergroup.go
+
+/**
+ * UserGroupIDPrefix starts every user-group ID. A group is mentioned with the
+ * same "@[id|label]" token as a person, so the prefix is what tells a mention
+ * parser it names a group (ULID user IDs and "bot-" IDs never start with it).
+ */
+export const UserGroupIDPrefix = "group-";
+/**
+ * UserGroup is a named set of people mentioned together through its handle
+ * (Slack-style "@oncall"). Its members come from the Microsoft 365 (Entra ID)
+ * group it is linked to. A disabled group keeps its members and its handle
+ * but is not mentionable.
+ */
+export interface UserGroup {
+  id: string;
+  handle: string;
+  name: string;
+  description: string;
+  disabled: boolean;
+  memberCount: number /* int */;
+  createdBy: string;
+  createdAt: string /* RFC3339 */;
+  updatedAt: string /* RFC3339 */;
+  /**
+   * EntraGroupID is the Microsoft Entra ID group the members are synced
+   * from.
+   */
+  entraGroupId?: string;
+  /**
+   * EntraGroupName is the linked group's display name, refreshed on link and
+   * on Sync now.
+   */
+  entraGroupName?: string;
+  /**
+   * SyncedAt is when the linked group last synced successfully.
+   */
+  syncedAt?: string /* RFC3339 */;
+  /**
+   * SyncSkipped counts the Entra members who aren't group members in ex
+   * (no ex account yet, a guest, a bot or deactivated).
+   */
+  syncSkipped?: number /* int */;
+  /**
+   * SyncState is why the last sync didn't apply ("" when it did).
+   */
+  syncState?: UserGroupSyncState;
+  /**
+   * PendingRemoval is how many members a held sync would remove.
+   */
+  pendingRemoval?: number /* int */;
+}
+/**
+ * UserGroupSyncState says why a linked group's last sync didn't apply.
+ */
+export type UserGroupSyncState = string;
+/**
+ * UserGroupSyncHeld: the sync would remove most members (or all of them);
+ * it waits for an admin to apply it.
+ */
+export const UserGroupSyncHeld: UserGroupSyncState = "held-removal";
+/**
+ * UserGroupSyncSourceMissing: the Entra group is gone or unreadable; the
+ * members are kept.
+ */
+export const UserGroupSyncSourceMissing: UserGroupSyncState = "source-missing";
+/**
+ * UserGroupSyncError: Microsoft Graph failed; members stay.
+ */
+export const UserGroupSyncError: UserGroupSyncState = "error";
+/**
+ * EntraGroup is a Microsoft Entra ID group as the link picker shows it.
+ */
+export interface EntraGroup {
+  id: string;
+  displayName: string;
+  mail?: string;
+  /**
+   * Kind is "m365", "security" or "dynamic".
+   */
+  kind: string;
+}
+/**
+ * UserGroupLinkPreview is what linking a group to an Entra group would do.
+ */
+export interface UserGroupLinkPreview {
+  /**
+   * Users is how many users the Entra group has (nested groups included).
+   */
+  users: number /* int */;
+  toAdd: number /* int */;
+  toRemove: number /* int */;
+  skipped: number /* int */;
+}
+/**
+ * UserGroupDetail is a group with its member IDs. The members are rows of
+ * their own (one per member), so a group has no size limit. Version is the
+ * group row's optimistic-concurrency counter.
+ */
+export interface UserGroupDetail extends UserGroup {
+  memberIds: string[];
 }
 
 //////////

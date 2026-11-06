@@ -77,7 +77,18 @@ func (s *BotStoreImpl) CreateBot(ctx context.Context, u *model.User) error {
 		s.putNew(newUserItem(u)),
 		s.putNew(userEmailItem{PK: userEmailPK(u.Email), SK: profileSK(), UserID: u.ID}),
 		s.putNew(botUsernameItem{PK: botUsernamePK(u.Username), SK: metaSK(), UserID: u.ID}),
+		s.noUserGroupHandled(u.Username),
 	})
+}
+
+// noUserGroupHandled is a transaction step that fails while a user group holds
+// username as its handle: a bot and a group never share a name.
+func (s *BotStoreImpl) noUserGroupHandled(username string) types.TransactWriteItem {
+	return types.TransactWriteItem{ConditionCheck: &types.ConditionCheck{
+		TableName:           aws.String(s.Table),
+		Key:                 compositeKey(userGroupHandlePK(username), metaSK()),
+		ConditionExpression: aws.String("attribute_not_exists(PK)"),
+	}}
 }
 
 // UpdateBot writes a bot's profile fields (display name, username,
@@ -101,7 +112,10 @@ func (s *BotStoreImpl) UpdateBot(ctx context.Context, u *model.User, previousUse
 		ExpressionAttributeValues: expr.Values(),
 	}}}
 	if u.Username != previousUsername {
-		items = append(items, s.putNew(botUsernameItem{PK: botUsernamePK(u.Username), SK: metaSK(), UserID: u.ID}))
+		items = append(items,
+			s.putNew(botUsernameItem{PK: botUsernamePK(u.Username), SK: metaSK(), UserID: u.ID}),
+			s.noUserGroupHandled(u.Username),
+		)
 		if previousUsername != "" {
 			items = append(items, types.TransactWriteItem{Delete: &types.Delete{
 				TableName: aws.String(s.Table),

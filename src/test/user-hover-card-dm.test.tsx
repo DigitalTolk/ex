@@ -144,9 +144,12 @@ describe('UserHoverCard — click-to-open + DM action', () => {
   });
 
   it('clicking Direct message creates a conversation and navigates to it', async () => {
-    apiFetchMock
-      .mockResolvedValueOnce({ id: 'u-other', displayName: 'Bob', status: 'active' })
-      .mockResolvedValueOnce({ id: 'conv-77' });
+    // Answered by path: the open card also asks for the person's user groups.
+    apiFetchMock.mockImplementation((path: string) => {
+      if (path === '/api/v1/conversations') return Promise.resolve({ id: 'conv-77' });
+      if (path === '/api/v1/users/u-other/usergroups') return Promise.resolve([]);
+      return Promise.resolve({ id: 'u-other', displayName: 'Bob', status: 'active' });
+    });
     renderCard();
     fireEvent.click(screen.getByText('trigger'));
     const dm = await screen.findByRole('button', { name: /Direct message/i });

@@ -125,7 +125,7 @@ export function ThreadPanel({
     parentType: channelId ? 'channel' : 'conversation',
     parentMessageID: threadRootID,
   });
-  const { pendingInvites, channelSlug, checkMentions, clearInvites } = useNonMemberInvite(channelId, currentUserId);
+  const { pendingInvites, pendingGroupInvites, channelSlug, channelIsPrivate, checkMentions, clearInvites } = useNonMemberInvite(channelId, currentUserId);
   const inputRef = useRef<MessageInputHandle>(null);
   const parentID = channelId ?? conversationId;
   const parentType: 'channel' | 'conversation' = channelId ? 'channel' : 'conversation';
@@ -640,6 +640,8 @@ export function ThreadPanel({
           channelId={channelId}
           channelName={channelSlug}
           users={pendingInvites}
+          groups={pendingGroupInvites}
+          isPrivate={channelIsPrivate}
           onDismiss={clearInvites}
         />
         {rootDeleted ? (

@@ -17,8 +17,6 @@ import (
 // through the components map — no JS-side regex pass is needed.
 
 var (
-	// Mirrors lib/mention-syntax.ts USER_MENTION_RE_GLOBAL.
-	userMentionRE = regexp.MustCompile(`@\[([^|\]]+)\|([^\]]+)\]`)
 	// CHANNEL_MENTION_RE_GLOBAL, with the slug half held to the slug
 	// charset (slugify / limits.ValidateChannelName: lowercase ASCII
 	// letters, digits, hyphens): anything else — a typed path such as
@@ -55,13 +53,7 @@ func extractCustomTokens(input string) []*HastNode {
 	}
 	pieces := []*HastNode{textNode(input)}
 
-	pieces = splitTokens(pieces, userMentionRE, func(m []string, _ int) []*HastNode {
-		return []*HastNode{exElement("ex-mention-user", map[string]interface{}{
-			"data-user-id": strings.TrimSpace(m[1]),
-			"data-name":    strings.TrimSpace(m[2]),
-			"data-value":   m[0],
-		})}
-	})
+	pieces = splitMentionTokens(pieces)
 	pieces = splitTokens(pieces, channelMentionRE, func(m []string, _ int) []*HastNode {
 		return []*HastNode{exElement("ex-mention-channel", map[string]interface{}{
 			"data-channel-id": strings.TrimSpace(m[1]),
@@ -226,6 +218,49 @@ func splitTokens(pieces []*HastNode, re *regexp.Regexp, build func([]string, int
 		}
 	}
 	return out
+}
+
+// splitMentionTokens slices every @[id|label] token (ScanMentions) out of
+// the text pieces: a person becomes ex-mention-user, a user group
+// ex-mention-usergroup.
+func splitMentionTokens(pieces []*HastNode) []*HastNode {
+	out := make([]*HastNode, 0, len(pieces))
+	for _, piece := range pieces {
+		tokens := ScanMentions(piece.Value)
+		if piece.Type != "text" || len(tokens) == 0 {
+			out = append(out, piece)
+			continue
+		}
+		val := piece.Value
+		cursor := 0
+		for _, t := range tokens {
+			if t.Start > cursor {
+				out = append(out, textNode(val[cursor:t.Start]))
+			}
+			out = append(out, mentionElement(t, val[t.Start:t.End]))
+			cursor = t.End
+		}
+		if cursor < len(val) {
+			out = append(out, textNode(val[cursor:]))
+		}
+	}
+	return out
+}
+
+func mentionElement(t MentionToken, raw string) *HastNode {
+	label := strings.TrimSpace(t.Label)
+	if t.Kind == MentionTokenUserGroup {
+		return exElement("ex-mention-usergroup", map[string]interface{}{
+			"data-usergroup-id": t.ID,
+			"data-handle":       label,
+			"data-value":        raw,
+		})
+	}
+	return exElement("ex-mention-user", map[string]interface{}{
+		"data-user-id": t.ID,
+		"data-name":    label,
+		"data-value":   raw,
+	})
 }
 
 func exElement(tag string, props map[string]interface{}) *HastNode {

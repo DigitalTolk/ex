@@ -92,6 +92,20 @@ export const queryKeys = {
   // Bot accounts (admin page); a bot's tokens sit under it.
   bots: () => ['bots'] as const,
   botTokens: (botID: string) => ['bots', botID, 'tokens'] as const,
+  // User groups: the list (enabled, or all), one group with its members,
+  // and the groups one person belongs to. usergroup.changed invalidates the
+  // whole 'usergroups' prefix.
+  userGroups: (includeDisabled: boolean) => ['usergroups', 'list', includeDisabled] as const,
+  userGroup: (id: string) => ['usergroups', 'detail', id] as const,
+  userGroupsForUser: (userId: string) => ['usergroups', 'user', userId] as const,
+  userGroupsAll: () => ['usergroups'] as const,
+  userGroupPermissions: () => ['usergroups', 'permissions'] as const,
+  // Whether a handle is free (the create/edit dialog asks as you type).
+  userGroupHandle: (handle: string) => ['usergroups', 'handle', handle] as const,
+  // Microsoft 365 group search (link picker) and what a link would do.
+  entraGroupSearch: (query: string) => ['usergroups', 'entra-search', query] as const,
+  userGroupLinkPreview: (entraGroupId: string, groupId: string) =>
+    ['usergroups', 'link-preview', entraGroupId, groupId] as const,
   // Projects page (products + design references). project(key) nests under
   // projects() so one invalidation refreshes the list and every open detail.
   projects: () => ['projects'] as const,

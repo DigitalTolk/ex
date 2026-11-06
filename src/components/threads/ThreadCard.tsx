@@ -161,7 +161,7 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
   // mirroring ThreadPanel. activeEditingMessage is only set on mobile.
   const [editingMessage, setEditingMessage] = useState<Message | null>(null);
   const activeEditingMessage = isMobile ? editingMessage : null;
-  const { pendingInvites, channelSlug, checkMentions, clearInvites } = useNonMemberInvite(channelId, currentUserId);
+  const { pendingInvites, pendingGroupInvites, channelSlug, channelIsPrivate, checkMentions, clearInvites } = useNonMemberInvite(channelId, currentUserId);
   const parentID = channelId ?? conversationId;
   const parentType: 'channel' | 'conversation' = channelId ? 'channel' : 'conversation';
   const draftScope = useMemo(
@@ -375,6 +375,8 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
           channelId={channelId}
           channelName={channelSlug}
           users={pendingInvites}
+          groups={pendingGroupInvites}
+          isPrivate={channelIsPrivate}
           onDismiss={clearInvites}
         />
 

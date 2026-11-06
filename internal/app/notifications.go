@@ -92,6 +92,7 @@ func (a *App) buildNotifications(context.Context) error {
 	n.svc.SetActivityRecorder(c.activity) // mentions, thread replies, DMs
 	c.reminders.SetDelivery(c.activity, n.svc)
 	n.svc.SetMentionResolver(c.mentions)
+	n.svc.SetUserGroups(c.userGroups)
 	return nil
 }
 

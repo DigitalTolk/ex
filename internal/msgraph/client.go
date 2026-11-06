@@ -18,6 +18,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -65,6 +67,8 @@ type Client struct {
 	// caching ReuseTokenSource: it fetches once, serves the cached token
 	// until tokenExpiryMargin before expiry, and serialises refreshes.
 	tokens oauth2.TokenSource
+	// wait pauses before retrying a throttled call (a seam for tests).
+	wait func(ctx context.Context, d time.Duration) error
 }
 
 // New builds a Client, or (nil, nil) when the integration is not configured
@@ -112,7 +116,20 @@ func New(cfg Config) (*Client, error) {
 		baseURL: strings.TrimRight(baseURL, "/"),
 		client:  client,
 		tokens:  oauth2.ReuseTokenSourceWithExpiry(nil, creds.TokenSource(tokenCtx), tokenExpiryMargin),
+		wait:    waitCtx,
 	}, nil
+}
+
+// waitCtx sleeps for d, or until ctx ends.
+func waitCtx(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
 }
 
 // UserProfile is the directory slice the app reads for a user.
@@ -230,16 +247,104 @@ func (c *Client) ListUserAccounts(ctx context.Context) ([]UserAccount, error) {
 			return nil, err
 		}
 		accounts = append(accounts, page.Value...)
-		path = ""
-		if page.NextLink != "" {
-			rest, ok := strings.CutPrefix(page.NextLink, c.baseURL+"/")
-			if !ok {
-				return nil, errors.New("msgraph: next page link is outside the Graph base URL")
-			}
-			path = "/" + rest
+		next, err := c.nextPath(page.NextLink)
+		if err != nil {
+			return nil, err
 		}
+		path = next
 	}
 	return accounts, nil
+}
+
+// nextPath turns a page's @odata.nextLink into the path of the next request
+// ("" on the last page). A link pointing anywhere but this client's Graph
+// base URL is refused rather than sent the bearer token.
+func (c *Client) nextPath(nextLink string) (string, error) {
+	if nextLink == "" {
+		return "", nil
+	}
+	rest, ok := strings.CutPrefix(nextLink, c.baseURL+"/")
+	if !ok {
+		return "", errors.New("msgraph: next page link is outside the Graph base URL")
+	}
+	return "/" + rest, nil
+}
+
+// Group is an Entra ID group as the user-group link picker needs it.
+type Group struct {
+	ID          string   `json:"id"`
+	DisplayName string   `json:"displayName"`
+	Mail        string   `json:"mail"`
+	GroupTypes  []string `json:"groupTypes"`
+}
+
+// Kind classifies the group: "dynamic" (rule-based membership), "m365" (a
+// Microsoft 365 group) or "security".
+func (g Group) Kind() string {
+	switch {
+	case slices.Contains(g.GroupTypes, "DynamicMembership"):
+		return "dynamic"
+	case slices.Contains(g.GroupTypes, "Unified"):
+		return "m365"
+	}
+	return "security"
+}
+
+const groupSelect = "$select=id,displayName,mail,groupTypes"
+
+// SearchGroups returns up to 20 groups whose display name matches query.
+// $search needs the advanced-query header (ConsistencyLevel: eventual); a
+// group created moments ago may not be found yet.
+func (c *Client) SearchGroups(ctx context.Context, query string) ([]Group, error) {
+	query = strings.NewReplacer(`"`, "", `\`, "").Replace(strings.TrimSpace(query))
+	path := "/groups?$search=" + url.QueryEscape(`"displayName:`+query+`"`) + "&" + groupSelect + "&$top=20&$count=true"
+	var page struct {
+		Value []Group `json:"value"`
+	}
+	if err := c.do(ctx, http.MethodGet, path, map[string]string{"ConsistencyLevel": "eventual"}, nil, &page); err != nil {
+		return nil, err
+	}
+	return page.Value, nil
+}
+
+// GetGroup reads one group. ErrNotFound when it doesn't exist.
+func (c *Client) GetGroup(ctx context.Context, id string) (*Group, error) {
+	var g Group
+	if err := c.doJSON(ctx, http.MethodGet, "/groups/"+url.PathEscape(id)+"?"+groupSelect, nil, &g); err != nil {
+		return nil, err
+	}
+	return &g, nil
+}
+
+// GroupUserIDs returns the object IDs of every user in the group, nested
+// groups included (transitiveMembers), following Graph's paging; devices,
+// contacts and service principals are left out. The plain (non-cast)
+// request reads the directory itself, not the eventually consistent
+// advanced-query index, so a fresh membership change is seen.
+// ErrNotFound when the group doesn't exist.
+func (c *Client) GroupUserIDs(ctx context.Context, id string) (ids []string, err error) {
+	path := "/groups/" + url.PathEscape(id) + "/transitiveMembers?$select=id&$top=999"
+	for path != "" {
+		var page struct {
+			Value []struct {
+				Type string `json:"@odata.type"`
+				ID   string `json:"id"`
+			} `json:"value"`
+			NextLink string `json:"@odata.nextLink"`
+		}
+		if err := c.doJSON(ctx, http.MethodGet, path, nil, &page); err != nil {
+			return nil, err
+		}
+		for _, m := range page.Value {
+			if m.Type == "#microsoft.graph.user" && m.ID != "" {
+				ids = append(ids, m.ID)
+			}
+		}
+		if path, err = c.nextPath(page.NextLink); err != nil {
+			return nil, err
+		}
+	}
+	return ids, nil
 }
 
 // GetUserManager fetches a user's manager from the directory hierarchy.
@@ -347,13 +452,51 @@ func (c *Client) token() (string, error) {
 	return tok.AccessToken, nil
 }
 
+// Throttling: Graph answers 429 (or 503) with a Retry-After header when a
+// tenant or app goes over its limits. A call is retried up to
+// throttleAttempts times, waiting as asked (capped at maxRetryAfter, and
+// defaultRetryAfter when no wait is given).
+const (
+	throttleAttempts  = 3
+	defaultRetryAfter = 2 * time.Second
+	maxRetryAfter     = 30 * time.Second
+)
+
 // doJSON authenticates, performs one Graph call, and decodes the JSON
 // response into dest. 404 maps to ErrNotFound; other non-2xx to a status
 // error (bodies are never echoed into errors — they can carry directory PII).
 func (c *Client) doJSON(ctx context.Context, method, path string, payload, dest any) error {
+	return c.do(ctx, method, path, nil, payload, dest)
+}
+
+// do is doJSON with extra request headers, retrying a throttled call.
+func (c *Client) do(ctx context.Context, method, path string, headers map[string]string, payload, dest any) error {
+	for attempt := 1; ; attempt++ {
+		retryAfter, err := c.once(ctx, method, path, headers, payload, dest)
+		if retryAfter == 0 || attempt == throttleAttempts {
+			return err
+		}
+		if werr := c.wait(ctx, retryAfter); werr != nil {
+			return fmt.Errorf("msgraph: request: %w", werr)
+		}
+	}
+}
+
+// retryDelay reads a throttled response's Retry-After (seconds).
+func retryDelay(res *http.Response) time.Duration {
+	secs, err := strconv.Atoi(strings.TrimSpace(res.Header.Get("Retry-After")))
+	if err != nil || secs <= 0 {
+		return defaultRetryAfter
+	}
+	return min(time.Duration(secs)*time.Second, maxRetryAfter)
+}
+
+// once performs one Graph call. A throttled answer returns how long to wait
+// before retrying, with the error to report if no retry is left.
+func (c *Client) once(ctx context.Context, method, path string, headers map[string]string, payload, dest any) (time.Duration, error) {
 	tok, err := c.token()
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	var body io.Reader
@@ -366,12 +509,23 @@ func (c *Client) doJSON(ctx context.Context, method, path string, payload, dest 
 	if payload != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
 
 	res, err := c.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("msgraph: request: %w", err)
+		return 0, fmt.Errorf("msgraph: request: %w", err)
 	}
 	defer drainClose(res.Body)
+	if res.StatusCode == http.StatusTooManyRequests || res.StatusCode == http.StatusServiceUnavailable {
+		return retryDelay(res), fmt.Errorf("msgraph: request throttled with status %d", res.StatusCode)
+	}
+	return 0, decodeResponse(res, dest)
+}
+
+// decodeResponse maps a Graph response to dest or an error.
+func decodeResponse(res *http.Response, dest any) error {
 	if res.StatusCode == http.StatusNotFound {
 		return ErrNotFound
 	}

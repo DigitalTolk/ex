@@ -1,0 +1,62 @@
+[
+  {
+    "name": "no tokens",
+    "text": "hello @all and ~[c1|general]",
+    "tokens": []
+  },
+  {
+    "name": "one user",
+    "text": "hi @[01JABCDEFGHJKMNPQRSTVWXYZ0|Alice]!",
+    "tokens": [
+      { "kind": "user", "id": "01JABCDEFGHJKMNPQRSTVWXYZ0", "label": "Alice", "raw": "@[01JABCDEFGHJKMNPQRSTVWXYZ0|Alice]" }
+    ]
+  },
+  {
+    "name": "one user group",
+    "text": "ping @[group-01JABCDEFGHJKMNPQRSTVWXYZ0|oncall] now",
+    "tokens": [
+      { "kind": "usergroup", "id": "group-01JABCDEFGHJKMNPQRSTVWXYZ0", "label": "oncall", "raw": "@[group-01JABCDEFGHJKMNPQRSTVWXYZ0|oncall]" }
+    ]
+  },
+  {
+    "name": "bot is a user",
+    "text": "@[bot-abc123|Deploy Bot] ran",
+    "tokens": [
+      { "kind": "user", "id": "bot-abc123", "label": "Deploy Bot", "raw": "@[bot-abc123|Deploy Bot]" }
+    ]
+  },
+  {
+    "name": "group prefix in the label stays a user",
+    "text": "@[U1|group-chat fan]",
+    "tokens": [
+      { "kind": "user", "id": "U1", "label": "group-chat fan", "raw": "@[U1|group-chat fan]" }
+    ]
+  },
+  {
+    "name": "adjacent tokens",
+    "text": "@[U1|Ann]@[group-G1|ops]",
+    "tokens": [
+      { "kind": "user", "id": "U1", "label": "Ann", "raw": "@[U1|Ann]" },
+      { "kind": "usergroup", "id": "group-G1", "label": "ops", "raw": "@[group-G1|ops]" }
+    ]
+  },
+  {
+    "name": "multibyte text before a token",
+    "text": "héllo 👋🏽 @[group-G2|design]",
+    "tokens": [
+      { "kind": "usergroup", "id": "group-G2", "label": "design", "raw": "@[group-G2|design]" }
+    ]
+  },
+  {
+    "name": "padded id is trimmed, label kept as typed",
+    "text": "@[ group-G3 | sre ]",
+    "tokens": [
+      { "kind": "usergroup", "id": "group-G3", "label": " sre ", "raw": "@[ group-G3 | sre ]" }
+    ]
+  },
+  {
+    "name": "malformed tokens",
+    "text": "@[noPipe] @[|empty] @[U9|] [U1|x] @U1",
+    "tokens": []
+  }
+]

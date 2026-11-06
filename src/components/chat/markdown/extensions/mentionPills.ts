@@ -7,10 +7,7 @@ import {
   WidgetType,
 } from '@codemirror/view';
 import { type Range } from '@codemirror/state';
-import {
-  USER_MENTION_RE_GLOBAL,
-  CHANNEL_MENTION_RE_GLOBAL,
-} from '@/lib/mention-syntax';
+import { CHANNEL_MENTION_RE_GLOBAL, scanMentions } from '@/lib/mention-syntax';
 
 // Renders the raw mention tokens — `@[id|name]`, `~[id|slug]`, `@all`/`@here` —
 // as atomic "pill" widgets while the document keeps the raw markup (so the
@@ -19,7 +16,7 @@ import {
 // Reuses the canonical regexes from lib/mention-syntax so the composer and the
 // message renderer agree on exactly what a mention is.
 
-type PillKind = 'user' | 'channel' | 'group' | 'connector';
+type PillKind = 'user' | 'usergroup' | 'channel' | 'group' | 'connector';
 
 class PillWidget extends WidgetType {
   readonly label: string;
@@ -69,9 +66,8 @@ function buildDecorations(view: EditorView): DecorationSet {
 
   for (const { from, to } of view.visibleRanges) {
     const text = view.state.sliceDoc(from, to);
-    for (const m of text.matchAll(USER_MENTION_RE_GLOBAL)) {
-      const start = from + matchStart(m);
-      push(start, start + m[0].length, `@${m[2]}`, 'user');
+    for (const t of scanMentions(text)) {
+      push(from + t.start, from + t.end, `@${t.label}`, t.kind);
     }
     for (const m of text.matchAll(CHANNEL_MENTION_RE_GLOBAL)) {
       const start = from + matchStart(m);
