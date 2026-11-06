@@ -104,6 +104,25 @@ describe('uploadAttachment processing', () => {
     });
   });
 
+  // A browser without the HEIC codec gives the file no type; its name says
+  // what it is, so the server can check it and show it.
+  it('declares a typeless HEIC as image/heic', async () => {
+    routeUpload({
+      id: 'att-heic',
+      key: 'attachments/att-heic',
+      multipartUploadId: '',
+      alreadyExists: false,
+      filename: 'IMG_0001.HEIC',
+      contentType: 'image/heic',
+      size: 4,
+    });
+
+    await uploadAttachment(new File(['heic'], 'IMG_0001.HEIC', { type: '' }));
+
+    const [, init] = apiFetchMock.mock.calls.find(([path]) => path === '/api/v1/attachments/url')!;
+    expect(JSON.parse(init.body as string)).toMatchObject({ filename: 'IMG_0001.HEIC', contentType: 'image/heic' });
+  });
+
   it('processes deduped existing attachments without re-uploading bytes', async () => {
     apiFetchMock
       .mockResolvedValueOnce({

@@ -9,7 +9,17 @@ import {
   FileText,
   FileVideo,
 } from 'lucide-react';
-import { isImageURL, isImageContentType, isImageAttachment, isPdfAttachment, isVideoAttachment, iconForAttachment } from './file-helpers';
+import {
+  isImageURL,
+  isImageContentType,
+  isImageAttachment,
+  isHeifAttachment,
+  isShownAsImage,
+  isPdfAttachment,
+  isVideoAttachment,
+  iconForAttachment,
+  uploadContentType,
+} from './file-helpers';
 
 describe('isImageURL', () => {
   it.each([
@@ -51,6 +61,42 @@ describe('isImageAttachment', () => {
     ['application/octet-stream', 'document.pdf', false],
   ])('%s + %s → %s', (contentType, filename, expected) => {
     expect(isImageAttachment(contentType, filename)).toBe(expected);
+  });
+});
+
+describe('isHeifAttachment', () => {
+  it.each([
+    ['image/heic', '', true],
+    ['IMAGE/HEIF', '', true],
+    ['application/octet-stream', 'IMG_0001.HEIC', true],
+    ['', 'photo.heif', true],
+    ['image/png', 'photo.png', false],
+  ])('%s + %s → %s', (contentType, filename, expected) => {
+    expect(isHeifAttachment(contentType, filename)).toBe(expected);
+  });
+
+  it('defaults the filename to empty', () => {
+    expect(isHeifAttachment('image/png')).toBe(false);
+  });
+});
+
+describe('isShownAsImage', () => {
+  it('shows images, and a HEIC only once its viewing copy (with its thumbnails) exists', () => {
+    expect(isShownAsImage('image/png')).toBe(true);
+    expect(isShownAsImage('image/heic', 'https://cdn.example.test/thumb.webp')).toBe(true);
+    expect(isShownAsImage('image/heic')).toBe(false);
+    expect(isShownAsImage('application/pdf', 'https://cdn.example.test/thumb.webp')).toBe(false);
+  });
+});
+
+describe('uploadContentType', () => {
+  it.each([
+    ['photo.png', 'image/png', 'image/png'],
+    ['IMG_0001.HEIC', '', 'image/heic'],
+    ['photo.heif', '', 'image/heif'],
+    ['notes', '', 'application/octet-stream'],
+  ])('%s (%s) → %s', (name, type, expected) => {
+    expect(uploadContentType(new globalThis.File(['x'], name, { type }))).toBe(expected);
   });
 });
 

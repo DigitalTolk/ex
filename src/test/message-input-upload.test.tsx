@@ -145,6 +145,25 @@ describe('MessageInput - file upload', () => {
     );
   });
 
+  // A HEIC shows in few browsers: its chip keeps the file icon rather than a
+  // broken local preview.
+  it('shows a HEIC chip without a local preview', async () => {
+    mockUploadAttachment.mockImplementationOnce(() => new Promise(() => {}));
+    const createObjectURL = vi.spyOn(URL, 'createObjectURL');
+
+    render(<MessageInput onSend={vi.fn()} />);
+    const fileInput = screen.getByLabelText('File input') as HTMLInputElement;
+    const file = new File(['heic-bytes'], 'IMG_0001.HEIC', { type: 'image/heic' });
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(screen.getByText('IMG_0001.HEIC')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('attachment-chip-thumb')).not.toBeInTheDocument();
+    expect(createObjectURL).not.toHaveBeenCalled();
+    createObjectURL.mockRestore();
+  });
+
   it('shows error when upload fails', async () => {
     mockUploadAttachment.mockRejectedValueOnce(new Error('Network error'));
 

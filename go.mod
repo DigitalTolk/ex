@@ -24,6 +24,7 @@ require (
 	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/disintegration/imaging v1.6.2
 	github.com/gabriel-vasile/mimetype v1.4.16
+	github.com/gen2brain/h265 v0.2.4
 	github.com/gen2brain/webp v0.6.4
 	github.com/go-redis/redis_rate/v10 v10.0.1
 	github.com/golang-jwt/jwt/v5 v5.3.1
