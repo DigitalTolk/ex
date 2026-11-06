@@ -19,12 +19,11 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-// The test server serves a token of `f.<base64url file>` as that file, and
-// one of `o.<base64url file>` as that file with the response left open.
-function fileToken(html: string, kind: 'f' | 'o' = 'f'): string {
+// The test server serves a token of `f.<base64url file>` as that file.
+function fileToken(html: string): string {
   let bin = '';
   for (const b of new TextEncoder().encode(html)) bin += String.fromCharCode(b);
-  return `${kind}.${btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')}`;
+  return `f.${btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')}`;
 }
 
 async function mountURL(url: string) {
@@ -139,16 +138,18 @@ describe('HtmlPreviewPanel in a real browser', () => {
   });
 
   it('never shows a page the file navigated to before its own load', async () => {
-    // The response stays open, so the document cannot finish loading before
-    // it navigates. Given the whole file at once, WebKit sometimes completes
-    // the load first and only then follows `location`, which is the followed
-    // link below, not this case.
-    const html = `<script>location.href = ${JSON.stringify(outside('early'))};</script><p>x</p>`;
-    await mountURL(`/api/v1/media/${fileToken(html, 'o')}/mockup.html`);
-    const seen = new Set<string>();
+    // Which comes first is the engine's call: Chromium and Linux WebKit
+    // follow `location` before the document finishes loading, but macOS
+    // WebKit on a loaded machine sometimes completes the load first, and is
+    // then in the followed-link case below. Either way the frame may only be
+    // shown once the file's own document has reported its load (`<nonce>:
+    // ready`), which a page it navigated to cannot do.
+    const signals = mockupMessages();
+    await mount(`<script>location.href = ${JSON.stringify(outside('early'))};</script><p>x</p>`);
+    let shownUnready = false;
     const watch = setInterval(() => {
-      const g = frame()?.dataset.guard;
-      if (g) seen.add(g);
+      const el = frame();
+      if (el?.dataset.guard === 'live' && !signals.includes(`${el.name}:ready`)) shownUnready = true;
     }, 10);
     try {
       await expect.poll(notice, CLOSE).not.toBeNull();
@@ -156,7 +157,7 @@ describe('HtmlPreviewPanel in a real browser', () => {
       clearInterval(watch);
     }
     expect(frame()).toBeNull();
-    expect(seen.has('live')).toBe(false);
+    expect(shownUnready).toBe(false);
   });
 
   it('closes the frame when a link in it is followed, and Reload brings the mockup back', async () => {
