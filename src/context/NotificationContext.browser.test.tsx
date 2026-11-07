@@ -6,7 +6,6 @@ import {
   useNotifications,
   type NotificationPayload,
 } from './NotificationContext';
-import * as storageModule from '@/lib/storage';
 import { recordNotification, resetNotificationDedup } from '@/lib/notification-dedup';
 import { markUserActivity } from '@/lib/user-activity';
 import { setActiveParent } from '@/stores/active-parent';
@@ -57,18 +56,16 @@ vi.mock('@/lib/tab-leader', () => ({
   nonLeaderHoldMs: 40,
 }));
 
-vi.mock('@/lib/storage', () => {
-  let stored: Record<string, unknown> = {};
-  return {
-    readJSON: (key: string, def: unknown) => (key in stored ? stored[key] : def),
-    writeJSON: (key: string, value: unknown) => {
-      stored[key] = value;
-    },
-    __reset: () => {
-      stored = {};
-    },
-  };
-});
+// What the storage mock holds. It lives outside the mock because a browser
+// mock exposes only the names the real module exports, so the mock can't
+// carry a reset of its own.
+const storedPrefs = vi.hoisted(() => new Map<string, unknown>());
+vi.mock('@/lib/storage', () => ({
+  readJSON: (key: string, def: unknown) => (storedPrefs.has(key) ? storedPrefs.get(key) : def),
+  writeJSON: (key: string, value: unknown) => {
+    storedPrefs.set(key, value);
+  },
+}));
 
 let captured: ReturnType<typeof useNotifications> | null = null;
 function Capture() {
@@ -88,7 +85,7 @@ beforeEach(() => {
   tabLeaderMock.atDevice = false;
   // The storage mock persists across tests; reset it so one test's pref
   // changes don't leak into the next (e.g. a disabled browserEnabled).
-  (storageModule as unknown as { __reset: () => void }).__reset();
+  storedPrefs.clear();
   // The cross-tab dedup store is backed by real localStorage — clear it (and the
   // module's latch) so a messageID alerted in one test isn't deduped in the next.
   resetNotificationDedup();
