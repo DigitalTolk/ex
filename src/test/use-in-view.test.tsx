@@ -124,9 +124,9 @@ describe('useInView', () => {
   });
 });
 
-function LiveProbe(props: { onState: (live: boolean) => void; attach?: boolean; measuredFor?: unknown }) {
+function LiveProbe(props: { onState: (live: boolean) => void; attach?: boolean }) {
   const ref = useRef<HTMLDivElement | null>(null);
-  props.onState(useLiveInView(ref, props.measuredFor));
+  props.onState(useLiveInView(ref));
   return props.attach === false ? <div /> : <div ref={ref} data-testid="live-probe" />;
 }
 
@@ -163,24 +163,6 @@ describe('useLiveInView', () => {
     // notifications for a card the user is no longer reading (SPEC D-3).
     act(() => FakeObserver.instances[0].fire(false));
     expect(states.at(-1)).toBe(false);
-  });
-
-  // An answer belongs to the layout it was measured in. The files panel's
-  // end-of-list marker is in view while the list is empty; once 30 rows
-  // render it isn't — but the browser only says so a frame later. Trusting
-  // the old "in view" in between loaded the next page at once (a CI flake,
-  // and a wasted request on every slow open).
-  it('drops an answer measured for an earlier layout until the browser answers again', () => {
-    const states: boolean[] = [];
-    const { rerender } = render(<LiveProbe measuredFor={0} onState={(v) => states.push(v)} />);
-    act(() => FakeObserver.instances[0].fire(true));
-    expect(states.at(-1)).toBe(true);
-    rerender(<LiveProbe measuredFor={30} onState={(v) => states.push(v)} />);
-    expect(states.at(-1)).toBe(false);
-    const fresh = FakeObserver.instances.at(-1)!;
-    expect(fresh).not.toBe(FakeObserver.instances[0]);
-    act(() => fresh.fire(true));
-    expect(states.at(-1)).toBe(true);
   });
 
   it('does not observe when the ref is never attached', () => {

@@ -7,6 +7,7 @@ import { MessageItem } from './MessageItem';
 import type { Message } from '@/types';
 import { hoverRow } from '@/test/hover';
 import { pickTomorrow, tomorrow } from '@/test/reminder-picker';
+import { wheelTo } from '@/test/wheel-time';
 
 // Browser-only surface: the desktop "Remind me" submenu (base-ui Submenu needs a
 // real browser) and its channel/conversation target computation + custom dialog.
@@ -75,6 +76,13 @@ async function openMenu() {
 beforeEach(() => { createReminderMutate.mockClear(); createReminderMutateAsync.mockClear(); });
 afterEach(() => cleanup());
 
+
+// Turns the time wheels to `hour`:00 by tapping their rows.
+async function wheelMorning(hour: number) {
+  await vi.waitFor(() => expect(document.querySelector('[data-testid="reminder-wheel-minute"]')).not.toBeNull());
+  wheelTo(hour, 0);
+}
+
 describe('MessageItem "Remind me"', () => {
   it('schedules a preset reminder for a channel message', async () => {
     if (window.innerWidth <= 767) return; // desktop menu only
@@ -88,6 +96,40 @@ describe('MessageItem "Remind me"', () => {
     const arg = createReminderMutate.mock.calls[0][0];
     expect(arg).toMatchObject({ messageID: 'msg-1', parentID: 'channel-1', parentType: 'channel', channelSlug: 'general' });
     expect(typeof arg.remindAt).toBe('string');
+  });
+
+  // "Remind all": the same quick times, for everyone in the chat.
+  it('schedules a preset reminder for everyone', async () => {
+    if (window.innerWidth <= 767) return;
+    const screen = await renderItem(
+      <MessageItem message={makeMessage()} authorName="Alice" isOwn={false} channelId="channel-1" channelSlug="general" />,
+    );
+    await openMenu();
+    await userEvent.click(screen.getByTestId('remind-all-trigger'));
+    await userEvent.click(screen.getByTestId('remind-all-tomorrow'));
+    expect(createReminderMutate).toHaveBeenCalledTimes(1);
+    const arg = createReminderMutate.mock.calls[0][0];
+    expect(arg).toMatchObject({ messageID: 'msg-1', parentID: 'channel-1', everyone: true, excludedUserIDs: [] });
+    expect(arg.userIDs).toBeUndefined();
+  });
+
+  it('opens the custom dialog for everyone, and schedules it so', async () => {
+    if (window.innerWidth <= 767) return;
+    const screen = await renderItem(
+      <MessageItem message={makeMessage()} authorName="Alice" isOwn={false} channelId="channel-1" channelSlug="general" />,
+    );
+    await openMenu();
+    await userEvent.click(screen.getByTestId('remind-all-trigger'));
+    await userEvent.click(screen.getByTestId('remind-all-custom'));
+    // Titled and worded for everyone, with whoever is left out one tap away.
+    await expect.element(screen.getByRole('heading', { name: 'Remind all' })).toBeVisible();
+    await expect.element(screen.getByTestId('reminder-who-summary')).toHaveTextContent('Everyone here');
+    await pickTomorrow();
+    await wheelMorning(9);
+    await expect.poll(() => screen.getByTestId('reminder-preview').element().textContent).toContain('Reminds everyone');
+    await userEvent.click(screen.getByTestId('reminder-confirm'));
+    await vi.waitFor(() => expect(createReminderMutateAsync).toHaveBeenCalledTimes(1));
+    expect(createReminderMutateAsync.mock.calls[0][0]).toMatchObject({ everyone: true, excludedUserIDs: [] });
   });
 
   it('schedules a preset reminder for a conversation message', async () => {
@@ -157,10 +199,12 @@ describe('MessageItem "Remind me"', () => {
     await userEvent.click(screen.getByTestId('remind-me-trigger'));
     await userEvent.click(screen.getByTestId('remind-custom'));
         await pickTomorrow();
-    await userEvent.fill(document.querySelector('[data-testid="reminder-time"]') as HTMLInputElement, '09:00');
+    await wheelMorning(9);
+    await userEvent.type(screen.getByTestId('reminder-note'), 'bring the numbers');
     await userEvent.click(screen.getByTestId('reminder-confirm'));
     await vi.waitFor(() => expect(createReminderMutateAsync).toHaveBeenCalledTimes(1));
     expect(new Date(createReminderMutateAsync.mock.calls[0][0].remindAt as string).getDate()).toBe(tomorrow().getDate());
+    expect(createReminderMutateAsync.mock.calls[0][0].note).toBe('bring the numbers');
   });
 
   it('mobile action sheet shows a single Remind me item (no inline preset list) that opens the dialog', async () => {
@@ -180,6 +224,17 @@ describe('MessageItem "Remind me"', () => {
     await vi.waitFor(() => expect(document.querySelector('[data-testid="reminder-dialog"]')).not.toBeNull());
   });
 
+  it('offers Remind all in the mobile sheet, opening the dialog for everyone', async () => {
+    if (window.innerWidth > 767) return;
+    await renderItem(
+      <MessageItem message={makeMessage()} authorName="Alice" isOwn={false} channelId="channel-1" channelSlug="general" currentUserId="user-9" />,
+    );
+    await openMobileSheet();
+    await userEvent.click(document.querySelector('[data-testid="mobile-remind-all"]') as HTMLButtonElement);
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="reminder-dialog"]')).not.toBeNull());
+    expect(document.querySelector('[data-testid="reminder-who-summary"]')?.textContent).toMatch(/^Everyone here/);
+  });
+
   it('schedules a reminder from the mobile action sheet via the date-selector popup', async () => {
     if (window.innerWidth > 767) return;
     await renderItem(
@@ -188,7 +243,7 @@ describe('MessageItem "Remind me"', () => {
     await openMobileSheet();
     await userEvent.click(document.querySelector('[data-testid="mobile-remind"]') as HTMLButtonElement);
         await pickTomorrow();
-    await userEvent.fill(document.querySelector('[data-testid="reminder-time"]') as HTMLInputElement, '08:00');
+    await wheelMorning(8);
     // On mobile the confirm lives in the dialog's top-right header (the iOS
     // date wheel covers a bottom footer).
     await userEvent.click(document.querySelector('[data-slot="dialog-mobile-action"]') as HTMLButtonElement);
@@ -242,7 +297,7 @@ describe('MessageItem "Remind me" — self-DM parity', () => {
         await userEvent.click(screen.getByTestId('remind-me-trigger'));
         await userEvent.click(screen.getByTestId('remind-custom'));
         await pickTomorrow();
-        await userEvent.fill(screen.getByTestId('reminder-time'), '09:00');
+        await wheelMorning(9);
         await userEvent.click(screen.getByTestId('reminder-confirm'));
         await vi.waitFor(() => expect(createReminderMutateAsync).toHaveBeenCalledTimes(1));
         expect(createReminderMutateAsync.mock.calls[0][0]).toMatchObject(target);
@@ -263,7 +318,7 @@ describe('MessageItem "Remind me" — self-DM parity', () => {
         await openMobileSheet();
         await userEvent.click(document.querySelector('[data-testid="mobile-remind"]') as HTMLButtonElement);
                 await pickTomorrow();
-        await userEvent.fill(document.querySelector('[data-testid="reminder-time"]') as HTMLInputElement, '08:00');
+        await wheelMorning(8);
         await userEvent.click(document.querySelector('[data-slot="dialog-mobile-action"]') as HTMLButtonElement);
         await vi.waitFor(() => expect(createReminderMutateAsync).toHaveBeenCalledTimes(1));
         expect(createReminderMutateAsync.mock.calls[0][0]).toMatchObject({

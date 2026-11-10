@@ -14,6 +14,11 @@ const mockReactMutate = vi.fn();
 const mockPinMutate = vi.fn();
 const useAttachmentsBatchMock = vi.hoisted(() => vi.fn(() => ({ map: new Map(), isLoading: false })));
 
+// The integration card fetches a webhook's owner when it opens; nothing else
+// here reaches the API, and by default nothing answers.
+const apiFetchMock = vi.hoisted(() => vi.fn((..._args: unknown[]) => new Promise<unknown>(() => {})));
+vi.mock('@/lib/api', () => ({ apiFetch: (...args: unknown[]) => apiFetchMock(...args) }));
+
 vi.mock('@/hooks/useMessages', () => ({
   useEditMessage: () => ({ mutate: mockEditMutate, isPending: false }),
   useDeleteMessage: () => ({ mutate: mockDeleteMutate, isPending: false }),
@@ -990,31 +995,39 @@ describe('MessageItem', () => {
     expect(screen.queryByTestId('webhook-emoji-avatar')).not.toBeInTheDocument();
   });
 
-  it('shows the integration profile card and never the creator avatar for webhook posts', () => {
+  it('shows the integration profile card and never the creator avatar for webhook posts', async () => {
+    apiFetchMock.mockImplementation((path: unknown) =>
+      path === '/api/v1/users/creator-1' ? Promise.resolve({ id: 'creator-1', displayName: 'Günter' }) : new Promise(() => {}),
+    );
     renderWithProviders(
       <MessageItem
         message={makeMessage({
-          authorID: 'creator-1',
+          // A channel post is authored by the "webhook" sentinel, which no
+          // user lookup resolves: the list passes "Unknown" for it.
+          authorID: 'webhook',
           body: 'Deploy done',
           webhookUsername: 'CI Bot',
+          webhookOwnerID: 'creator-1',
         })}
-        // authorName resolves to the creator; authorAvatarURL is the creator's
-        // photo and must NOT be used for the webhook post.
-        authorName="Günter"
+        authorName="Unknown"
         authorAvatarURL="/api/v1/media/creator/avatar.png"
         isOwn={false}
         currentUserId="user-1"
       />,
     );
-    // The creator's avatar image is not rendered for the post.
+    // No author avatar is rendered for the post.
     expect(document.querySelector('img[src="/api/v1/media/creator/avatar.png"]')).toBeNull();
 
-    // Clicking the name opens the minimal integration card attributed to the creator.
+    // Clicking the name opens the minimal integration card, naming the
+    // webhook's owner, never "Unknown".
     fireEvent.click(screen.getByText('CI Bot'));
     expect(screen.getByTestId('hover-card-integration')).toBeInTheDocument();
     expect(
-      screen.getByText(/This post was created by an integration from @Günter\./i),
+      await screen.findByText('This post was created by an integration from @Günter.'),
     ).toBeInTheDocument();
+    expect(screen.queryByText(/@Unknown/)).not.toBeInTheDocument();
+    apiFetchMock.mockReset();
+    apiFetchMock.mockImplementation(() => new Promise(() => {}));
   });
 });
 

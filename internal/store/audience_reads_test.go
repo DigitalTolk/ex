@@ -4,6 +4,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -19,6 +20,14 @@ type consistencyRecorder struct {
 	mu        sync.Mutex
 	queries   []bool
 	batchGets []bool
+	getItems  []bool
+}
+
+func (r *consistencyRecorder) GetItem(ctx context.Context, in *dynamodb.GetItemInput, opts ...func(*dynamodb.Options)) (*dynamodb.GetItemOutput, error) {
+	r.mu.Lock()
+	r.getItems = append(r.getItems, aws.ToBool(in.ConsistentRead))
+	r.mu.Unlock()
+	return r.DynamoAPI.GetItem(ctx, in, opts...)
 }
 
 func (r *consistencyRecorder) Query(ctx context.Context, in *dynamodb.QueryInput, opts ...func(*dynamodb.Options)) (*dynamodb.QueryOutput, error) {
@@ -77,5 +86,33 @@ func TestAudienceReads_AreStronglyConsistent(t *testing.T) {
 	}
 	if len(rec.batchGets) != 2 || !rec.batchGets[0] || !rec.batchGets[1] {
 		t.Fatalf("batch-get consistency = %v, want both strongly consistent", rec.batchGets)
+	}
+}
+
+// The shared member copy is filled with a consistent read: an eventually
+// consistent one right after a removal could still return the row. The plain
+// read (the access check without the copy) stays the cheap one.
+func TestMembershipStore_GetMembershipConsistent(t *testing.T) {
+	db := setupDynamoDB(t)
+	ctx := context.Background()
+	ms := NewMembershipStore(db)
+	if err := ms.AddMember(ctx, &model.ChannelMembership{ChannelID: "ch-gc", UserID: "u1", Role: model.ChannelRoleMember},
+		&model.UserChannel{UserID: "u1", ChannelID: "ch-gc", Role: model.ChannelRoleMember}); err != nil {
+		t.Fatalf("AddMember: %v", err)
+	}
+	rec := &consistencyRecorder{DynamoAPI: db.Client}
+	s := NewMembershipStore(&DB{Client: rec, Table: db.Table})
+
+	if m, err := s.GetMembershipConsistent(ctx, "ch-gc", "u1"); err != nil || m.UserID != "u1" {
+		t.Fatalf("GetMembershipConsistent = %+v (err %v)", m, err)
+	}
+	if _, err := s.GetMembershipConsistent(ctx, "ch-gc", "ghost"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("ghost: err = %v, want ErrNotFound", err)
+	}
+	if _, err := s.GetMembership(ctx, "ch-gc", "u1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(rec.getItems) != 3 || !rec.getItems[0] || !rec.getItems[1] || rec.getItems[2] {
+		t.Fatalf("consistent reads = %v, want [true true false]", rec.getItems)
 	}
 }

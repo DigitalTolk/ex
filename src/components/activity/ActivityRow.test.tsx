@@ -79,6 +79,37 @@ describe('ActivityRowView', () => {
     expect(screen.getByText(/posted 2 messages/)).toBeInTheDocument();
   });
 
+  // A DM's (or alert channel's) row holds every message the feed keeps for
+  // it, read ones too, so its count is what is new: the unread ones.
+  const dm = (id: string, read: boolean): ActivityItem => ({
+    ...item,
+    id,
+    type: 'dm',
+    messageID: `m-${id}`,
+    parentID: 'conv-1',
+    parentType: 'conversation',
+    read,
+  });
+
+  it("counts a DM row's unread messages, not every message it keeps", () => {
+    renderRow(vi.fn(), [dm('d4', false), dm('d3', false), dm('d2', true), dm('d1', true), dm('d0', true)]);
+    expect(screen.getByText(/sent you 2 messages/)).toBeInTheDocument();
+  });
+
+  it('reads a DM row with nothing unread as its latest message', () => {
+    renderRow(vi.fn(), [dm('d2', true), dm('d1', true), dm('d0', true)]);
+    expect(screen.getByText(/sent you a message/)).toBeInTheDocument();
+  });
+
+  it("counts an alert channel's unread messages, not every message it keeps", () => {
+    renderRow(vi.fn(), [
+      { ...item, id: 'cm-3', type: 'channel_message', messageID: 'm-3' },
+      { ...item, id: 'cm-2', type: 'channel_message', messageID: 'm-2' },
+      { ...item, id: 'cm-1', type: 'channel_message', messageID: 'm-1', read: true },
+    ]);
+    expect(screen.getByText(/posted 2 messages/)).toBeInTheDocument();
+  });
+
   it('offers the read/unread toggle on a message row, in the toolbar and the menu', () => {
     renderRow();
     expect(screen.getAllByRole('button', { name: 'Mark as read' })).toHaveLength(2);

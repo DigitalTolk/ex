@@ -161,7 +161,7 @@ export default function HtmlPreviewPanel({ attachment, onClose }: HtmlPreviewPan
         // Desktop: a near-full-viewport dialog (mockups need the room).
         // Mobile: the dialog primitive already goes full-screen; drop its
         // padding so the frame runs edge to edge under a safe-area toolbar.
-        className="h-[calc(100dvh-4rem)] grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden p-0 sm:max-w-[min(1600px,calc(100%-4rem))] mobile:h-auto mobile:overflow-hidden mobile:p-0"
+        className="h-[calc(100dvh-4rem)] grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden p-0 sm:max-w-[min(1600px,calc(100%-4rem))] mobile:overflow-hidden mobile:p-0"
       >
         <div className="flex items-center gap-2 border-b px-3 py-2 mobile:pt-[calc(env(safe-area-inset-top)+0.5rem)]">
           <FileCode className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />

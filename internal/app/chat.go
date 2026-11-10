@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/DigitalTolk/ex/internal/cache"
 	"github.com/DigitalTolk/ex/internal/config"
 	"github.com/DigitalTolk/ex/internal/email"
 	"github.com/DigitalTolk/ex/internal/handler"
@@ -39,6 +40,8 @@ type chat struct {
 	unfurl        *service.UnfurlService
 	webhooks      *service.IncomingWebhookService
 	interactions  *service.InteractionService
+	bots          *service.BotService
+	mattermost    *service.MattermostService
 	commands      *service.CommandService
 	// directorySync is nil without the Microsoft 365 integration.
 	directorySync *service.DirectorySyncService
@@ -55,6 +58,12 @@ type chat struct {
 // configuration exposes no endpoint overrides, so tests point the client at a
 // local server through it.
 var newGraphClient = msgraph.New
+
+// memberCopyTTL bounds a channel's shared member copy (service.CachedMemberships)
+// for a generation move that was lost: the copy is otherwise valid until the
+// channel's next membership change. The same window as the notification
+// audience's backstop.
+const memberCopyTTL = 5 * time.Minute
 
 func (a *App) buildChat(ctx context.Context) error {
 	cfg, in, c := a.cfg, &a.infra, &a.chat
@@ -85,7 +94,11 @@ func (a *App) buildChat(ctx context.Context) error {
 	}
 
 	// ------------------------------------------------------------- Channels + conversations
-	c.channels = service.NewChannelService(in.channels, in.memberships, in.users, in.messages, in.cache, broker, in.pubsub)
+	// Member lists and membership checks — the access check behind nearly
+	// every request — read a shared copy that stays valid while the channel's
+	// audience generation holds (every membership write moves it).
+	members := service.NewCachedMemberships(in.memberships, cache.NewMemberLists(in.cache.Client(), memberCopyTTL))
+	c.channels = service.NewChannelService(in.channels, members, in.users, in.messages, in.cache, broker, in.pubsub)
 	c.channels.SetDeactivatedAccounts(c.users)
 	c.auth.SetChannelJoiner(c.channels)
 	c.conversations = service.NewConversationService(in.conversations, in.users, in.cache, broker, in.pubsub)
@@ -93,12 +106,12 @@ func (a *App) buildChat(ctx context.Context) error {
 	c.conversations.SetUserProfileResolver(c.users)
 	// A group that became a private channel is read through that channel's
 	// membership, never its frozen participant list.
-	c.conversations.SetChannelMemberships(in.memberships)
+	c.conversations.SetChannelMemberships(members)
 
 	// ------------------------------------------------------------- Messages
 	c.messages = service.NewMessageServiceFromDeps(service.MessageServiceDeps{
 		Messages:      in.messages,
-		Memberships:   in.memberships,
+		Memberships:   members,
 		Conversations: in.conversations,
 		Publisher:     in.pubsub,
 		Broker:        broker,
@@ -167,7 +180,7 @@ func (a *App) buildChat(ctx context.Context) error {
 	c.webhooks.SetDMResolver(c.conversations)
 	c.webhooks.SetUserResolver(c.users)
 	c.webhooks.SetBotProvisioner(c.users)
-	c.webhooks.SetMembershipResolver(in.memberships)
+	c.webhooks.SetMembershipResolver(members)
 	c.webhooks.SetPublisher(in.pubsub)
 	internalDomains, _ := netguard.ParseDomains(cfg.ConnectorPrivateDomains)
 	c.interactions = service.NewInteractionService(c.messages, c.webhooks, in.cache,
@@ -180,6 +193,14 @@ func (a *App) buildChat(ctx context.Context) error {
 			AllowPrivate:    cfg.IsDev(),
 			InternalDomains: internalDomains,
 		})
+
+	// ------------------------------------------------------------- Bots + the Mattermost-compatible API
+	// Admins manage bot accounts and their tokens; an integration written
+	// against Mattermost's REST API acts as a bot with one, through the same
+	// services the app uses (the webhooks' Mattermost markup translation
+	// included).
+	c.bots = service.NewBotService(store.NewBotStore(in.db), in.users, c.users, in.cache, in.pubsub)
+	c.mattermost = service.NewMattermostService(c.channels, members, in.users, c.messages, c.conversations, c.webhooks)
 
 	// ------------------------------------------------------------- Microsoft 365 (Graph)
 	// App-only Graph client keyed to the same Azure AD app registration the
@@ -211,7 +232,7 @@ func (a *App) buildChat(ctx context.Context) error {
 			Meetings:      graph,
 			Sender:        c.messages,
 			Users:         c.users,
-			Memberships:   in.memberships,
+			Memberships:   members,
 			Conversations: in.conversations,
 			Channels:      in.channels,
 		}))
@@ -219,7 +240,7 @@ func (a *App) buildChat(ctx context.Context) error {
 	}
 
 	// ------------------------------------------------------------- Drafts
-	c.drafts = service.NewDraftService(store.NewRedisDraftStore(in.cache.Client()), in.messages, in.memberships, in.conversations, in.pubsub)
+	c.drafts = service.NewDraftService(store.NewRedisDraftStore(in.cache.Client()), in.messages, members, in.conversations, in.pubsub)
 	// A group message becoming a private channel, its drafts going along.
 	c.channels.SetConversationConverter(in.conversations, c.drafts)
 	// Fold draft-clear into every composer send: a successful message send or
@@ -229,9 +250,10 @@ func (a *App) buildChat(ctx context.Context) error {
 	c.commands.SetDraftClearer(c.drafts)
 
 	// ------------------------------------------------------------- Activity + reminders
-	// Reaction hints land in the message author's activity stream; reminders
-	// fire into it at their due time plus a desktop/mobile alert
-	// (NotifyDirect, wired with the notifier).
+	// Reaction hints land in the message author's activity stream. Reminders
+	// come due as the reminder bot's posts; one the bot can't post falls back
+	// to the owner's activity stream plus a desktop/mobile alert (NotifyDirect,
+	// wired with the notifier).
 	c.activity = service.NewActivityService(store.NewRedisActivityStore(in.cache.Client()), in.pubsub)
 	c.activity.SetChannelResolver(c.channels)      // snapshot channel slug onto reaction activity items
 	c.activity.SetMemberLister(c.messages)         // who holds items about an edited/deleted message
@@ -251,6 +273,9 @@ func (a *App) buildChat(ctx context.Context) error {
 	c.activity.SetMentionResolver(c.mentions)
 	c.activity.SetDeactivatedAccounts(c.users)
 	c.reminders.SetMentionResolver(c.mentions)
+	// Due reminders are the reminder bot's posts: a reply tagging the people
+	// added, or a DM to the owner linking the message.
+	c.reminders.SetBot(c.messages, c.users, c.conversations, cfg.BaseURL)
 	// Scheduled messages: composed now, posted at their time through the
 	// normal send path (notifications included).
 	c.scheduled = service.NewScheduledMessageService(store.NewScheduledMessageStore(in.db), c.messages, c.attachments, in.pubsub)
@@ -265,7 +290,7 @@ func (a *App) buildChat(ctx context.Context) error {
 	// Links to other messages in this workspace unfurl as rich, access-gated
 	// message-preview cards (Slack/Mattermost style) instead of being scraped.
 	c.messageLinks = service.NewMessageLinkService(
-		cfg.BaseURL, in.channels, in.memberships, in.conversations, in.messages, c.users, c.attachments,
+		cfg.BaseURL, in.channels, members, in.conversations, in.messages, c.users, c.attachments,
 	)
 	return nil
 }

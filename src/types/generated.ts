@@ -178,6 +178,24 @@ export interface Reminder {
   parentMessageID?: string;
   channelSlug?: string;
   messagePreview?: string;
+  /**
+   * UserIDs are the people the owner added: when it comes due, the reminder
+   * bot replies to the message tagging the owner and them. Without any, the
+   * bot DMs the owner alone.
+   */
+  userIDs?: string[];
+  /**
+   * Everyone: the reminder is for every member of the chat (UserIDs is then
+   * empty) but ExcludedUserIDs, the few the owner left out. The bot's reply
+   * tags @all, and its notifications skip them.
+   */
+  everyone?: boolean;
+  excludedUserIDs?: string[];
+  /**
+   * Note is the owner's own words for context, shown with the reminder
+   * when it comes due.
+   */
+  note?: string;
   remindAt: string /* RFC3339 */;
   createdAt: string /* RFC3339 */;
 }
@@ -1661,6 +1679,51 @@ export interface ActionTally {
 }
 
 //////////
+// source: bot.go
+
+/**
+ * BotAccount is a bot as the admin API lists it: the bot accounts admins
+ * create, and the ones migrated from Mattermost. The bots behind incoming
+ * webhooks belong to their webhooks and are not listed.
+ */
+export interface BotAccount {
+  id: string;
+  username: string;
+  displayName: string;
+  description: string;
+  /**
+   * OwnerID is the admin who created the bot; empty for a migrated one.
+   */
+  ownerID: string;
+  /**
+   * Status is "active" or "deactivated" (a disabled bot).
+   */
+  status: string;
+  createdAt: string /* RFC3339 */;
+  updatedAt: string /* RFC3339 */;
+}
+/**
+ * BotToken is an access token a bot authenticates the Mattermost-compatible
+ * API (/api/v4) with. Only the SHA-256 of the secret is stored: the secret is
+ * shown once, when the token is made, and cannot be read back.
+ */
+export interface BotToken {
+  id: string;
+  botUserID: string;
+  description: string;
+  createdBy: string;
+  createdAt: string /* RFC3339 */;
+}
+/**
+ * BotTokenIssued answers the request that made a token: the record, and the
+ * secret, which is never shown again.
+ */
+export interface BotTokenIssued {
+  token: BotToken;
+  secret: string;
+}
+
+//////////
 // source: channel.go
 
 export type ChannelType = string;
@@ -2697,6 +2760,13 @@ export interface Message {
   webhookIconEmoji?: string; // emoji name (no colons) from icon_emoji; rendered as the avatar
   messageAttachments?: MessageAttachment[];
   /**
+   * WebhookOwnerID is the person who set up the webhook that posted the
+   * message: the integration card names them. The author can't, being the
+   * "webhook" sentinel (or the webhook's bot, in a DM). Empty on posts from
+   * before it was recorded.
+   */
+  webhookOwnerID?: string;
+  /**
    * AgentInvokerID attributes an agent-authored message to the human whose
    * invocation produced it. Agents are shared ("gg" belongs to no one), so
    * a reader — human or another agent's context bundle — needs this to say
@@ -3105,11 +3175,25 @@ export interface User {
   createdAt: string /* RFC3339 */;
   updatedAt: string /* RFC3339 */;
   /**
-   * IsBot marks a machine account: today, the backing identity of an incoming
-   * webhook. A bot owns the DM conversations its webhook posts into, and is
-   * hidden from the people directory, user search and mention autocomplete.
+   * IsBot marks a machine account: the identity behind an incoming webhook
+   * (which owns the DM conversations its webhook posts into), or a bot
+   * account admins manage, created on the admin page or migrated from
+   * Mattermost, that an integration acts as through the Mattermost API.
+   * Bots are hidden from the people directory, user search and mention
+   * autocomplete; a bot account shows up only when adding someone to a
+   * channel.
    */
   isBot?: boolean;
+  /**
+   * Username is a bot's handle, unique among bots: the Mattermost API's
+   * `username`. People have none, and neither do the bots behind incoming
+   * webhooks or the bots migrated without one.
+   */
+  username?: string;
+  /**
+   * BotDescription says what a bot is for.
+   */
+  botDescription?: string;
   /**
    * Phone and Manager are directory attributes synced from Microsoft 365
    * at SSO login when the Graph integration is enabled. They are owned by
@@ -3183,19 +3267,25 @@ export interface UserStateItem {
   rewound?: boolean;
   updatedAt: string /* RFC3339 */;
 }
+/**
+ * UserState is the user's small, always-loaded state. How far they read
+ * each thread is not part of it: that is one row per thread they ever
+ * opened, and a thread's row is read when it opens (ThreadReadState).
+ */
 export interface UserState {
   threadNotifications: string[];
-  threadSeen: { [key: string]: string};
-  /**
-   * ThreadMarkedUnread maps a thread root to WHEN the user marked it unread
-   * (its threadSeen entry was rewound to just before a reply). Clients keep
-   * the newer of their local and the server's seen time; a rewound entry is
-   * older by design, so this tells them a local seen time from before the
-   * mark must yield to it.
-   */
-  threadMarkedUnread: { [key: string]: string};
   hiddenConversations: string[];
   hiddenSkills: string[];
+}
+/**
+ * ThreadReadState is how far the user has read one thread: SeenAt is the
+ * server's seen time (absent when they never opened it). MarkedUnreadAt is
+ * when they marked a reply unread: SeenAt was rewound to just before it, so
+ * a newer seen time a client kept from before the mark must yield to it.
+ */
+export interface ThreadReadState {
+  seenAt?: string /* RFC3339 */;
+  markedUnreadAt?: string /* RFC3339 */;
 }
 /**
  * MarkUnreadResult is the outcome of marking a message unread. A top-level

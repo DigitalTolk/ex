@@ -156,6 +156,48 @@ func TestSearch_MessageMappingAndQuery_RealEngine(t *testing.T) {
 	}
 }
 
+// A three-letter word is matched exactly: one edit away from "dpa" are "spa",
+// "dpo" and dozens of other acronyms, so searching DPA listed messages about
+// SPA. Longer words keep their typo tolerance.
+func TestSearch_MessagesShortWordsMatchExactly_RealEngine(t *testing.T) {
+	c := newSearchClient(t)
+	ctx := context.Background()
+	svc := NewService(c)
+
+	docs := []map[string]any{
+		{"id": "fz-dpa", "parentId": "fz-ch", "parentType": "channel", "authorId": "u1", "body": "the DPA with the vendor is signed"},
+		{"id": "fz-spa", "parentId": "fz-ch", "parentType": "channel", "authorId": "u1", "body": "the SPA rewrite ships friday"},
+		{"id": "fz-dpo", "parentId": "fz-ch", "parentType": "channel", "authorId": "u1", "body": "ask the DPO about the pipeline"},
+	}
+	for _, d := range docs {
+		if err := c.IndexDoc(ctx, IndexMessages, d["id"].(string), d); err != nil {
+			t.Fatalf("IndexDoc %s: %v", d["id"], err)
+		}
+	}
+	refreshIndex(t, c, IndexMessages)
+
+	cases := []struct {
+		q    string
+		want string
+	}{
+		{"DPA", "fz-dpa"},
+		{"spa", "fz-spa"},
+		{"frday", "fz-spa"},    // five letters: one typo allowed
+		{"pipeilne", "fz-dpo"}, // eight letters: a swapped pair
+	}
+	for _, tc := range cases {
+		t.Run(tc.q, func(t *testing.T) {
+			res, err := svc.Messages(ctx, MessageQuery{Q: tc.q, AllowedParentIDs: []string{"fz-ch"}, Limit: 10})
+			if err != nil {
+				t.Fatalf("Messages(%q): %v", tc.q, err)
+			}
+			if ids := hitIDs(res); len(ids) != 1 || !ids[tc.want] {
+				t.Fatalf("Messages(%q) = %v, want only %s", tc.q, ids, tc.want)
+			}
+		})
+	}
+}
+
 func TestSearch_UserAutocompletePrefix_RealEngine(t *testing.T) {
 	c := newSearchClient(t)
 	ctx := context.Background()
@@ -190,7 +232,7 @@ func TestSearch_UserAutocompletePrefix_RealEngine(t *testing.T) {
 		{"infix letters+digits inside a token", "ar12", "au3"},
 		// Full-token exact still works.
 		{"exact token", "Rehman", "au1"},
-		// Typo tolerance (fuzziness AUTO) still works.
+		// Typo tolerance (typoFuzziness) still works.
 		{"typo", "Muhamad", "au1"},
 	}
 	for _, tc := range cases {
@@ -251,7 +293,7 @@ func TestSearch_AutocompleteNgramBoundaryAndNonLatin_RealEngine(t *testing.T) {
 	})
 	t.Run("11-char mid-token substring misses (documented max_gram limit)", func(t *testing.T) {
 		// 11 chars exceeds max_gram=10, and 5 edits from the full token is
-		// beyond fuzziness AUTO — so this documented limitation returns
+		// beyond typoFuzziness — so this documented limitation returns
 		// nothing (and must not error). If a mapping change makes this
 		// match, update the docs in index.go alongside this test.
 		res, err := svc.Users(ctx, "efghijklmno", 10)

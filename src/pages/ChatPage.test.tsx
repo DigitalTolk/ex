@@ -178,7 +178,7 @@ describe('ChatPage', () => {
         const path = String(input);
         if (path === '/api/v1/conversations') return new Promise<Response>(() => undefined);
         if (path === '/api/v1/user-state') {
-          return Promise.resolve(responseJSON({ channelNotifications: [], threadNotifications: [], threadSeen: {}, hiddenConversations: [] }));
+          return Promise.resolve(responseJSON({ channelNotifications: [], threadNotifications: [], hiddenConversations: [] }));
         }
         return Promise.resolve(responseJSON([]));
       });
@@ -215,7 +215,6 @@ describe('ChatPage', () => {
         return Promise.resolve(responseJSON({
           channelNotifications: [],
           threadNotifications: [],
-          threadSeen: {},
           hiddenConversations: [],
         }));
       }
@@ -238,7 +237,7 @@ describe('ChatPage', () => {
       const path = String(input);
       if (path === '/api/v1/threads') return new Promise<Response>(() => undefined);
       if (path === '/api/v1/user-state') {
-        return Promise.resolve(responseJSON({ channelNotifications: [], threadNotifications: [], threadSeen: {}, hiddenConversations: [] }));
+        return Promise.resolve(responseJSON({ channelNotifications: [], threadNotifications: [], hiddenConversations: [] }));
       }
       return Promise.resolve(responseJSON([]));
     });
@@ -264,7 +263,6 @@ describe('ChatPage', () => {
         return Promise.resolve(responseJSON({
           channelNotifications: [],
           threadNotifications: [],
-          threadSeen: {},
           hiddenConversations: [],
         }));
       }

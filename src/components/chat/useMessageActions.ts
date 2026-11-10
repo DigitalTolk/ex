@@ -1,22 +1,10 @@
 import { useMemo, useState } from 'react';
-import {
-  AlarmClock,
-  Bot,
-  Copy,
-  Eye,
-  Link as LinkIcon,
-  Mail,
-  MessageSquareReply,
-  Pencil,
-  Pin,
-  PinOff,
-  Trash2,
-  type LucideIcon,
-} from 'lucide-react';
+import { AlarmClock, Bot, Copy, Eye, Link as LinkIcon, Mail, MessageSquareReply, Pencil, Pin, PinOff, Trash2, type LucideIcon, Users } from 'lucide-react';
 import { useDeleteMessage, useSetPinned } from '@/hooks/useMessages';
 import { useCreateReminder } from '@/hooks/useActivity';
 import { useMarkUnread } from '@/hooks/useMarkUnread';
 import { buildChannelHref, buildConversationHref } from '@/lib/message-deeplink';
+import { EVERYONE, NOBODY_ELSE, type ReminderAudience } from '@/lib/reminder-audience';
 import { computeReminderTime, REMINDER_PRESETS, toLocalInputValue, type ReminderPresetKey } from '@/lib/reminder-times';
 import { openRunDrawer, openThreadDrawer } from '@/stores/run-drawer';
 import type { Message } from '@/types';
@@ -87,6 +75,7 @@ export function useMessageActions({
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [reminderDialogOpen, setReminderDialogOpen] = useState(false);
   const [reminderSeed, setReminderSeed] = useState('');
+  const [reminderAudience, setReminderAudience] = useState<ReminderAudience>(NOBODY_ELSE);
   const [watcherDialogOpen, setWatcherDialogOpen] = useState(false);
 
   // The parent TYPE comes from the view rendering the row (channelId /
@@ -116,13 +105,23 @@ export function useMessageActions({
   // One builder so the preset (mutate) and custom-dialog (mutateAsync) paths
   // can't drift on the payload shape. The reminder target derives from the
   // message itself, with the channel slug carried for the deep link.
-  const reminderInput = (when: Date) => ({
+  const reminderInput = (when: Date, audience?: ReminderAudience, note?: string) => ({
     messageID: message.id,
     parentID: message.parentID,
     parentType,
     channelSlug,
     remindAt: when.toISOString(),
+    userIDs: audience && !audience.everyone ? audience.userIDs : undefined,
+    everyone: audience?.everyone || undefined,
+    excludedUserIDs: audience?.everyone ? audience.excludedUserIDs : undefined,
+    note,
   });
+  // The custom dialog opens for you, or for everyone (Remind everyone).
+  const openReminderDialog = (audience: ReminderAudience) => {
+    setReminderAudience(audience);
+    setReminderSeed(toLocalInputValue(computeReminderTime('in1h', new Date())));
+    setReminderDialogOpen(true);
+  };
 
   function buildMessageLink(): string {
     const origin = window.location.origin;
@@ -137,6 +136,7 @@ export function useMessageActions({
     copyText: MessageAction;
     copyLink: MessageAction;
     remind: MessageAction;
+    remindAll: MessageAction;
     activity?: MessageAction;
     pin?: MessageAction;
     markUnread?: MessageAction;
@@ -175,10 +175,15 @@ export function useMessageActions({
       label: 'Remind me',
       ariaLabel: 'Remind me about this message',
       icon: AlarmClock,
-      run: () => {
-        setReminderSeed(toLocalInputValue(computeReminderTime('in1h', new Date())));
-        setReminderDialogOpen(true);
-      },
+      run: () => openReminderDialog(NOBODY_ELSE),
+    },
+    // Everyone in the chat: the bot's reply tags @all when it comes due.
+    remindAll: {
+      label: 'Remind all',
+      ariaLabel: 'Remind everyone about this message',
+      icon: Users,
+      testId: 'remind-all',
+      run: () => openReminderDialog(EVERYONE),
     },
     activity: activityTarget
       ? {
@@ -228,15 +233,20 @@ export function useMessageActions({
         : undefined,
   };
 
-  // The quick reminder times (desktop submenu).
+  // The quick reminder times (desktop submenus): for you, and for everyone.
   const reminderPresets = REMINDER_PRESETS.map((preset: { key: ReminderPresetKey; label: string }) => ({
     ...preset,
     run: () => createReminder.mutate(reminderInput(computeReminderTime(preset.key, new Date()))),
+  }));
+  const reminderAllPresets = REMINDER_PRESETS.map((preset: { key: ReminderPresetKey; label: string }) => ({
+    ...preset,
+    run: () => createReminder.mutate(reminderInput(computeReminderTime(preset.key, new Date()), EVERYONE)),
   }));
 
   return {
     actions,
     reminderPresets,
+    reminderAllPresets,
     deleteDialog: {
       open: deleteConfirmOpen,
       setOpen: setDeleteConfirmOpen,
@@ -255,7 +265,10 @@ export function useMessageActions({
       // The custom dialog awaits the result so it can confirm (close) on
       // success and surface the error (stay open) on failure — scheduling is
       // never silent there.
-      schedule: (when: Date) => createReminder.mutateAsync(reminderInput(when)).then(() => undefined),
+      schedule: (when: Date, audience: ReminderAudience, note: string) =>
+        createReminder.mutateAsync(reminderInput(when, audience, note)).then(() => undefined),
+      // The custom dialog can also tag people from the same chat, or everyone.
+      people: { parentID: message.parentID, parentType, initial: reminderAudience },
     },
     watcherDialog: { open: watcherDialogOpen, setOpen: setWatcherDialogOpen },
   };

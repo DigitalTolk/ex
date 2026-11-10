@@ -540,6 +540,44 @@ describe('Sidebar', () => {
     expect(screen.getByText('Project Team')).toBeInTheDocument();
   });
 
+  // Made but not started: the people in it don't see it, and the one who
+  // made it only while it is open or holds their draft, so picking people
+  // for a new message leaves no empty rows behind.
+  it('lists a conversation with no message yet only while it is open or holds your draft', async () => {
+    mockConversations = [
+      ...baseMockConversations,
+      { conversationID: 'conv-new', type: 'dm', displayName: 'Nina New', participantIDs: ['u-1', 'u-9'], activated: false },
+    ];
+    const draft = { userID: 'u-1', parentID: 'conv-new', body: 'hi', gen: 'g', createdAt: '', updatedAt: '' };
+    let drafts: object[] = [
+      // A thread reply's draft, and a channel's, are no draft of the conversation.
+      { ...draft, id: 'd-thread', parentType: 'conversation', parentMessageID: 'm-1' },
+      { ...draft, id: 'd-channel', parentType: 'channel' },
+    ];
+    mockApiFetch.mockImplementation(async (url: string) => {
+      if (url === '/api/v1/sidebar/categories') return [];
+      if (url === '/api/v1/drafts') return drafts;
+      return undefined;
+    });
+    const draftsLink = () => screen.getByRole('link', { name: /Drafts/ });
+
+    const closed = renderSidebar();
+    await waitFor(() => expect(draftsLink()).toHaveTextContent('2'));
+    expect(screen.queryByText('Nina New')).not.toBeInTheDocument();
+    expect(screen.getByText('Bob Jones')).toBeInTheDocument();
+    closed.unmount();
+
+    window.history.pushState({}, '', '/conversation/conv-new');
+    const open = renderSidebar();
+    expect(screen.getByText('Nina New')).toBeInTheDocument();
+    open.unmount();
+
+    window.history.pushState({}, '', '/');
+    drafts = [{ ...draft, id: 'd-1', parentType: 'conversation' }];
+    renderSidebar();
+    expect(await screen.findByText('Nina New')).toBeInTheDocument();
+  });
+
   it('uses slugified channel name in NavLink href', () => {
     renderSidebar();
     const nav = screen.getByLabelText('Channels and direct messages');
@@ -982,7 +1020,7 @@ describe('Sidebar', () => {
     expect(toggle).toHaveAttribute('aria-expanded', 'true');
   });
 
-  it('marks Threads bold, with no count, when threads have unread replies', async () => {
+  it('marks Threads bold and counts its unread threads, capped at "99+"', async () => {
     const manyThreads = Array.from({ length: 120 }, (_, i) => ({
       parentID: 'ch-1',
       parentType: 'channel' as const,
@@ -1001,17 +1039,17 @@ describe('Sidebar', () => {
         return {
           channelNotifications: [],
           threadNotifications: notifications,
-          threadSeen: {},
           hiddenConversations: [],
         };
       }
       return undefined;
     });
     renderSidebar();
-    // No count on Threads: unread threads make the entry bold, nothing more.
+    // Threads counts the threads with unread replies, like Drafts counts
+    // drafts, capped at "99+".
     const label = await screen.findByTestId('threads-nav-label');
     await waitFor(() => expect(label).toHaveClass('font-bold'));
-    expect(screen.queryByTestId('threads-unread-badge')).toBeNull();
+    expect(await screen.findByTestId('threads-unread-badge')).toHaveTextContent('99+');
   });
 
   it('caps the drafts badge at "99+" when there are more than 99 drafts', async () => {

@@ -57,7 +57,7 @@ function installRoutes(over: Routes = {}) {
       return (over.skills ?? (async () => ({ skills: skillFixtures() })))();
     }
     if (!init?.method && path === '/api/v1/user-state') {
-      return Promise.resolve({ threadNotifications: [], threadSeen: {}, hiddenConversations: [], hiddenSkills: over.hiddenSkills ?? [] });
+      return Promise.resolve({ threadNotifications: [], hiddenConversations: [], hiddenSkills: over.hiddenSkills ?? [] });
     }
     if (path === '/api/v1/users/batch') {
       return Promise.resolve([{ id: 'u-2', displayName: 'Manisha', email: 'm@example.com', systemRole: 'member' }]);

@@ -18,6 +18,9 @@ export function keepBottomEdge(scroller: HTMLElement): () => void {
     scrollable = scroller.scrollHeight > scroller.clientHeight;
   };
   note();
+  // The browser pulled the view back inside the content since the observer
+  // last ran (see onScroll).
+  let pulled = false;
   const observer = new ResizeObserver(() => {
     const shrunk = viewHeight - scroller.clientHeight;
     viewHeight = scroller.clientHeight;
@@ -26,8 +29,10 @@ export function keepBottomEdge(scroller: HTMLElement): () => void {
       // Moved since last seen, and not by the browser pulling a view that no
       // longer fits back to the end: a scroll whose event is still to come
       // (the list jumping to the newest message in this frame). Go by where
-      // it is.
-      if (scroller.scrollTop !== top && top <= end) note();
+      // it is. A pull can hide behind a net change the other way: a view that
+      // grew and shrank again before this ran (the keyboard coming up: the
+      // composer drops its home-indicator padding, then opens its toolbar).
+      if (!pulled && scroller.scrollTop !== top && top <= end) note();
       if (scrollable && fromEnd <= 1) {
         scroller.scrollTop = end;
       } else if (shrunk > 0 || scroller.scrollTop < end - 1) {
@@ -38,6 +43,7 @@ export function keepBottomEdge(scroller: HTMLElement): () => void {
         scroller.scrollTop = end - fromEnd;
       }
     }
+    pulled = false;
     note();
   });
   observer.observe(scroller);
@@ -48,6 +54,7 @@ export function keepBottomEdge(scroller: HTMLElement): () => void {
   // one off to the next frame. The observer goes by where the view stood.
   const onScroll = () => {
     if (scroller.clientHeight === viewHeight) note();
+    else pulled = true;
   };
   scroller.addEventListener('scroll', onScroll, { passive: true });
   return () => {

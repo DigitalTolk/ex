@@ -97,6 +97,7 @@ export const CALLBACK_EVENTS = {
   onNotificationSettingsUpdated: 'notification.settings_updated',
   onDraftUpdated: 'draft.updated',
   onWebhookChanged: 'webhook.changed',
+  onBotChanged: 'bot.changed',
   onProjectChanged: 'project.changed',
   onSettingsUpdated: 'settings.updated',
   onRunnersChanged: 'runners.changed',

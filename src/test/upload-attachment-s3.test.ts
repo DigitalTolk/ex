@@ -7,6 +7,9 @@ vi.mock('@/lib/api', () => ({
 }));
 
 import { MULTIPART_THRESHOLD_BYTES, signUploadRequest, uploadAttachment } from '@/hooks/useAttachments';
+import { dropTimersLeftByUploads } from './upload-timers';
+
+dropTimersLeftByUploads();
 
 // The real Uppy S3 plugin runs against this fake bucket, so the test covers
 // the actual request sequence the browser makes: what it asks the server to
@@ -148,17 +151,33 @@ function processCalls() {
 const bigFile = () =>
   new File([new Uint8Array(MULTIPART_THRESHOLD_BYTES + 1)], 'big.zip', { type: 'application/zip' });
 
+// Uppy checks the connection 3s after it is made, and never cancels that
+// check — destroy() doesn't either. When this file finished sooner, the check
+// fired after its window was torn down and failed the whole run ("window is
+// not defined"). Each test cancels the checks its uploads left behind.
+const UPPY_ONLINE_CHECK_MS = 3000;
+
 describe('uploadAttachment → S3', () => {
   const originalXHR = globalThis.XMLHttpRequest;
+  const realSetTimeout = globalThis.setTimeout;
+  let onlineChecks: ReturnType<typeof setTimeout>[] = [];
 
   beforeEach(() => {
     apiFetchMock.mockReset();
     s3 = new FakeS3();
     globalThis.XMLHttpRequest = FakeXHR as unknown as typeof XMLHttpRequest;
+    vi.spyOn(globalThis, 'setTimeout').mockImplementation(((fn: () => void, ms?: number) => {
+      const id = realSetTimeout(fn, ms);
+      if (ms === UPPY_ONLINE_CHECK_MS) onlineChecks.push(id);
+      return id;
+    }) as typeof setTimeout);
   });
 
   afterEach(() => {
     globalThis.XMLHttpRequest = originalXHR;
+    onlineChecks.forEach(clearTimeout);
+    onlineChecks = [];
+    vi.restoreAllMocks();
   });
 
   it('sends a small file in one PUT carrying exactly the signed headers', async () => {

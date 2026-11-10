@@ -22,6 +22,27 @@ export function isImageAttachment(contentType: string, filename = ''): boolean {
   return isImageContentType(contentType) || isImageURL(filename);
 }
 
+// HEIC/HEIF photos (what iPhones take) show in few browsers. The server keeps
+// the file and makes a WebP copy to show, which the attachment's url serves
+// once it exists: alongside its thumbnails. One without (too large to
+// convert) is offered as a file.
+export function isHeifAttachment(contentType: string, filename = ''): boolean {
+  return /^image\/hei[cf]\b/i.test(contentType) || /\.hei[cf]$/i.test(filename);
+}
+
+// isShownAsImage reports whether an attachment's url shows as a picture.
+export function isShownAsImage(contentType: string, thumbnailURL?: string): boolean {
+  return isImageContentType(contentType) && (!isHeifAttachment(contentType) || !!thumbnailURL);
+}
+
+// The content type an upload declares: the browser's, or, when it has none
+// (a HEIC on a system without the codec), the photo type its name says.
+export function uploadContentType(file: File): string {
+  if (file.type) return file.type;
+  const heif = /\.(hei[cf])$/i.exec(file.name);
+  return heif ? `image/${heif[1].toLowerCase()}` : 'application/octet-stream';
+}
+
 // Max display box for an inline image thumbnail — shared by the chat
 // message list and the message-link preview card so a shared image renders
 // at the same size in both.

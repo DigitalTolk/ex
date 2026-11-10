@@ -946,6 +946,13 @@ describe('ChatPage WebSocket handlers', () => {
     }).not.toThrow();
   });
 
+  it('onBotChanged refetches the bot lists (and their tokens)', () => {
+    const { qc } = renderAt('/');
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+    (capturedOptions.onBotChanged as (d: unknown) => void)({});
+    expect(spy).toHaveBeenCalledWith({ queryKey: ['bots'] });
+  });
+
   it('onProjectChanged refreshes the projects list and every open project', () => {
     const { qc } = renderAt('/');
     const spy = vi.spyOn(qc, 'invalidateQueries');
@@ -1565,11 +1572,10 @@ describe('ChatPage WebSocket handlers', () => {
     // first reply they haven't seen.
     describe('a reply in the open thread the user is not following', () => {
       const seenPut = ['/api/v1/user-state/threads/channels/ch-1/msg-root/seen', { method: 'PUT' }] as const;
+      // The open thread's read state, as its panel asked for it.
       const seedSeen = (qc: QueryClient) => {
         seed(0)(qc);
-        qc.setQueryData(queryKeys.userState(), {
-          threadNotifications: [], threadSeen: { 'msg-root': '2026-04-30T09:00:00Z' }, hiddenConversations: [], hiddenSkills: [],
-        });
+        qc.setQueryData(queryKeys.threadRead('msg-root'), { seenAt: '2026-04-30T09:00:00Z' });
       };
       beforeEach(() => {
         resetSeenCache();

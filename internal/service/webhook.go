@@ -587,6 +587,7 @@ func (s *IncomingWebhookService) execute(ctx context.Context, wh *model.Incoming
 		WebhookID:       wh.ID,
 		Blocks:          blocks,
 		AppButtons:      verified,
+		OwnerID:         wh.CreatedBy,
 	})
 }
 
@@ -1105,6 +1106,16 @@ func withoutLostImages(bs model.Blocks) model.Blocks {
 		return nil
 	}
 	return out
+}
+
+// TranslateMarkup turns Mattermost (and Slack) message markup into ex's:
+// ~channel and @user references into mentions, @channel and <!channel> into
+// @all, <url|label> into a link. The Mattermost-compatible API posts with it.
+// Mentions stay by name only, as for a classic webhook.
+func (s *IncomingWebhookService) TranslateMarkup(ctx context.Context, text string) string {
+	refs := s.newRefs()
+	refs.classic = true
+	return refs.translate(ctx, text)
 }
 
 func (r *webhookRefs) translate(ctx context.Context, text string) string {

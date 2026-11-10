@@ -8,22 +8,29 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 // root (see App.tsx), so callers just drop this in.
 export function TooltipIconButton({
   label,
+  ariaLabel = label,
   children,
   onClick,
   disabled,
   className,
   pressed,
+  expanded,
   testId,
   shortcut,
   size = 'icon-xs',
 }: {
   label: string;
+  // The accessible name, when the tooltip's word needs more to be told apart
+  // from its neighbours' ("Edit" in a list of rows is "Edit Alerts").
+  ariaLabel?: string;
   children: ReactNode;
   onClick?: () => void;
   disabled?: boolean;
   className?: string;
   // For icon TOGGLES: exposes the on/off state as aria-pressed.
   pressed?: boolean;
+  // For a button that shows and hides a section: aria-expanded.
+  expanded?: boolean;
   testId?: string;
   // A keyboard shortcut for the same action, shown in the tooltip.
   shortcut?: { label: string; aria: string };
@@ -38,8 +45,9 @@ export function TooltipIconButton({
             variant="ghost"
             size={size}
             className={className}
-            aria-label={label}
+            aria-label={ariaLabel}
             aria-pressed={pressed}
+            aria-expanded={expanded}
             aria-keyshortcuts={shortcut?.aria}
             data-testid={testId}
             disabled={disabled}

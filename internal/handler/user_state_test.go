@@ -74,6 +74,24 @@ func TestUserStateHandler_GetAndMutations(t *testing.T) {
 	if seenRow.SeenAt.Before(beforeSeen) || seenRow.SeenAt.After(afterSeen) {
 		t.Fatalf("seenAt = %s, want server time between %s and %s", seenRow.SeenAt, beforeSeen, afterSeen)
 	}
+	// The read time is not in the always-loaded state; the thread's own
+	// request returns it.
+	rec = httptest.NewRecorder()
+	handler.Get(rec, userStateAuthedRequest(http.MethodGet, "/api/v1/user-state", nil, userID))
+	if body := rec.Body.String(); bytes.Contains([]byte(body), []byte("seen")) {
+		t.Fatalf("user state carries read times: %s", body)
+	}
+	req = userStateAuthedRequest(http.MethodGet, "/api/v1/user-state/threads/root-1", nil, userID)
+	req.SetPathValue("threadRootID", "root-1")
+	rec = httptest.NewRecorder()
+	handler.ThreadRead(rec, req)
+	var read model.ThreadReadState
+	if err := json.NewDecoder(rec.Body).Decode(&read); err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("ThreadRead status = %d (decode err %v)", rec.Code, err)
+	}
+	if read.SeenAt == nil || !read.SeenAt.Equal(*seenRow.SeenAt) || read.MarkedUnreadAt != nil {
+		t.Fatalf("ThreadRead = %+v, want the stored seen time", read)
+	}
 
 	req = userStateAuthedRequest(http.MethodPut, "/api/v1/user-state/threads/conversations/conv-1/root-2/seen", nil, userID)
 	req.SetPathValue("parentType", "conversations")
@@ -188,6 +206,12 @@ func TestUserStateHandler_Errors(t *testing.T) {
 		t.Fatalf("HideConversation missing status = %d", rec.Code)
 	}
 
+	rec = httptest.NewRecorder()
+	handler.ThreadRead(rec, httptest.NewRequest(http.MethodGet, "/api/v1/user-state/threads/root", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("ThreadRead unauth status = %d", rec.Code)
+	}
+
 	stateStore = newMockUserStateStoreForHandler()
 	stateStore.listErr = errors.New("list boom")
 	handler = NewUserStateHandler(service.NewUserStateService(stateStore, nil), msgSvc, convSvc)
@@ -195,6 +219,13 @@ func TestUserStateHandler_Errors(t *testing.T) {
 	handler.Get(rec, userStateAuthedRequest(http.MethodGet, "/api/v1/user-state", nil, "u-1"))
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("Get list error status = %d", rec.Code)
+	}
+	req = userStateAuthedRequest(http.MethodGet, "/api/v1/user-state/threads/root", nil, "u-1")
+	req.SetPathValue("threadRootID", "root")
+	rec = httptest.NewRecorder()
+	handler.ThreadRead(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("ThreadRead read error status = %d", rec.Code)
 	}
 
 	stateStore = newMockUserStateStoreForHandler()
@@ -326,13 +357,25 @@ func (m *mockUserStateStoreForHandler) DeleteUserState(_ context.Context, userID
 	return nil
 }
 
-func (m *mockUserStateStoreForHandler) ListUserState(_ context.Context, userID string) ([]*model.UserStateItem, error) {
+func (m *mockUserStateStoreForHandler) GetUserState(_ context.Context, userID string, kind model.UserStateKind, targetID string) (*model.UserStateItem, error) {
+	if m.listErr != nil {
+		return nil, m.listErr
+	}
+	row, ok := m.rows[m.key(userID, kind, targetID)]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	cp := *row
+	return &cp, nil
+}
+
+func (m *mockUserStateStoreForHandler) ListUserState(_ context.Context, userID string, kind model.UserStateKind) ([]*model.UserStateItem, error) {
 	if m.listErr != nil {
 		return nil, m.listErr
 	}
 	out := make([]*model.UserStateItem, 0)
 	for _, row := range m.rows {
-		if row.UserID != userID {
+		if row.UserID != userID || row.Kind != kind {
 			continue
 		}
 		cp := *row
@@ -350,7 +393,10 @@ func (failingUserStateStore) SetUserState(context.Context, *model.UserStateItem)
 func (failingUserStateStore) DeleteUserState(context.Context, string, model.UserStateKind, string) error {
 	return errors.New("dynamo down")
 }
-func (failingUserStateStore) ListUserState(context.Context, string) ([]*model.UserStateItem, error) {
+func (failingUserStateStore) GetUserState(context.Context, string, model.UserStateKind, string) (*model.UserStateItem, error) {
+	return nil, errors.New("dynamo down")
+}
+func (failingUserStateStore) ListUserState(context.Context, string, model.UserStateKind) ([]*model.UserStateItem, error) {
 	return nil, errors.New("dynamo down")
 }
 

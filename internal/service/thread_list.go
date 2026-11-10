@@ -78,13 +78,13 @@ func (s *MessageService) unreadThreadMarkers(ctx context.Context, userID string)
 	if s.userState == nil {
 		return nil, nil
 	}
-	items, err := s.userState.ListUserState(ctx, userID)
+	items, err := s.userState.ListUserState(ctx, userID, model.UserStateThreadNotification)
 	if err != nil {
 		return nil, fmt.Errorf("threads: list user state: %w", err)
 	}
 	var markers []threadMarker
 	for _, item := range items {
-		if item.Kind != model.UserStateThreadNotification || item.ParentID == "" || item.ThreadRootID == "" {
+		if item.ParentID == "" || item.ThreadRootID == "" {
 			continue
 		}
 		markers = append(markers, threadMarker{

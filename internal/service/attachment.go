@@ -691,8 +691,14 @@ func (s *AttachmentService) canAccessAttachment(ctx context.Context, userID stri
 }
 
 func (s *AttachmentService) resolveAttachmentURLs(ctx context.Context, a *model.Attachment, grant *MediaGrant) {
+	// What the URL shows: the file, or a HEIF photo's viewing copy. The
+	// download is always the file.
+	namespace, key, filename, contentType, size := "attachment", a.S3Key, a.Filename, a.ContentType, a.Size
+	if hasDisplayCopy(a) {
+		namespace, key, filename, contentType, size = "attachment-display", displayObjectKey(a), displayFilename(a.Filename), "image/webp", 0
+	}
 	if s.mediaCache != nil {
-		if mediaURL, err := s.mediaURLForObject(ctx, "attachment", a.ID, a.S3Key, a.Filename, a.ContentType, a.Size, grant); err == nil {
+		if mediaURL, err := s.mediaURLForObject(ctx, namespace, a.ID, key, filename, contentType, size, grant); err == nil {
 			a.URL = mediaURL
 		}
 	}
@@ -700,9 +706,9 @@ func (s *AttachmentService) resolveAttachmentURLs(ctx context.Context, a *model.
 		// Straight from S3, which would answer with whatever type the
 		// uploader declared: the URL pins the type served and forces a
 		// download for scriptable ones.
-		if url, err := s.urlCache.getOrSign(ctx, presignedKey{op: "inline", key: a.S3Key, extra: a.ContentType},
+		if url, err := s.urlCache.getOrSign(ctx, presignedKey{op: "inline", key: key, extra: contentType},
 			func(ctx context.Context) (string, error) {
-				return s.signer.PresignedInlineURL(ctx, a.S3Key, a.ContentType, a.Filename, AttachmentURLTTL)
+				return s.signer.PresignedInlineURL(ctx, key, contentType, filename, AttachmentURLTTL)
 			}); err == nil {
 			a.URL = url
 		}
@@ -1293,7 +1299,7 @@ func inspectContent(ctx context.Context, a *model.Attachment, objectContentType 
 	// Peek's error is irrelevant here: a short object just sniffs what it
 	// has, and a transport failure resurfaces on the next read.
 	sniff, _ := r.Peek(512)
-	if http.DetectContentType(sniff) == "application/octet-stream" {
+	if !sniffsAsImage(sniff) {
 		return cfg, nil, noop, apperr.Invalid("attachment: could not detect image content type")
 	}
 	var header bytes.Buffer
@@ -1301,25 +1307,30 @@ func inspectContent(ctx context.Context, a *model.Attachment, objectContentType 
 	if err != nil || stored.Width <= 0 || stored.Height <= 0 {
 		return stored, nil, noop, apperr.Invalid("attachment: invalid image")
 	}
-	// A phone stores a portrait photo's pixels sideways and says so in its
-	// EXIF orientation; it is shown upright, and the browser measured it so.
-	// From here on the image's size is the size it is shown at. A claim of
-	// either orientation is this photo: the browser's is the one shown, a
-	// client that measured the stored pixels sent the other.
-	orientation := exifOrientation(header.Bytes())
+	// A phone stores a portrait photo's pixels sideways and says so (a JPEG
+	// in its EXIF orientation, a HEIC in its rotation box); it is shown
+	// upright, and the browser measured it so. From here on the image's size
+	// is the size it is shown at. A claim of either orientation is this
+	// photo: the browser's is the one shown, a client that measured the
+	// stored pixels sent the other.
+	orientation := shownOrientation(format, header.Bytes())
 	cfg = stored
 	cfg.Width, cfg.Height = shownSize(stored.Width, stored.Height, orientation)
 	if !claimFits(a, stored) {
 		return cfg, nil, noop, apperr.Invalid("attachment: image size mismatch: got %dx%d want %dx%d", cfg.Width, cfg.Height, a.Width, a.Height)
 	}
 	expectedFormat := strings.TrimPrefix(declared, "image/")
-	if expectedFormat == "jpg" {
+	switch expectedFormat {
+	case "jpg":
 		expectedFormat = "jpeg"
+	case "heif":
+		// The decoder reads every HEIF image as "heic".
+		expectedFormat = "heic"
 	}
 	if format != expectedFormat {
 		return cfg, nil, noop, apperr.Invalid("attachment: image format %q does not match declared %q", format, declared)
 	}
-	cost := imageDecodeCost(stored.Width, stored.Height)
+	cost := decodeCost(format, stored)
 	if !decode || cost > maxImageDecodeBytes {
 		return cfg, nil, noop, nil
 	}
@@ -1417,14 +1428,28 @@ func imageDecodeCostFor(format string, width, height int) int64 {
 	return cost
 }
 
-// storeThumbnails encodes both thumbnails, hands the decoded image's budget
-// back, and only then uploads: the pixels are the expensive part, the encoded
-// WebPs are a few KB.
+// storeThumbnails encodes both thumbnails (and a HEIF photo's viewing copy),
+// hands the decoded image's budget back, and only then uploads: the pixels
+// are the expensive part, the encoded WebPs are a few KB.
 func (s *AttachmentService) storeThumbnails(ctx context.Context, a *model.Attachment, img storedPixels, release func()) error {
 	thumbnailKey, squareThumbnailKey := thumbnailObjectKeys(a)
+	var display []byte
+	if isHEIF(a.ContentType) {
+		view := viewingCopy(img.Image)
+		img.Image = view
+		display = encodeWebPDisplay(view, img.orientation)
+	}
 	messageThumb := mustThumb(encodeWebPThumbnail(img, thumbnailModeMessage))
 	squareThumb := mustThumb(encodeWebPThumbnail(img, thumbnailModeSquare))
 	release()
+	// Ahead of the thumbnails: their keys on the row are what says the
+	// viewing copy is there (hasDisplayCopy).
+	if display != nil {
+		if err := s.signer.PutObject(ctx, displayObjectKey(a), "image/webp", display); err != nil {
+			return fmt.Errorf("attachment: store viewing copy: %w", err)
+		}
+		s.urlCache.invalidate(displayObjectKey(a))
+	}
 	if err := s.signer.PutObject(ctx, thumbnailKey, "image/webp", messageThumb); err != nil {
 		return fmt.Errorf("attachment: store message thumbnail: %w", err)
 	}
@@ -1594,14 +1619,18 @@ func (s *AttachmentService) deleteAttachmentObjects(ctx context.Context, a *mode
 	if a == nil {
 		return
 	}
+	keys := []string{a.S3Key, a.ThumbnailS3Key, a.SquareThumbnailS3Key}
+	if hasDisplayCopy(a) {
+		keys = append(keys, displayObjectKey(a))
+	}
 	if s.signer != nil {
-		for _, key := range []string{a.S3Key, a.ThumbnailS3Key, a.SquareThumbnailS3Key} {
+		for _, key := range keys {
 			if key != "" {
 				_ = s.signer.DeleteObject(ctx, key)
 			}
 		}
 	}
-	for _, key := range []string{a.S3Key, a.ThumbnailS3Key, a.SquareThumbnailS3Key} {
+	for _, key := range keys {
 		if key != "" {
 			s.urlCache.invalidate(key)
 		}

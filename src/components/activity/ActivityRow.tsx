@@ -335,6 +335,9 @@ export const ActivityRowView = memo(function ActivityRowView({
 // What a row says after the actor's name.
 function rowLabel(row: ActivityRow, emojiMap: Record<string, string> | undefined) {
   const item = row.lead;
+  // A DM's or alert channel's row holds every message the feed keeps for it,
+  // read ones too: it counts the new ones, and with none reads as its latest.
+  const fresh = row.unreadIDs.length;
   switch (item.type) {
     case 'reaction':
       return (
@@ -345,11 +348,11 @@ function rowLabel(row: ActivityRow, emojiMap: Record<string, string> | undefined
     case 'thread_reply':
       return 'replied in a thread';
     case 'dm':
-      return row.items.length > 1 ? `sent you ${row.items.length} messages` : 'sent you a message';
+      return fresh > 1 ? `sent you ${fresh} messages` : 'sent you a message';
     case 'channel_added':
       return `added you to ~${item.parentName || item.channelSlug || 'a channel'}`;
     case 'channel_message':
-      return row.items.length > 1 ? `posted ${row.items.length} messages` : 'posted a message';
+      return fresh > 1 ? `posted ${fresh} messages` : 'posted a message';
     case 'mention':
       if (item.mentionKind === 'all') return 'mentioned @all';
       if (item.mentionKind === 'here') return 'mentioned @here';

@@ -607,6 +607,11 @@ describe('ThreadCard — viewport gating', () => {
       );
       this.cb(entries, this as unknown as IntersectionObserver);
     }
+    // The observer watching the card's end — its newest reply.
+    static end(): FakeObserver {
+      const end = screen.getByTestId('thread-card-end');
+      return FakeObserver.instances.find((o) => o.observed.includes(end))!;
+    }
   }
 
   let originalIO: typeof IntersectionObserver | undefined;
@@ -671,7 +676,7 @@ describe('ThreadCard — viewport gating', () => {
     });
   });
 
-  it('marks an unread thread read when the card enters the viewport', async () => {
+  it('marks an unread thread read once its newest reply is on screen', async () => {
     const summary = makeSummary({ latestActivityAt: '2099-01-01T00:00:00.000Z' });
     render(
       <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
@@ -696,6 +701,10 @@ describe('ThreadCard — viewport gating', () => {
       );
       expect(threadCalls.length).toBe(1);
     });
+    await screen.findByTestId('thread-card-msg');
+    // The card is near the screen, which loads it — it isn't read yet.
+    expect(localStorage.getItem('ex.threads.seen.v1')).toBeNull();
+    act(() => FakeObserver.end().fire(true));
     const seen = JSON.parse(localStorage.getItem('ex.threads.seen.v1') ?? '{}');
     expect(seen['msg-root']).toBe(summary.latestActivityAt);
     expect(apiFetchMock).toHaveBeenCalledWith(
@@ -726,6 +735,7 @@ describe('ThreadCard — viewport gating', () => {
         FakeObserver.instances[0].fire(true);
       });
       await screen.findByTestId('thread-card-msg');
+      act(() => FakeObserver.end().fire(true));
       const seenPut = ['/api/v1/user-state/threads/channels/ch-1/msg-root/seen', expect.objectContaining({ method: 'PUT' })];
       expect(apiFetchMock).not.toHaveBeenCalledWith(...seenPut);
       vi.spyOn(document, 'hasFocus').mockReturnValue(true);
@@ -765,6 +775,7 @@ describe('ThreadCard — viewport gating', () => {
         FakeObserver.instances[0].fire(true);
       });
       await screen.findByTestId('thread-card-msg');
+      act(() => FakeObserver.end().fire(true));
       const seenPut = ['/api/v1/user-state/threads/channels/ch-1/msg-root/seen', expect.objectContaining({ method: 'PUT' })];
       expect(apiFetchMock).not.toHaveBeenCalledWith(...seenPut);
       act(() => markUserActivity());
@@ -773,6 +784,73 @@ describe('ThreadCard — viewport gating', () => {
       resetUserActivityForTests();
       vi.restoreAllMocks();
     }
+  });
+
+  // Scrolling down the page: the next card's header peeks in at the bottom,
+  // its replies still below the screen. That is not reading it.
+  it('keeps an unread thread unread while only the top of its card is on screen', async () => {
+    const summary = makeSummary({ latestActivityAt: '2099-01-01T00:00:00.000Z' });
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter>
+          <ThreadCard
+            summary={summary}
+            title="~general"
+            deepLink="/channel/general?thread=msg-root#msg-msg-root"
+            currentUserId="u-me"
+            unread
+          />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    const card = screen.getByTestId('thread-card');
+    act(() => {
+      for (const o of FakeObserver.instances.filter((o) => o.observed.includes(card))) o.fire(true);
+    });
+    await screen.findByTestId('thread-card-msg');
+    act(() => FakeObserver.end().fire(false));
+    expect(localStorage.getItem('ex.threads.seen.v1')).toBeNull();
+    expect(apiFetchMock).not.toHaveBeenCalledWith(
+      '/api/v1/user-state/threads/channels/ch-1/msg-root/seen',
+      expect.anything(),
+    );
+    expect(screen.getByTestId('thread-card-unread')).toBeInTheDocument();
+  });
+
+  // The end of a card is only watched once its replies are in: watched while
+  // the card was a short skeleton, it would still read as on screen in the
+  // render where the replies push it below the window.
+  it('starts watching the end of an unread card only once its replies are in', async () => {
+    const summary = makeSummary({ latestActivityAt: '2099-01-01T00:00:00.000Z' });
+    let resolveThread!: (v: unknown) => void;
+    apiFetchMock.mockImplementation((url: string) => {
+      if (url.includes('/users/batch')) return Promise.resolve([]);
+      if (url.includes('/thread')) return new Promise((r) => { resolveThread = r; });
+      return Promise.resolve({});
+    });
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter>
+          <ThreadCard
+            summary={summary}
+            title="~general"
+            deepLink="/channel/general?thread=msg-root#msg-msg-root"
+            currentUserId="u-me"
+            unread
+          />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    act(() => FakeObserver.instances[0].fire(true));
+    await waitFor(() => expect(resolveThread).toBeTypeOf('function'));
+    expect(screen.queryByTestId('thread-card-end')).toBeNull();
+    await act(async () => resolveThread([makeMessage('msg-root', 'root')]));
+    await screen.findByTestId('thread-card-msg');
+    // Mounted, but not yet seen on screen.
+    expect(localStorage.getItem('ex.threads.seen.v1')).toBeNull();
+    act(() => FakeObserver.end().fire(true));
+    const seen = JSON.parse(localStorage.getItem('ex.threads.seen.v1') ?? '{}');
+    expect(seen['msg-root']).toBe(summary.latestActivityAt);
   });
 
   it('does not mark a read thread again when the card enters the viewport', async () => {

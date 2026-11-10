@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type FocusEvent, type PointerEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { SmilePlus, MoreHorizontal, AlarmClock, Eye, Pin, Zap, type LucideIcon } from 'lucide-react';
+import { SmilePlus, MoreHorizontal, AlarmClock, Eye, Pin, Zap, type LucideIcon, Users } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { MessageInput, type MessageInputValue } from '@/components/chat/MessageInput';
 import type { DraftAttachment } from '@/components/chat/AttachmentChip';
@@ -21,6 +21,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { LazyReminderDialog as ReminderDialog } from '@/components/chat/LazyReminderDialog';
 import { WatcherDialog } from '@/components/chat/WatcherDialog';
+import { ReminderMark } from '@/components/chat/ReminderMark';
 import { NotSentMark } from '@/components/chat/MessageSendState';
 import { useMessageRowData, useProvidedMessageRowData, type MessageRowData } from '@/hooks/useMessageRowData';
 import { EmojiPicker } from '@/components/EmojiPicker';
@@ -63,7 +64,7 @@ import { useMobileBackClose } from '@/hooks/useMobileBackClose';
 import { useTransientOverlayCleanup } from '@/hooks/useTransientOverlayCleanup';
 import { useIsOnline } from '@/stores/presence';
 import { useMessageActions, type MessageAction } from '@/components/chat/useMessageActions';
-import type { Message, UserStatus } from '@/types';
+import type { Message, Reminder, UserStatus } from '@/types';
 
 // Module-level Set so MessageList/ThreadPanel don't need to thread a
 // context through every callsite. Listeners are MessageItems with an
@@ -256,6 +257,8 @@ interface MessageItemProps {
   // This root's thread has replies the viewer hasn't read: its reply bar
   // says so.
   threadHasNew?: boolean;
+  // Your pending reminder on this message, shown as a ⏰ (ReminderMark).
+  reminder?: Reminder;
 }
 
 function formatTime(dateStr: string): string {
@@ -382,6 +385,7 @@ function MessageItemImpl({
   onContentHeightChange,
   quickReactions,
   threadHasNew,
+  reminder,
 }: MessageItemProps & { rowData: MessageRowData }) {
   const isWebhook = !!message.webhookUsername;
   // Per-author presence subscription: only rows whose author actually
@@ -396,9 +400,6 @@ function MessageItemImpl({
   // integration's own avatar (override URL or initials of its username),
   // never the creator's profile image.
   const displayAuthorAvatarURL = isWebhook ? message.webhookAvatarURL : authorAvatarURL;
-  // For webhook posts the profile dropdown is the minimal integration card
-  // attributed to the creator (authorName resolves to the creator).
-  const integrationOwnerName = isWebhook ? authorName : undefined;
   const isMobile = useIsMobile();
   // A touch SCREEN keeps the long-press gestures armed at every width, even
   // when a trackpad is attached — an iPad user reaches for the screen anyway.
@@ -500,7 +501,7 @@ function MessageItemImpl({
 
   // Everything that can be done to the message, for the desktop menu and the
   // mobile sheet alike.
-  const { actions, reminderPresets, deleteDialog, reminderDialog, watcherDialog } = useMessageActions({
+  const { actions, reminderPresets, reminderAllPresets, deleteDialog, reminderDialog, watcherDialog } = useMessageActions({
     message,
     channelId,
     channelSlug,
@@ -798,7 +799,7 @@ function MessageItemImpl({
         </motion.div>
         {/* Everything else as a short list. */}
         <motion.div className="flex flex-col divide-y divide-border/60 rounded-2xl bg-muted" {...sheetSection(2)}>
-          {[actions.activity, actions.pin, actions.markUnread, actions.watch, actions.edit, actions.delete].map(
+          {[actions.activity, actions.remindAll, actions.pin, actions.markUnread, actions.watch, actions.edit, actions.delete].map(
             (action) =>
               action && (
                 <button
@@ -860,7 +861,8 @@ function MessageItemImpl({
           online={authorOnline}
           currentUserId={currentUserId}
           showInlineStatus={false}
-          integrationOwnerName={integrationOwnerName}
+          integration={isWebhook}
+          integrationOwnerID={message.webhookOwnerID}
           // The avatar's own width, matching the grouped rows' time column
           // (w-9) so the text lines up on every row; its top is level with
           // the name line's.
@@ -922,7 +924,8 @@ function MessageItemImpl({
             userStatus={authorUserStatus}
             online={authorOnline}
             currentUserId={currentUserId}
-            integrationOwnerName={integrationOwnerName}
+            integration={isWebhook}
+            integrationOwnerID={message.webhookOwnerID}
             // min-w-0 lets the trigger shrink inside the header row so the
             // name truncates; the default inline-flex trigger has
             // min-width:auto and would push timestamp/badges off-screen on a
@@ -1012,6 +1015,7 @@ function MessageItemImpl({
               Pinned
             </span>
           )}
+          {reminder && <ReminderMark reminder={reminder} />}
           {myWatchers.length > 0 && (
             <button
               type="button"
@@ -1090,10 +1094,19 @@ function MessageItemImpl({
                           // show "(edited)"), so the marker rides the end of the text's
                           // last line instead, Slack-style.
                           trailing={
-                            !firstInGroup && message.editedAt ? (
-                              <span data-testid="grouped-edited-marker" className="ml-1 text-xs text-muted-foreground">
-                                (edited)
-                              </span>
+                            !firstInGroup && (message.editedAt || reminder) ? (
+                              <>
+                                {message.editedAt && (
+                                  <span data-testid="grouped-edited-marker" className="ml-1 text-xs text-muted-foreground">
+                                    (edited)
+                                  </span>
+                                )}
+                                {reminder && (
+                                  <span className="ml-1 inline-flex align-middle">
+                                    <ReminderMark reminder={reminder} />
+                                  </span>
+                                )}
+                              </>
                             ) : undefined
                           }
                         />
@@ -1333,6 +1346,21 @@ function MessageItemImpl({
                   </DropdownMenuItem>
                 </DropdownMenuSubContent>
               </DropdownMenuSub>
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger data-testid="remind-all-trigger">
+                  <Users className="mr-2 h-4 w-4" /> Remind all
+                </DropdownMenuSubTrigger>
+                <DropdownMenuSubContent>
+                  {reminderAllPresets.map((preset) => (
+                    <DropdownMenuItem key={preset.key} onClick={preset.run} data-testid={`remind-all-${preset.key}`}>
+                      {preset.label}
+                    </DropdownMenuItem>
+                  ))}
+                  <DropdownMenuItem onClick={actions.remindAll.run} data-testid="remind-all-custom">
+                    Custom…
+                  </DropdownMenuItem>
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
               {[actions.watch, actions.edit, actions.delete].map(
                 (action) => action && <MenuAction key={action.label} action={action} />,
               )}
@@ -1362,6 +1390,8 @@ function MessageItemImpl({
           onOpenChange={reminderDialog.setOpen}
           initialValue={reminderDialog.seed}
           onConfirm={reminderDialog.schedule}
+          people={reminderDialog.people}
+          note=""
         />
       )}
       {watcherDialog.open && (

@@ -1,8 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
-import { QueryClient, type InfiniteData } from '@tanstack/react-query';
-import { mergeSeenMaps, patchListedThread, patchListedThreadFromRoot, type ThreadPage, type ThreadSummary } from './useThreads';
+import { renderHook, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider, type InfiniteData } from '@tanstack/react-query';
+import { createElement, type ReactNode } from 'react';
+import { patchListedThread, patchListedThreadFromRoot, threadSeenAt, type ThreadPage, type ThreadSummary } from './useThreads';
 import { queryKeys } from '@/lib/query-keys';
-import type { Message } from '@/types';
+import type { Message, ThreadReadState } from '@/types';
 
 const summary = (overrides: Partial<ThreadSummary> = {}): ThreadSummary => ({
   parentID: 'ch-1',
@@ -57,39 +59,76 @@ describe('listed threads are patched in place', () => {
   });
 });
 
-describe('mergeSeenMaps', () => {
-  it('lets a newer SERVER watermark beat a stale local entry (GAP-2 regression)', () => {
-    // Read on desktop at T1, reply at T2, read on MOBILE at T3. The old
-    // {...server, ...local} spread kept the stale local T1, so the thread
-    // stayed unread on desktop forever. The merge must keep the newer T3.
-    const merged = mergeSeenMaps(
-      { 't-1': '2026-07-14T12:00:03Z' }, // server: mobile read at T3
-      { 't-1': '2026-07-14T12:00:01Z' }, // local: desktop read at T1
-    );
-    expect(merged['t-1']).toBe('2026-07-14T12:00:03Z');
+describe('threadSeenAt', () => {
+  it('lets a newer SERVER seen time beat a stale local one (GAP-2 regression)', () => {
+    // Read on desktop at T1, reply at T2, read on MOBILE at T3. Preferring
+    // the stale local T1 kept the thread unread on desktop forever. The merge
+    // must keep the newer T3.
+    expect(threadSeenAt({ seenAt: '2026-07-14T12:00:03Z' }, '2026-07-14T12:00:01Z')).toBe('2026-07-14T12:00:03Z');
   });
 
-  it('keeps a newer LOCAL entry (optimistic read not yet persisted)', () => {
-    const merged = mergeSeenMaps(
-      { 't-1': '2026-07-14T12:00:01Z' },
-      { 't-1': '2026-07-14T12:00:05Z' },
-    );
-    expect(merged['t-1']).toBe('2026-07-14T12:00:05Z');
+  it('keeps a newer LOCAL seen time (optimistic read not yet persisted)', () => {
+    expect(threadSeenAt({ seenAt: '2026-07-14T12:00:01Z' }, '2026-07-14T12:00:05Z')).toBe('2026-07-14T12:00:05Z');
   });
 
-  it('unions keys present on only one side and tolerates an absent server map', () => {
-    expect(mergeSeenMaps({ a: '2026-01-01T00:00:00Z' }, { b: '2026-01-02T00:00:00Z' })).toEqual({
-      a: '2026-01-01T00:00:00Z',
-      b: '2026-01-02T00:00:00Z',
-    });
-    expect(mergeSeenMaps(undefined, { b: '2026-01-02T00:00:00Z' })).toEqual({ b: '2026-01-02T00:00:00Z' });
+  it('takes whichever side has a seen time, and nothing when neither does', () => {
+    expect(threadSeenAt({ seenAt: '2026-01-01T00:00:00Z' }, undefined)).toBe('2026-01-01T00:00:00Z');
+    expect(threadSeenAt(undefined, '2026-01-02T00:00:00Z')).toBe('2026-01-02T00:00:00Z');
+    expect(threadSeenAt(undefined, undefined)).toBeUndefined();
   });
 
   it('never lets a corrupt timestamp outrank a real one', () => {
-    expect(mergeSeenMaps({ a: '2026-01-01T00:00:00Z' }, { a: 'not-a-date' })['a']).toBe('2026-01-01T00:00:00Z');
-    expect(mergeSeenMaps({ a: 'not-a-date' }, { a: '2026-01-01T00:00:00Z' })['a']).toBe('2026-01-01T00:00:00Z');
+    expect(threadSeenAt({ seenAt: '2026-01-01T00:00:00Z' }, 'not-a-date')).toBe('2026-01-01T00:00:00Z');
+    expect(threadSeenAt({ seenAt: 'not-a-date' }, '2026-01-01T00:00:00Z')).toBe('2026-01-01T00:00:00Z');
   });
 
+  it('a mark beats a local seen time from before it; seeing the thread after the mark wins again', () => {
+    const server: ThreadReadState = { seenAt: '2026-01-01T00:00:00Z', markedUnreadAt: '2026-01-05T00:00:00Z' };
+    expect(threadSeenAt(server, '2026-01-04T00:00:00Z')).toBe('2026-01-01T00:00:00Z');
+    expect(threadSeenAt(server, '2026-01-06T00:00:00Z')).toBe('2026-01-06T00:00:00Z');
+  });
+});
+
+describe('useThreadSeenAtOpen', () => {
+  function wrapper(qc: QueryClient) {
+    return ({ children }: { children: ReactNode }) => createElement(QueryClientProvider, { client: qc }, children);
+  }
+
+  // How far the user had read when the thread opened: the server's answer
+  // merged with this device's seen time from before the open marked it seen.
+  it("asks the server for this one thread and merges its answer with this device's seen time at open", async () => {
+    const { markThreadSeen, resetSeenCache, useThreadSeenAtOpen } = await import('./useThreads');
+    const apiModule = await import('@/lib/api');
+    localStorage.clear();
+    resetSeenCache();
+    markThreadSeen('root/1', '2026-01-01T00:00:00Z');
+    let answer: (v: ThreadReadState) => void = () => {};
+    const spy = vi.spyOn(apiModule, 'apiFetch').mockReturnValueOnce(new Promise((resolve) => { answer = resolve; }));
+    const qc = new QueryClient();
+    const { result } = renderHook(() => useThreadSeenAtOpen('root/1'), { wrapper: wrapper(qc) });
+    expect(result.current.known).toBe(false);
+    expect(spy).toHaveBeenCalledWith('/api/v1/user-state/threads/root%2F1');
+    // The open marks the thread seen on this device: the time at open stays.
+    markThreadSeen('root/1', '2026-01-09T00:00:00Z');
+    answer({ seenAt: '2026-01-03T00:00:00Z' });
+    await waitFor(() => expect(result.current).toEqual({ known: true, seenAt: '2026-01-03T00:00:00Z' }));
+    spy.mockRestore();
+  });
+
+  it('reads an empty answer as never opened, and a failed one leaves this device alone', async () => {
+    const { markThreadSeen, resetSeenCache, useThreadSeenAtOpen } = await import('./useThreads');
+    const apiModule = await import('@/lib/api');
+    localStorage.clear();
+    resetSeenCache();
+    const spy = vi.spyOn(apiModule, 'apiFetch').mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('offline'));
+    const qc = new QueryClient();
+    const never = renderHook(() => useThreadSeenAtOpen('root-2'), { wrapper: wrapper(qc) });
+    await waitFor(() => expect(never.result.current).toEqual({ known: true, seenAt: undefined }));
+    markThreadSeen('root-3', '2026-01-02T00:00:00Z');
+    const failed = renderHook(() => useThreadSeenAtOpen('root-3'), { wrapper: wrapper(qc) });
+    await waitFor(() => expect(failed.result.current).toEqual({ known: true, seenAt: '2026-01-02T00:00:00Z' }));
+    spy.mockRestore();
+  });
 });
 
 describe('markThreadSeen user-state echo window', () => {
@@ -108,35 +147,13 @@ describe('markThreadSeen user-state echo window', () => {
   });
 });
 
-describe('mark as unread: seen-map rules', () => {
-  it('a mark beats a local seen time from before it; seeing the thread after the mark wins again', () => {
-    const server = { t: '2026-01-01T00:00:00Z' }; // rewound by the mark
-    const marked = { t: '2026-01-05T00:00:00Z' };
-    expect(mergeSeenMaps(server, { t: '2026-01-04T00:00:00Z' }, marked)).toEqual(server);
-    expect(mergeSeenMaps(server, { t: '2026-01-06T00:00:00Z' }, marked)).toEqual({ t: '2026-01-06T00:00:00Z' });
-  });
-
-  it('threadSeenAt merges the server and this device the same way', async () => {
-    const { threadSeenAt, markThreadSeen, resetSeenCache } = await import('./useThreads');
-    localStorage.clear();
-    resetSeenCache();
-    markThreadSeen('t-9', '2026-01-03T00:00:00Z');
-    const state = { threadNotifications: [], threadSeen: { 't-9': '2026-01-01T00:00:00Z' }, hiddenConversations: [], hiddenSkills: [] };
-    expect(threadSeenAt(state, 't-9')).toBe('2026-01-03T00:00:00Z');
-    expect(threadSeenAt({ ...state, threadMarkedUnread: { 't-9': '2026-01-04T00:00:00Z' } }, 't-9')).toBe('2026-01-01T00:00:00Z');
-    expect(threadSeenAt(undefined, 'nope')).toBeUndefined();
-  });
-
+describe('read position', () => {
   it('noteThreadReadPosition anchors the line at the seen time, and only when there is one', async () => {
-    const { noteThreadReadPosition, resetSeenCache } = await import('./useThreads');
+    const { noteThreadReadPosition } = await import('./useThreads');
     const { endReadSession, getUnreadAnchor, threadReadKey } = await import('@/lib/read-position');
-    localStorage.clear();
-    resetSeenCache();
-    const qc = new QueryClient();
-    noteThreadReadPosition(qc, 't-new');
+    noteThreadReadPosition('t-new', undefined);
     expect(getUnreadAnchor(threadReadKey('t-new'))).toBeUndefined();
-    qc.setQueryData(queryKeys.userState(), { threadNotifications: [], threadSeen: { 't-old': '2026-01-01T00:00:00Z' }, hiddenConversations: [], hiddenSkills: [] });
-    noteThreadReadPosition(qc, 't-old');
+    noteThreadReadPosition('t-old', '2026-01-01T00:00:00Z');
     expect(getUnreadAnchor(threadReadKey('t-old'))).toEqual({ kind: 'after', at: '2026-01-01T00:00:00Z' });
     endReadSession(threadReadKey('t-old'));
   });
@@ -144,17 +161,17 @@ describe('mark as unread: seen-map rules', () => {
   // A reply arriving unseen in the open thread moves the line to it: the
   // first reply after how far the user has seen, not where the line was when
   // the thread opened.
-  it('noteThreadReadPosition can move a line already drawn', async () => {
-    const { noteThreadReadPosition, resetSeenCache } = await import('./useThreads');
-    const { endReadSession, getUnreadAnchor, setUnreadAnchor, threadReadKey } = await import('@/lib/read-position');
+  it('noteUnseenThreadReply moves a line already drawn to how far the thread is seen now', async () => {
+    const { noteThreadReadPosition, noteUnseenThreadReply, resetSeenCache } = await import('./useThreads');
+    const { endReadSession, getUnreadAnchor, threadReadKey } = await import('@/lib/read-position');
     localStorage.clear();
     resetSeenCache();
     const qc = new QueryClient();
-    qc.setQueryData(queryKeys.userState(), { threadNotifications: [], threadSeen: { 't-1': '2026-01-02T00:00:00Z' }, hiddenConversations: [], hiddenSkills: [] });
-    setUnreadAnchor(threadReadKey('t-1'), { kind: 'after', at: '2026-01-01T00:00:00Z' });
-    noteThreadReadPosition(qc, 't-1');
+    noteThreadReadPosition('t-1', '2026-01-01T00:00:00Z');
+    noteThreadReadPosition('t-1', '2026-01-02T00:00:00Z');
     expect(getUnreadAnchor(threadReadKey('t-1'))).toEqual({ kind: 'after', at: '2026-01-01T00:00:00Z' });
-    noteThreadReadPosition(qc, 't-1', { replace: true });
+    qc.setQueryData<ThreadReadState>(queryKeys.threadRead('t-1'), { seenAt: '2026-01-02T00:00:00Z' });
+    noteUnseenThreadReply(qc, 't-1');
     expect(getUnreadAnchor(threadReadKey('t-1'))).toEqual({ kind: 'after', at: '2026-01-02T00:00:00Z' });
     endReadSession(threadReadKey('t-1'));
   });
@@ -165,24 +182,25 @@ describe('mark as unread: seen-map rules', () => {
     resetSeenCache();
     const qc = new QueryClient();
     expect(threadHasUnseen(qc, 't-1', '2026-01-02T00:00:00Z')).toBe(true);
-    qc.setQueryData(queryKeys.userState(), { threadNotifications: [], threadSeen: { 't-1': '2026-01-02T00:00:00Z' }, hiddenConversations: [], hiddenSkills: [] });
+    qc.setQueryData<ThreadReadState>(queryKeys.threadRead('t-1'), { seenAt: '2026-01-02T00:00:00Z' });
     expect(threadHasUnseen(qc, 't-1', '2026-01-02T00:00:00Z')).toBe(false);
     expect(threadHasUnseen(qc, 't-1', '2026-01-03T00:00:00Z')).toBe(true);
     markThreadSeen('t-1', '2026-01-03T00:00:00Z');
     expect(threadHasUnseen(qc, 't-1', '2026-01-03T00:00:00Z')).toBe(false);
   });
 
-  it('seeing a thread drops its cached unread marker and mark, which the server drops too', async () => {
+  it("seeing a thread drops its cached unread marker and mark, which the server drops too", async () => {
     const { markThreadSeen } = await import('./useThreads');
     const { queryClient } = await import('@/lib/query-client');
     const apiModule = await import('@/lib/api');
     const spy = vi.spyOn(apiModule, 'apiFetch').mockResolvedValue(undefined);
-    const base = { threadSeen: {}, hiddenConversations: [], hiddenSkills: [] };
-    queryClient.setQueryData(queryKeys.userState(), { ...base, threadNotifications: ['t-1', 't-5'], threadMarkedUnread: { 't-1': 'x', 't-2': 'y' } });
+    const base = { hiddenConversations: [], hiddenSkills: [] };
+    queryClient.setQueryData(queryKeys.userState(), { ...base, threadNotifications: ['t-1', 't-5'] });
+    queryClient.setQueryData<ThreadReadState>(queryKeys.threadRead('t-1'), { seenAt: '2026-01-01T00:00:00Z', markedUnreadAt: '2026-01-02T00:00:00Z' });
     markThreadSeen('t-1', '2026-01-09T00:00:00Z', { parentID: 'ch-1', parentType: 'channel' });
-    let state = queryClient.getQueryData<{ threadMarkedUnread: Record<string, string>; threadNotifications: string[] }>(queryKeys.userState());
-    expect(state?.threadMarkedUnread).toEqual({ 't-2': 'y' });
+    let state = queryClient.getQueryData<{ threadNotifications: string[] }>(queryKeys.userState());
     expect(state?.threadNotifications).toEqual(['t-5']);
+    expect(queryClient.getQueryData(queryKeys.threadRead('t-1'))).toEqual({ seenAt: '2026-01-01T00:00:00Z' });
     // Without a PUT (the user's own reply, which the server reads for them)
     // the marker goes all the same.
     markThreadSeen('t-5', '2026-01-09T00:00:00Z');
@@ -190,11 +208,17 @@ describe('mark as unread: seen-map rules', () => {
     expect(state?.threadNotifications).toEqual([]);
     // Nothing marked for this thread: the cached state is left as is.
     const before = queryClient.getQueryData(queryKeys.userState());
-    markThreadSeen('t-3', '2026-01-09T00:00:00Z', { parentID: 'ch-1', parentType: 'channel' });
+    const readBefore = queryClient.getQueryData(queryKeys.threadRead('t-1'));
+    markThreadSeen('t-1', '2026-01-09T00:00:00Z', { parentID: 'ch-1', parentType: 'channel' });
     expect(queryClient.getQueryData(queryKeys.userState())).toBe(before);
+    expect(queryClient.getQueryData(queryKeys.threadRead('t-1'))).toBe(readBefore);
+    // Nothing cached at all: nothing is made up.
     queryClient.removeQueries({ queryKey: queryKeys.userState() });
     markThreadSeen('t-4', '2026-01-09T00:00:00Z', { parentID: 'ch-1', parentType: 'channel' });
+    expect(queryClient.getQueryData(queryKeys.userState())).toBeUndefined();
+    expect(queryClient.getQueryData(queryKeys.threadRead('t-4'))).toBeUndefined();
     expect(spy).toHaveBeenCalledTimes(3);
+    queryClient.removeQueries({ queryKey: queryKeys.threadReadAll() });
     spy.mockRestore();
   });
 });

@@ -70,11 +70,6 @@ func newBotToken() (token, hash string) {
 	return token, hashBotToken(token)
 }
 
-func hashBotToken(token string) string {
-	sum := sha256.Sum256([]byte(token))
-	return hex.EncodeToString(sum[:])
-}
-
 // botTokenMatches reports whether token is wh's bot token — the current
 // one, or the previous during its overlap. Compared in constant time.
 func botTokenMatches(wh *model.IncomingWebhook, token string, now time.Time) bool {

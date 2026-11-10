@@ -4,6 +4,7 @@ import { useUnread } from '@/context/UnreadContext';
 import { useUserChannels } from '@/hooks/useChannels';
 import { useUserConversations } from '@/hooks/useConversations';
 import { useCategories } from '@/hooks/useSidebar';
+import { useDrafts } from '@/hooks/useDrafts';
 import { useUserState } from '@/hooks/useUserState';
 import { slugify } from '@/lib/format';
 import {
@@ -36,14 +37,31 @@ export function useSidebarSections({
   const { data: conversations } = conversationsQuery;
   const { data: userState } = useUserState();
   const { data: categories = NO_CATEGORIES } = useCategories();
+  const { data: drafts } = useDrafts();
   const { pathname } = useLocation();
+  // The route also opens a chat at its address with a trailing slash.
+  const openConversationID = /^\/conversation\/([^/]+)/.exec(pathname)?.[1];
 
+  // A conversation with no message yet is only made, not started: opening a
+  // new message to someone, or writing to people picked for one, makes it
+  // without telling anyone, and it joins the others' lists with its first
+  // message. In yours it shows while it is open or holds your draft, so one
+  // left unwritten leaves no empty row behind.
   const visibleConversations = useMemo(
     () => {
       const hidden = new Set([...(userState?.hiddenConversations ?? []), ...hiddenConversations]);
-      return conversations?.filter((c) => !hidden.has(c.conversationID)) ?? [];
+      const drafted = new Set(
+        drafts?.filter((d) => d.parentType === 'conversation' && !d.parentMessageID).map((d) => d.parentID),
+      );
+      return (
+        conversations?.filter(
+          (c) =>
+            !hidden.has(c.conversationID) &&
+            (c.activated !== false || c.conversationID === openConversationID || drafted.has(c.conversationID)),
+        ) ?? []
+      );
     },
-    [conversations, hiddenConversations, userState?.hiddenConversations],
+    [conversations, drafts, hiddenConversations, userState?.hiddenConversations, openConversationID],
   );
 
   // Slugs once per channel list, not per channel on every navigation.
@@ -59,9 +77,7 @@ export function useSidebarSections({
   // The chat being viewed. With the unread view on it stays visible even
   // though opening it reads it, and — if it was unread when opened — stays in
   // the Unread section until the user leaves, so rows don't jump mid-read.
-  // The route also opens a chat at its address with a trailing slash.
-  const activeItemID =
-    channelsByPath.get(pathname.replace(/\/+$/, ''))?.channelID ?? /^\/conversation\/([^/]+)/.exec(pathname)?.[1];
+  const activeItemID = channelsByPath.get(pathname.replace(/\/+$/, ''))?.channelID ?? openConversationID;
   const activeItemUnread = useMemo(() => {
     const ch = channels?.find((c) => c.channelID === activeItemID);
     if (ch) return isSidebarItemUnread({ kind: 'channel', channel: ch });

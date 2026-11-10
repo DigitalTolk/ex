@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData, type QueryClient } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api';
 import { slugify } from '@/lib/format';
@@ -7,7 +8,7 @@ import { wsLiveQueryOptions } from '@/lib/query-client';
 import { markLocalUserStateWrite } from '@/hooks/useUserState';
 import { queryClient } from '@/lib/query-client';
 import { setUnreadAnchor, threadReadKey } from '@/lib/read-position';
-import type { Message, UserState } from '@/types';
+import type { Message, ThreadReadState, UserState } from '@/types';
 
 export interface ThreadSummary {
   parentID: string;
@@ -191,12 +192,14 @@ export function markThreadSeen(
   // both with the PUT below (or with the reply the user just posted), so drop
   // them from the cached state too — the unread marker is what the Threads
   // dot and the bold Threads cards show.
-  queryClient.setQueryData<UserState>(queryKeys.userState(), (prev) => {
-    if (!prev || (!prev.threadMarkedUnread?.[threadRootID] && !prev.threadNotifications?.includes(threadRootID))) return prev;
-    const marks = { ...prev.threadMarkedUnread };
-    delete marks[threadRootID];
-    return { ...prev, threadMarkedUnread: marks, threadNotifications: prev.threadNotifications.filter((id) => id !== threadRootID) };
-  });
+  queryClient.setQueryData<UserState>(queryKeys.userState(), (prev) =>
+    prev?.threadNotifications.includes(threadRootID)
+      ? { ...prev, threadNotifications: prev.threadNotifications.filter((id) => id !== threadRootID) }
+      : prev,
+  );
+  queryClient.setQueryData<ThreadReadState>(queryKeys.threadRead(threadRootID), (prev) =>
+    prev?.markedUnreadAt ? { seenAt: prev.seenAt } : prev,
+  );
   if (target) {
     // The PUT's userchannel.updated {userState:true} echo must not refetch
     // /user-state in this tab (see useUserState's echo window).
@@ -213,7 +216,29 @@ export function markThreadSeen(
   }
 }
 
-// seenTime parses a seen-map timestamp, treating unparseable values as 0 so a
+// useThreadSeenAtOpen is how far the user had read a thread when it opened:
+// the server's read time, asked now — never every thread's at once (one row
+// per thread ever opened) — merged with this device's seen time from before
+// anything marked the thread seen. `known` once the server answered, or
+// failed to (this device's time then stands alone); until then nothing may
+// mark the thread seen, or the answer would already hold the new time.
+// Nothing keeps the answer between visits, so a thread read on another
+// device meanwhile opens without a stale line; while open, the user-state
+// change event refetches it. No retry: the open waits on it.
+export function useThreadSeenAtOpen(threadRootID: string): { known: boolean; seenAt: string | undefined } {
+  const readState = useQuery({
+    queryKey: queryKeys.threadRead(threadRootID),
+    queryFn: async () =>
+      (await apiFetch<ThreadReadState>(`/api/v1/user-state/threads/${encodeURIComponent(threadRootID)}`)) ?? {},
+    ...wsLiveQueryOptions,
+    gcTime: 0,
+    retry: false,
+  });
+  const localAtOpen = useMemo(() => loadSeen()[threadRootID], [threadRootID]);
+  return { known: !readState.isPending, seenAt: threadSeenAt(readState.data, localAtOpen) };
+}
+
+// seenTime parses a seen timestamp, treating unparseable values as 0 so a
 // corrupt entry never outranks a real one.
 function seenTime(at: string | undefined): number {
   if (!at) return 0;
@@ -221,53 +246,44 @@ function seenTime(at: string | undefined): number {
   return Number.isFinite(t) ? t : 0;
 }
 
-// mergeSeenMaps folds the server threadSeen map with the per-device local
-// seen map, keeping the NEWER timestamp per thread. Every consumer must use
-// this instead of a spread: `{...server, ...local}` let a stale local entry
-// shadow a newer server watermark, so a thread read on another device stayed
-// unread here forever (SPEC GAP-2 / I-4).
-//
-// The one exception is a thread marked unread (`markedUnread`: root → when):
-// the server's entry was rewound on purpose, so a local seen time from
-// before the mark must not outvote it — only seeing the thread again after
-// the mark does.
-export function mergeSeenMaps(
-  server: Record<string, string> | undefined,
-  local: Record<string, string>,
-  markedUnread: Record<string, string> = {},
-): Record<string, string> {
-  const merged: Record<string, string> = { ...(server ?? {}) };
-  for (const [threadRootID, at] of Object.entries(local)) {
-    const markedAt = markedUnread[threadRootID];
-    if (markedAt && seenTime(at) <= seenTime(markedAt)) continue;
-    if (seenTime(at) >= seenTime(merged[threadRootID])) {
-      merged[threadRootID] = at;
-    }
-  }
-  return merged;
+// threadSeenAt is how far the user has read a thread: the newer of the
+// server's seen time and this device's (`local`). Keeping the newer matters —
+// a stale local time must not shadow a newer read on another device (SPEC
+// GAP-2 / I-4). The one exception is a thread marked unread: the server's
+// time was rewound on purpose, so a local time from before the mark must not
+// outvote it — only seeing the thread again after the mark does.
+export function threadSeenAt(server: ThreadReadState = {}, local?: string): string | undefined {
+  const { seenAt, markedUnreadAt } = server;
+  if (!local) return seenAt;
+  if (markedUnreadAt && seenTime(local) <= seenTime(markedUnreadAt)) return seenAt;
+  return seenTime(local) >= seenTime(seenAt) ? local : seenAt;
 }
 
-// threadSeenAt is how far the user has read a thread — the server's and this
-// device's seen times merged exactly as every unread consumer merges them.
-export function threadSeenAt(state: UserState | undefined, threadRootID: string): string | undefined {
-  return mergeSeenMaps(state?.threadSeen, loadSeen(), state?.threadMarkedUnread)[threadRootID];
+// currentThreadSeenAt: how far the user has read a thread right now — the
+// open thread's read state (useThreadSeenAtOpen) and this device's seen time.
+function currentThreadSeenAt(qc: QueryClient, threadRootID: string): string | undefined {
+  return threadSeenAt(qc.getQueryData<ThreadReadState>(queryKeys.threadRead(threadRootID)), loadSeen()[threadRootID]);
 }
 
 // noteThreadReadPosition records where a thread's "New messages" line goes —
-// the first reply after how far the user had read — just before something
-// marks the thread seen on open. The first note of a visit wins, so every
-// open path can call it; with no reply after that point there's no line.
-// `replace` moves a line already drawn: a reply that arrived in the open
-// thread unseen.
-export function noteThreadReadPosition(qc: QueryClient, threadRootID: string, opts: { replace?: boolean } = {}): void {
-  const seenAt = threadSeenAt(qc.getQueryData<UserState>(queryKeys.userState()), threadRootID);
+// the first reply after `seenAt`, how far the user had read — just before
+// something marks the thread seen on open. The first note of a visit wins;
+// with no reply after that point there's no line. `replace` moves a line
+// already drawn: a reply that arrived in the open thread unseen.
+export function noteThreadReadPosition(threadRootID: string, seenAt: string | undefined, opts: { replace?: boolean } = {}): void {
   if (seenAt) setUnreadAnchor(threadReadKey(threadRootID), { kind: 'after', at: seenAt }, opts);
+}
+
+// noteUnseenThreadReply moves an open thread's line above a reply that
+// arrived while the user wasn't following along.
+export function noteUnseenThreadReply(qc: QueryClient, threadRootID: string): void {
+  noteThreadReadPosition(threadRootID, currentThreadSeenAt(qc, threadRootID), { replace: true });
 }
 
 // threadHasUnseen: a reply at `latestAt` is newer than how far the user has
 // seen the thread, here or on another device.
 export function threadHasUnseen(qc: QueryClient, threadRootID: string, latestAt: string): boolean {
-  return seenTime(threadSeenAt(qc.getQueryData<UserState>(queryKeys.userState()), threadRootID)) < seenTime(latestAt);
+  return seenTime(currentThreadSeenAt(qc, threadRootID)) < seenTime(latestAt);
 }
 
 export function getSeenMap(): Record<string, string> {

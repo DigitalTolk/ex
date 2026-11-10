@@ -40,6 +40,7 @@ export const EventType = {
   ReplayExhausted: wire.EventReplayExhausted,
   SessionRenewed: wire.EventSessionRenewed,
   WebhookChanged: wire.EventWebhookChanged,
+  BotChanged: wire.EventBotChanged,
   ProjectChanged: wire.EventProjectChanged,
   SettingsUpdated: wire.EventSettingsUpdated,
   RunnersChanged: wire.EventRunnersChanged,

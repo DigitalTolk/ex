@@ -68,7 +68,7 @@ import { useUserConversations } from '@/hooks/useConversations';
 import { shouldRefetchSidebarForRemoteUpdate, useCategories } from '@/hooks/useSidebar';
 import { shouldRefetchUserStateForRemoteUpdate, useUserState } from '@/hooks/useUserState';
 import { followConvertedConversation } from '@/hooks/useConvertConversation';
-import { markThreadSeen, noteThreadReadPosition, patchListedThread, patchListedThreadFromRoot } from '@/hooks/useThreads';
+import { markThreadSeen, noteUnseenThreadReply, patchListedThread, patchListedThreadFromRoot } from '@/hooks/useThreads';
 import { useIsMobile } from '@/hooks/useIsMobile';
 
 // How long the phone's chat waits for its first lists before offering Retry.
@@ -176,6 +176,7 @@ export default function ChatPage() {
     queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
     queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
     queryClient.invalidateQueries({ queryKey: queryKeys.userState() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.threadReadAll() });
     queryClient.invalidateQueries({ queryKey: queryKeys.drafts() });
     queryClient.invalidateQueries({ queryKey: queryKeys.scheduledMessages() });
     queryClient.invalidateQueries({ queryKey: queryKeys.channelMembers() });
@@ -316,7 +317,7 @@ export default function ChatPage() {
                 },
           );
         } else if (openThread) {
-          noteThreadReadPosition(queryClient, parentMessageID, { replace: true });
+          noteUnseenThreadReply(queryClient, parentMessageID);
         }
         // Append the reply straight into the open thread's cache so the
         // ThreadPanel / ThreadCard updates live. Only fall back to an
@@ -407,6 +408,10 @@ export default function ChatPage() {
     [EventType.WebhookChanged]: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.incomingWebhooks() });
     },
+    [EventType.BotChanged]: () => {
+      // An admin changed a bot or its tokens: the admin page's lists refetch.
+      queryClient.invalidateQueries({ queryKey: queryKeys.bots() });
+    },
     [EventType.ProjectChanged]: () => {
       // A project or its design references changed (any member, any device):
       // the list and every open project detail refetch.
@@ -486,9 +491,12 @@ export default function ChatPage() {
       if (evt.userState) {
         // Skip the echo of THIS tab's own user-state write (thread-seen
         // PUTs, the server-side author-seen a thread reply triggers) — the
-        // tab already has that state; other tabs never arm the window.
+        // tab already has that state; other tabs never arm the window. An
+        // open thread's read state may have moved too (read or marked unread
+        // elsewhere); only an open panel's refetches.
         if (shouldRefetchUserStateForRemoteUpdate()) {
           queryClient.invalidateQueries({ queryKey: queryKeys.userState() });
+          queryClient.invalidateQueries({ queryKey: queryKeys.threadReadAll() });
         }
         return;
       }

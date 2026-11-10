@@ -77,8 +77,12 @@ type Deps struct {
 	Webhook    *WebhookHandler
 	// Interaction serves app interactivity (setup, response URLs).
 	Interaction *InteractionHandler
-	Activity    *ActivityHandler
-	Command     *CommandHandler
+	// Bot accounts: the admin page's API, and the Mattermost-compatible API
+	// (/api/v4) bots call with their tokens.
+	Bot        *BotHandler
+	Mattermost *MattermostHandler
+	Activity   *ActivityHandler
+	Command    *CommandHandler
 	// Scheduled messages: compose now, deliver at a chosen time.
 	ScheduledMessage *ScheduledMessageHandler
 	// Agent orchestration (plan-v2): SPA surface, ex-runner API, and the

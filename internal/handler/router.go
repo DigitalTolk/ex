@@ -45,6 +45,8 @@ func NewRouter(d *Deps) http.Handler {
 	sidebarH := d.Sidebar
 	searchH := d.Search
 	webhookH := d.Webhook
+	botH := d.Bot
+	mattermostH := d.Mattermost
 	activityH := d.Activity
 	commandH := d.Command
 	jwtMgr := d.JWT
@@ -131,6 +133,7 @@ func NewRouter(d *Deps) http.Handler {
 
 	if userStateH != nil {
 		mux.Handle("GET /api/v1/user-state", middleware.WrapFunc(userStateH.Get, authMW))
+		mux.Handle("GET /api/v1/user-state/threads/{threadRootID}", middleware.WrapFunc(userStateH.ThreadRead, authMW))
 		mux.Handle("PUT /api/v1/user-state/threads/{parentType}/{parentID}/{threadRootID}/seen", middleware.WrapFunc(userStateH.MarkThreadSeen, authMW))
 		mux.Handle("PUT /api/v1/user-state/conversations/{id}/hidden", middleware.WrapFunc(userStateH.HideConversation, authMW))
 		mux.Handle("DELETE /api/v1/user-state/conversations/{id}/hidden", middleware.WrapFunc(userStateH.UnhideConversation, authMW))
@@ -226,6 +229,7 @@ func NewRouter(d *Deps) http.Handler {
 		mux.Handle("POST /api/v1/activity/items/remove", middleware.WrapFunc(activityH.RemoveItems, authMW, writeLimit))
 		mux.Handle("POST /api/v1/reminders", middleware.WrapFunc(activityH.CreateReminder, authMW, writeLimit))
 		mux.Handle("GET /api/v1/reminders", middleware.WrapFunc(activityH.ListReminders, authMW))
+		mux.Handle("PATCH /api/v1/reminders/{id}", middleware.WrapFunc(activityH.UpdateReminder, authMW, writeLimit))
 		mux.Handle("DELETE /api/v1/reminders/{id}", middleware.WrapFunc(activityH.CancelReminder, authMW))
 	}
 
@@ -357,6 +361,31 @@ func NewRouter(d *Deps) http.Handler {
 		mux.Handle("POST /api/v1/views/{id}/close", middleware.WrapFunc(ixH.CloseView, authMW, writeLimit))
 		mux.Handle("POST /api/v1/views/{id}/actions", middleware.WrapFunc(ixH.ViewAction, authMW, writeLimit))
 		mux.Handle("POST /api/v1/admin/webhooks/preview-view", middleware.WrapFunc(ixH.PreviewView, authMW, writeLimit))
+	}
+	if botH != nil {
+		// Admin-only (the service decides).
+		mux.Handle("GET /api/v1/admin/bots", middleware.WrapFunc(botH.List, authMW))
+		mux.Handle("POST /api/v1/admin/bots", middleware.WrapFunc(botH.Create, authMW, writeLimit))
+		mux.Handle("PATCH /api/v1/admin/bots/{id}", middleware.WrapFunc(botH.Update, authMW, writeLimit))
+		mux.Handle("DELETE /api/v1/admin/bots/{id}", middleware.WrapFunc(botH.Delete, authMW, writeLimit))
+		mux.Handle("POST /api/v1/admin/bots/{id}/enable", middleware.WrapFunc(botH.Enable, authMW, writeLimit))
+		mux.Handle("POST /api/v1/admin/bots/{id}/disable", middleware.WrapFunc(botH.Disable, authMW, writeLimit))
+		mux.Handle("GET /api/v1/admin/bots/{id}/tokens", middleware.WrapFunc(botH.ListTokens, authMW))
+		mux.Handle("POST /api/v1/admin/bots/{id}/tokens", middleware.WrapFunc(botH.CreateToken, authMW, writeLimit))
+		mux.Handle("DELETE /api/v1/admin/bots/{id}/tokens/{tokenID}", middleware.WrapFunc(botH.RevokeToken, authMW, writeLimit))
+	}
+	if mattermostH != nil {
+		// The Mattermost-compatible API, for bots and their tokens only. Every
+		// request costs a token lookup, so unauthenticated floods are capped
+		// per IP; writes spend the bot's write budget like a person's sends.
+		mmLimit := middleware.RateLimit(d.RateLimiter, middleware.PerMinute("mattermost-api", 600, 600))
+		mmAuth := mattermostH.Authenticate
+		mux.Handle("GET /api/v4/users/me", middleware.WrapFunc(mattermostH.Me, mmLimit, mmAuth))
+		mux.Handle("GET /api/v4/users/email/{email}", middleware.WrapFunc(mattermostH.UserByEmail, mmLimit, mmAuth))
+		mux.Handle("POST /api/v4/channels", middleware.WrapFunc(mattermostH.CreateChannel, mmLimit, mmAuth, writeLimit))
+		mux.Handle("POST /api/v4/channels/direct", middleware.WrapFunc(mattermostH.CreateDirectChannel, mmLimit, mmAuth, writeLimit))
+		mux.Handle("POST /api/v4/channels/{channel_id}/members", middleware.WrapFunc(mattermostH.AddChannelMember, mmLimit, mmAuth, writeLimit))
+		mux.Handle("POST /api/v4/posts", middleware.WrapFunc(mattermostH.CreatePost, mmLimit, mmAuth, writeLimit))
 	}
 
 	// ------------------------------------------------------------------ Agents

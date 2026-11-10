@@ -5,10 +5,10 @@ import { useAuth } from '@/context/AuthContext';
 import { isGuest } from '@/lib/roles';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 
-// Full-page manager for incoming webhooks: anyone but a guest manages their
+// Full-page manager for webhooks: anyone but a guest manages their
 // own, an admin everyone's (the server decides which are listed).
 export default function IncomingWebhooksPage() {
-  useDocumentTitle('Incoming webhooks');
+  useDocumentTitle('Webhooks');
   const { user } = useAuth();
 
   if (isGuest(user?.systemRole)) {
@@ -20,7 +20,7 @@ export default function IncomingWebhooksPage() {
   }
 
   return (
-    <PageContainer title="Incoming webhooks">
+    <PageContainer title="Webhooks">
       <div className="space-y-4">
         <IncomingWebhooksPanel />
         <MessagePreview />

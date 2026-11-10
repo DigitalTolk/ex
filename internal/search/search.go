@@ -396,9 +396,17 @@ func prefixMatch(q string, fields ...string) any {
 	}
 }
 
+// typoFuzziness is how many edits a query word may be from an indexed
+// one: none up to three letters, one up to six, two beyond. OpenSearch's
+// plain AUTO (AUTO:3,6) lets a three-letter word differ by one, and nearly
+// every three-letter acronym is one edit from several others ("dpa" from
+// "spa" and "dpo"), so short words must match exactly. src/lib/fuzzy.ts
+// draws the same line for in-memory lists.
+const typoFuzziness = "AUTO:4,7"
+
 // fieldMust builds the OpenSearch `must` clause for one or more text
 // fields. Plain queries use `match` (one field) or `multi_match` (many)
-// with fuzziness=AUTO; queries containing `*`/`?` route to
+// with typoFuzziness; queries containing `*`/`?` route to
 // `simple_query_string` so users can prefix-search ("Noice*"). All
 // paths assume `q` has already been normalized for elongation.
 func fieldMust(q string, fields ...string) any {
@@ -417,7 +425,7 @@ func fieldMust(q string, fields ...string) any {
 				fields[0]: map[string]any{
 					"query":     q,
 					"operator":  "and",
-					"fuzziness": "AUTO",
+					"fuzziness": typoFuzziness,
 				},
 			},
 		}
@@ -427,7 +435,7 @@ func fieldMust(q string, fields ...string) any {
 			"query":     q,
 			"fields":    fields,
 			"type":      "best_fields",
-			"fuzziness": "AUTO",
+			"fuzziness": typoFuzziness,
 		},
 	}
 }
@@ -435,9 +443,9 @@ func fieldMust(q string, fields ...string) any {
 // normalizeFuzzy collapses runs of 3+ identical characters in the
 // query to a single character, so emphasis-spelling like "Noiceeee"
 // matches "Noice". Legitimate doubles ("letter", "happy") stay
-// unchanged. Combined with `fuzziness: "AUTO"` on the match query,
-// this gives the searcher both elongation tolerance and 1–2 edit
-// typo tolerance.
+// unchanged. Combined with typoFuzziness on the match query, this
+// gives the searcher both elongation tolerance and typo tolerance on
+// words of four letters or more.
 //
 // Mirror in src/lib/fuzzy.ts — keep both implementations
 // behaviourally identical so client- and server-side filters agree.

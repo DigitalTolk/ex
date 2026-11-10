@@ -62,27 +62,29 @@ export function useInitialBottomSettle({
 // then types a new message expects to see THEIR message land
 // visibly. This effect overrides that case: if the new bottom is
 // own-authored and the previous bottom wasn't this message,
-// scrollToIndex regardless of at-bottom state.
+// scrollToIndex regardless of at-bottom state — in a chat a link
+// opened too, once its window reaches the newest messages (a send was
+// skipped there whenever a notification or Activity had opened the chat).
 //
-// Skipped when an anchor is set: a deep-link's around-window may
-// include the user's own message in its newer half, and the bottom
-// of the loaded slice is NOT the live tail — we'd be yanking the
-// user away from their anchored position to a half-loaded "fake"
-// bottom.
+// Skipped while the loaded slice doesn't reach the newest messages
+// (`olderSlice`, a link's window of older history): its bottom is NOT
+// the live tail, and a newer page loading in could end on one of the
+// user's own older messages. Sending from there first jumps to the
+// newest messages (useParentChat).
 export function useScrollToOwnSend({
-  anchorMsgId,
+  olderSlice,
   rows,
   currentUserId,
   scrollToBottom,
 }: {
-  anchorMsgId?: string;
+  olderSlice?: boolean;
   rows: MessageListRow[];
   currentUserId?: string;
   scrollToBottom: () => void;
 }) {
   const lastBottomMessageIdRef = useRef<string | undefined>(undefined);
   useEffect(() => {
-    if (anchorMsgId) return;
+    if (olderSlice) return;
     if (rows.length === 0) {
       lastBottomMessageIdRef.current = undefined;
       return;
@@ -108,5 +110,5 @@ export function useScrollToOwnSend({
       if (frame < OWN_SEND_SCROLL_FRAMES) raf = requestAnimationFrame(step);
     });
     return () => cancelAnimationFrame(raf);
-  }, [anchorMsgId, rows, currentUserId, scrollToBottom]);
+  }, [olderSlice, rows, currentUserId, scrollToBottom]);
 }

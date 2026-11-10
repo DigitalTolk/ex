@@ -1,8 +1,6 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Navigate, useLocation, useParams, useSearchParams } from 'react-router-dom';
 import { ConvertToChannelDialog } from '@/components/channels/ConvertToChannelDialog';
-import { useQueryClient } from '@tanstack/react-query';
-import { useUsersBatch } from '@/hooks/useUsersBatch';
 import { useFrequentEmojis } from '@/hooks/useEmoji';
 import { Header } from '@/components/layout/Header';
 import { MessageList } from './MessageList';
@@ -20,12 +18,11 @@ import { AgentActivityIndicator } from './AgentActivityIndicator';
 import { AgentApprovalCard } from './AgentApprovalCard';
 import { WatcherCatchUpCard } from './WatcherCatchUpCard';
 import { useConversation, useUserConversations } from '@/hooks/useConversations';
+import { useConversationUserMap } from '@/hooks/useConversationUserMap';
 import { useConversationMessages } from '@/hooks/useMessages';
 import { useAuth } from '@/context/AuthContext';
 import { useUnread } from '@/context/UnreadContext';
-import { markThreadSeen, noteThreadReadPosition } from '@/hooks/useThreads';
 import { findLastOwnMessageId } from '@/lib/message-users';
-import { useMessagePageUserIDs } from '@/hooks/useMessagePageUserIDs';
 import { useSidePanels } from '@/hooks/useSidePanels';
 import { useTagState } from '@/context/TagSearchContext';
 import { TagSearchPanel } from '@/components/TagSearchPanel';
@@ -36,8 +33,6 @@ import { useIsOnline } from '@/stores/presence';
 import { shortName } from '@/lib/format';
 import type { Conversation, UserConversation } from '@/types';
 import { useEventCallback } from '@/hooks/useEventCallback';
-import { useEqualValue } from '@/hooks/useEqualValue';
-import { sameUserMap } from '@/lib/user-map-equal';
 import type { UserMapEntry } from './MessageList';
 import { useParentChat } from '@/hooks/useParentChat';
 import { ChannelRole } from '@/lib/roles';
@@ -81,7 +76,6 @@ export function ConversationView() {
   const { id } = useParams<{ id: string }>();
   const location = useLocation();
   const [convertOpen, setConvertOpen] = useState(false);
-  const queryClient = useQueryClient();
   const [searchParams] = useSearchParams();
   const { user } = useAuth();
   const { setActiveThread } = useUnread();
@@ -121,7 +115,8 @@ export function ConversationView() {
     handleSendMessage,
     handleEditMessage,
     readSession,
-  } = useParentChat({ kind: 'conversation', id, userID: user?.id });
+    jumpToLatest,
+  } = useParentChat({ kind: 'conversation', id, userID: user?.id, showingOlder: hasPreviousPage, showLatest });
 
   const [threadRootID, setThreadRootID] = useState<string | null>(null);
   const inputRef = useRef<MessageInputHandle>(null);
@@ -169,14 +164,6 @@ export function ConversationView() {
   const urlThreadActive = !!threadParam && threadParam !== dismissedThreadParam;
   const effectiveThreadRootID = threadRootID ?? (urlThreadActive ? threadParam : null) ?? null;
 
-  // Mark URL-driven threads as seen exactly once per change — noting first
-  // where the user had read up to, for the thread's "New messages" line.
-  useEffect(() => {
-    if (!threadParam || !id) return;
-    noteThreadReadPosition(queryClient, threadParam);
-    markThreadSeen(threadParam, new Date().toISOString(), { parentID: id, parentType: 'conversation' });
-  }, [threadParam, id, queryClient]);
-
   // Opening a thread (via URL navigation, e.g. clicking a pinned
   // thread reply) must dismiss any other side panel — the local
   // openThread() helper does this, but URL-driven threads bypass it.
@@ -192,28 +179,12 @@ export function ConversationView() {
     return () => setActiveThread(null);
   }, [effectiveThreadRootID, setActiveThread]);
 
-  // Walked per page, and only the page an event changed (useMessagePageUserIDs).
-  const userIDs = useMessagePageUserIDs(data?.pages, conversation?.participantIDs);
-
-  const { data: usersData } = useUsersBatch(userIDs);
+  const { userMap, users: usersData } = useConversationUserMap(data?.pages, conversation?.participantIDs);
 
   const lastOwnMessageId = useMemo(
     () => findLastOwnMessageId(data?.pages, user?.id, 'main'),
     [data, user?.id],
   );
-
-  const builtUserMap = useMemo(() => {
-    const m: Record<string, UserMapEntry> = {};
-    if (user) m[user.id] = { displayName: user.displayName, avatarURL: user.avatarURL, userStatus: user.userStatus };
-    if (usersData) {
-      for (const u of usersData) {
-        m[u.id] = { displayName: u.displayName || 'Unknown', avatarURL: u.avatarURL, userStatus: u.userStatus };
-      }
-    }
-    return m;
-  }, [user, usersData]);
-  // Rebuilt with the same entries it keeps its identity (see ChannelView).
-  const userMap = useEqualValue(builtUserMap, sameUserMap);
 
   // Per-user presence for the DM partner (header dot + intro card). The
   // hook must run unconditionally, so the partner ID is derived here and
@@ -381,10 +352,7 @@ export function ConversationView() {
             anchorRevision={navKey}
             onAtBottomChange={readSession.onAtBottomChange}
             onMarkAllRead={readSession.markAllRead}
-            onJumpToLatest={() => {
-              readSession.prepareJumpToLatest();
-              showLatest();
-            }}
+            onJumpToLatest={jumpToLatest}
             intro={intro ?? undefined}
           />
           {activeEditingMessage && !editReady ? (

@@ -152,12 +152,10 @@ let mockUserState: {
   hiddenConversations: string[];
   channelNotifications: string[];
   threadNotifications: string[];
-  threadSeen: Record<string, string>;
 } | undefined = {
   hiddenConversations: [],
   channelNotifications: [],
   threadNotifications: [],
-  threadSeen: {},
 };
 vi.mock('@/hooks/useUserState', () => ({
   markLocalUserStateWrite: vi.fn(),
@@ -358,7 +356,6 @@ beforeEach(() => {
     hiddenConversations: ['conv-hidden'],
     channelNotifications: ['ch-favorite'],
     threadNotifications: ['msg-thread-root'],
-    threadSeen: {},
   };
   mockDrafts = [
     { parentID: 'ch-general', parentType: 'channel' },
@@ -834,7 +831,7 @@ describe('Sidebar browser render — rich fixtures', () => {
     // never alerted this user shows the subtle "messages available" dot —
     // the NUMBER box is reserved for alerting messages.
     mockChannels = makeChannels().map((c) => (c.channelID === 'ch-general' ? { ...c, unread: true } : c));
-    mockUserState = { hiddenConversations: [], channelNotifications: [], threadNotifications: [], threadSeen: {} };
+    mockUserState = { hiddenConversations: [], channelNotifications: [], threadNotifications: [] };
     await render(<Frame />);
     expect(document.querySelector('[data-testid="channel-unread-badge-ch-general"]')).toBeNull();
     // Plain unread only emboldens the name; the dot is for thread replies.
@@ -850,7 +847,7 @@ describe('Sidebar browser render — rich fixtures', () => {
     mockChannels = [
       { channelID: 'ch-cold', channelName: 'ops', channelType: 'public', role: 1, sidebarPosition: 1000, unread: true, unreadCount: 9, unreadNotifyCount: 7 },
     ];
-    mockUserState = { hiddenConversations: [], channelNotifications: [], threadNotifications: [], threadSeen: {} };
+    mockUserState = { hiddenConversations: [], channelNotifications: [], threadNotifications: [] };
     await render(<Frame />);
     const badge = document.querySelector('[data-testid="channel-unread-badge-ch-cold"]');
     expect(badge?.textContent).toBe('7');
@@ -864,7 +861,7 @@ describe('Sidebar browser render — rich fixtures', () => {
       c.conversationID === 'conv-dm' ? { ...c, unread: true, unreadCount: 4, unreadNotifyCount: 4 } : c,
     );
     mockConversationsState = { data: mockConversations, isError: false };
-    mockUserState = { hiddenConversations: [], channelNotifications: [], threadNotifications: [], threadSeen: {} };
+    mockUserState = { hiddenConversations: [], channelNotifications: [], threadNotifications: [] };
     await render(<Frame />);
     const badge = document.querySelector('[data-testid="conversation-unread-badge-conv-dm"]');
     expect(badge?.textContent).toBe('4');
@@ -887,7 +884,7 @@ describe('Sidebar browser render — rich fixtures', () => {
       channelUnreadCounts: new Map(),
       conversationUnreadCounts: new Map([['conv-dm', 4]]),
     };
-    mockUserState = { hiddenConversations: [], channelNotifications: [], threadNotifications: [], threadSeen: {} };
+    mockUserState = { hiddenConversations: [], channelNotifications: [], threadNotifications: [] };
     await render(<Frame />);
     const badge = document.querySelector('[data-testid="conversation-unread-badge-conv-dm"]');
     expect(badge?.textContent).toBe('4');
@@ -913,7 +910,6 @@ describe('Sidebar browser render — rich fixtures', () => {
       hiddenConversations: [],
       channelNotifications: [],
       threadNotifications: [],
-      threadSeen: {},
     };
     await render(<Frame />);
     const threadsLink = document.querySelector('a[href="/threads"] span') as HTMLElement;
@@ -1050,7 +1046,6 @@ describe('Sidebar browser render — rich fixtures', () => {
       hiddenConversations: ['conv-dm'],
       channelNotifications: [],
       threadNotifications: [],
-      threadSeen: {},
     };
     await render(<Frame />);
     expect(document.body.textContent).not.toContain('Bob Jones');
@@ -1086,7 +1081,7 @@ describe('Sidebar browser render — rich fixtures', () => {
     mockConversations = [];
     mockConversationsState = { data: [], isError: false };
     mockDrafts = [];
-    mockUserState = { hiddenConversations: [], channelNotifications: [], threadNotifications: [], threadSeen: {} };
+    mockUserState = { hiddenConversations: [], channelNotifications: [], threadNotifications: [] };
     await render(<Frame />);
     expect(document.body.textContent).not.toContain('Work');
     expect(document.body.textContent).toContain('Channels');
@@ -1098,7 +1093,6 @@ describe('Sidebar browser render — rich fixtures', () => {
       hiddenConversations: [],
       channelNotifications: [],
       threadNotifications: ['t1'],
-      threadSeen: { t2: '2026-05-09T11:00:00Z' },
     };
     await render(<Frame />);
     expect(document.querySelector('[data-testid="sidebar-primary-sections"]')).not.toBeNull();
@@ -1124,12 +1118,12 @@ describe('Sidebar browser render — rich fixtures', () => {
     expect(document.body.textContent).toContain('Headless');
   });
 
-  it('marks Threads bold, with no count, when threads have unread replies', async () => {
+  it('marks Threads bold and counts its unread threads, capped at "99+"', async () => {
     mockUserState = { ...mockUserState!, threadNotifications: Array.from({ length: 120 }, (_, i) => `msg-${i}`) };
     await render(<Frame />);
     const label = document.querySelector('[data-testid="threads-nav-label"]') as HTMLElement;
     expect(label.className).toContain('font-bold');
-    expect(document.querySelector('[data-testid="threads-unread-badge"]')).toBeNull();
+    expect(document.querySelector('[data-testid="threads-unread-badge"]')?.textContent).toBe('99+');
   });
 
   it('keeps unread channels and conversations visible inside a collapsed section', async () => {
@@ -1155,7 +1149,6 @@ describe('Sidebar browser render — rich fixtures', () => {
       hiddenConversations: [],
       channelNotifications: [],
       threadNotifications: [],
-      threadSeen: {},
     };
     const screen = await render(<Frame />);
     const toggle = screen.getByTestId('sidebar-group-toggle-__favorites__');
@@ -1297,7 +1290,7 @@ describe('Sidebar browser render — rich fixtures', () => {
       unreadConversations: new Set(),
       hiddenConversations: new Set(),
     };
-    mockUserState = { hiddenConversations: [], channelNotifications: [], threadNotifications: [], threadSeen: {} };
+    mockUserState = { hiddenConversations: [], channelNotifications: [], threadNotifications: [] };
     const screen = await render(<Frame />);
     const toggle = screen.getByTestId('sidebar-group-toggle-__channels__');
     await toggle.click();

@@ -73,6 +73,7 @@ const (
 	// only to that socket.
 	EventSessionRenewed = "session.renewed"
 	EventWebhookChanged = "webhook.changed" // incoming-webhook list changed (created/updated/deleted); data-less nudge to refetch
+	EventBotChanged     = "bot.changed"     // a bot or its tokens changed (admin page); data-less nudge to refetch
 	EventProjectChanged = "project.changed" // a project or its design references changed; data-less nudge to refetch
 	// EventSettingsUpdated tells every client the workspace settings changed
 	// (an admin saved them); data-less nudge to refetch them.

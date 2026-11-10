@@ -67,14 +67,14 @@ describe('MemberList add-member search', () => {
   it('never lets a slow older search overwrite the results of a newer one', async () => {
     let resolveOlder: (users: unknown[]) => void = () => undefined;
     mockApiFetch.mockImplementation((path: string) => {
-      if (path === '/api/v1/users?q=al') return new Promise((resolve) => { resolveOlder = resolve; });
-      if (path === '/api/v1/users?q=ali') return Promise.resolve([{ id: 'u-ali', displayName: 'Alice Newer', email: 'ali@x.com' }]);
+      if (path === '/api/v1/users?q=al&bots=true') return new Promise((resolve) => { resolveOlder = resolve; });
+      if (path === '/api/v1/users?q=ali&bots=true') return Promise.resolve([{ id: 'u-ali', displayName: 'Alice Newer', email: 'ali@x.com' }]);
       return Promise.resolve([]);
     });
     renderList();
     const input = screen.getByLabelText('Add member');
     fireEvent.change(input, { target: { value: 'al' } });
-    await waitFor(() => expect(mockApiFetch.mock.calls.some(([p]) => p === '/api/v1/users?q=al')).toBe(true));
+    await waitFor(() => expect(mockApiFetch.mock.calls.some(([p]) => p === '/api/v1/users?q=al&bots=true')).toBe(true));
     fireEvent.change(input, { target: { value: 'ali' } });
     expect(await screen.findByText('Alice Newer')).toBeInTheDocument();
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
@@ -71,6 +71,8 @@ describe('IncomingWebhooksPage', () => {
     renderPage();
 
     fireEvent.change(await screen.findByLabelText(/^Title$/i), { target: { value: 'My CI' } });
+    // Create waits for a channel to post to.
+    await screen.findByRole('option', { name: 'general' });
     fireEvent.click(screen.getByRole('button', { name: /Create webhook/i }));
 
     expect(await screen.findByText('My CI')).toBeInTheDocument();
@@ -80,10 +82,10 @@ describe('IncomingWebhooksPage', () => {
   it('renders the page heading for admins', async () => {
     mockApiFetch.mockResolvedValue([]);
     renderPage();
-    expect(await screen.findByRole('heading', { name: /Incoming webhooks/i })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Webhooks' })).toBeInTheDocument();
   });
 
-  it('creates incoming webhooks', async () => {
+  it('creates webhooks', async () => {
     mockApiFetch.mockImplementation((path: string, init?: { method?: string; body?: string }) => {
       if (path === '/api/v1/channels') {
         return Promise.resolve([{ channelID: 'ch-1', channelName: 'general', channelType: 'public', role: 3 }]);
@@ -100,6 +102,7 @@ describe('IncomingWebhooksPage', () => {
 
     fireEvent.change(await screen.findByLabelText(/^Title$/i), { target: { value: 'CI' } });
     fireEvent.change(screen.getByLabelText(/Profile picture URL/i), { target: { value: 'https://example.com/icon.png' } });
+    await screen.findByRole('option', { name: 'general' });
     fireEvent.click(screen.getByRole('button', { name: /Create webhook/i }));
 
     await waitFor(() => {
@@ -160,7 +163,7 @@ describe('IncomingWebhooksPage', () => {
     });
   });
 
-  it('shows existing incoming webhooks and deletes them', async () => {
+  it('shows existing webhooks and deletes them', async () => {
     mockApiFetch.mockImplementation((path: string, init?: { method?: string }) => {
       if (path === '/api/v1/channels') {
         return Promise.resolve([{ channelID: 'ch-1', channelName: 'general', channelType: 'public', role: 3 }]);
@@ -223,10 +226,15 @@ describe('IncomingWebhooksPage', () => {
     renderPage();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Edit CI' }));
-    const title = screen.getByLabelText(/^Title$/i) as HTMLInputElement;
-    await waitFor(() => expect(title.value).toBe('CI'));
+    // Edited in its row: the form for a new webhook stays as it was.
+    const row = screen.getByTestId('webhook-wh-1');
+    const title = within(row).getByLabelText(/^Title$/i) as HTMLInputElement;
+    expect(title.value).toBe('CI');
+    expect((within(row).getByLabelText(/^Username$/i) as HTMLInputElement).value).toBe('CI Bot');
+    expect(screen.getAllByLabelText(/^Title$/i).map((el) => (el as HTMLInputElement).value)).toEqual(['', 'CI']);
+    expect(screen.getByRole('button', { name: /Create webhook/i })).toBeInTheDocument();
     fireEvent.change(title, { target: { value: 'CI Renamed' } });
-    fireEvent.click(screen.getByRole('button', { name: /Save changes/i }));
+    fireEvent.click(within(row).getByRole('button', { name: /Save changes/i }));
 
     await waitFor(() => {
       const patch = mockApiFetch.mock.calls.find(
@@ -235,6 +243,31 @@ describe('IncomingWebhooksPage', () => {
       expect(patch).toBeDefined();
       expect(JSON.parse(patch![1].body).title).toBe('CI Renamed');
     });
+    // Saved, the row shows the webhook again.
+    expect(await screen.findByRole('button', { name: 'Edit CI' })).toBeInTheDocument();
+    expect(screen.getAllByLabelText(/^Title$/i)).toHaveLength(1);
+  });
+
+  it('cancels an edit without saving', async () => {
+    mockApiFetch.mockImplementation((path: string) => {
+      if (path === '/api/v1/channels') {
+        return Promise.resolve([{ channelID: 'ch-1', channelName: 'general', channelType: 'public', role: 3 }]);
+      }
+      if (path === '/api/v1/admin/webhooks') {
+        return Promise.resolve([{ id: 'wh-1', title: 'CI', channelID: 'ch-1', lockToChannel: true, url: 'https://chat.example/hooks/wh-1' }]);
+      }
+      return Promise.resolve({});
+    });
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit CI' }));
+    const row = screen.getByTestId('webhook-wh-1');
+    fireEvent.change(within(row).getByLabelText(/^Title$/i), { target: { value: 'Changed' } });
+    fireEvent.click(within(row).getByRole('button', { name: 'Cancel' }));
+
+    expect(screen.getByRole('button', { name: 'Edit CI' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Save changes/i })).not.toBeInTheDocument();
+    expect(mockApiFetch.mock.calls.some((c) => c[1]?.method === 'PATCH')).toBe(false);
   });
 
   it('surfaces incoming webhook creation errors', async () => {
@@ -253,6 +286,7 @@ describe('IncomingWebhooksPage', () => {
     renderPage();
 
     fireEvent.change(await screen.findByLabelText(/^Title$/i), { target: { value: 'CI' } });
+    await screen.findByRole('option', { name: 'general' });
     fireEvent.click(screen.getByRole('button', { name: /Create webhook/i }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('title already exists');
@@ -365,6 +399,7 @@ describe('IncomingWebhooksPage', () => {
 
     // Default: classic — no kind is sent at all.
     fireEvent.change(await screen.findByLabelText(/^Title$/i), { target: { value: 'Alerts' } });
+    await screen.findByRole('option', { name: 'general' });
     fireEvent.click(screen.getByRole('button', { name: /Create webhook/i }));
     await waitFor(() => expect(posted()).toHaveLength(1));
     expect(posted()[0]).not.toHaveProperty('kind');
@@ -397,9 +432,19 @@ describe('IncomingWebhooksPage', () => {
     expect(screen.queryByTestId('interactivity-wh-classic')).not.toBeInTheDocument();
     expect(screen.getAllByText('Rich', { selector: 'span' })).toHaveLength(1);
 
+    // A new webhook's type is open; an existing one's, edited in place, isn't.
+    expect(screen.getByLabelText(/^Type$/i)).toBeEnabled();
     fireEvent.click(screen.getByRole('button', { name: 'Edit Expenses' }));
-    const type = screen.getByLabelText(/^Type$/i) as HTMLSelectElement;
-    await waitFor(() => expect(type.value).toBe('rich'));
+    const type = within(await screen.findByTestId('webhook-wh-rich')).getByLabelText(/^Type$/i) as HTMLSelectElement;
+    expect(type.value).toBe('rich');
     expect(type).toBeDisabled();
+
+    // Saving never sends the kind: it can't change.
+    fireEvent.click(screen.getByRole('button', { name: /Save changes/i }));
+    await waitFor(() => {
+      const patch = mockApiFetch.mock.calls.find((c) => c[0] === '/api/v1/admin/webhooks/wh-rich' && c[1]?.method === 'PATCH');
+      expect(patch).toBeDefined();
+      expect(JSON.parse(patch![1].body)).not.toHaveProperty('kind');
+    });
   });
 });

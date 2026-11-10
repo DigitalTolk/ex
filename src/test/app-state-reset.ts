@@ -32,5 +32,7 @@ export async function resetAppStateForTests(): Promise<void> {
     // sonner replays every live toast to a newly mounted Toaster.
     callReset(() => import('@/lib/toast'), 'clearToasts'),
     callReset(() => import('@/hooks/useMobileBackClose'), 'resetMobileBackCloseForTests'),
+    // The parsed seen map caches localStorage, which the setup clears.
+    callReset(() => import('@/hooks/useThreads'), 'resetSeenCache'),
   ]);
 }
