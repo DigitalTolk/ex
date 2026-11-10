@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { ChevronLeft, ChevronRight, Download, SquarePen, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { getInitials, formatLongDateTime, formatBytes } from '@/lib/format';
-import { iconForAttachment, isImageContentType, isPdfAttachment, isVideoAttachment } from '@/lib/file-helpers';
+import { iconForAttachment, isPdfAttachment, isShownAsImage, isVideoAttachment } from '@/lib/file-helpers';
 import { VideoPreview } from './VideoPreview';
 import { FileTypeIcon } from './FileTypeIcon';
 import { SharePointPreview } from './SharePointPreview';
@@ -81,7 +81,7 @@ export function ImageLightbox({
   const current = images[safeIndex];
   // A SharePoint file shows in its own viewer, whatever its type.
   const sharePoint = current?.sharePoint;
-  const isImage = !!current && !sharePoint && isImageContentType(current.contentType);
+  const isImage = !!current && !sharePoint && isShownAsImage(current.contentType, current.thumbnailURL);
   const isPdf = !!current && !isImage && !sharePoint && isPdfAttachment(current.contentType, current.filename);
   const lightboxRef = useRef<HTMLDivElement>(null);
   const imageKey = current ? `${current.url}\u0000${safeIndex}` : '';

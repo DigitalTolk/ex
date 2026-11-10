@@ -36,7 +36,7 @@ vi.mock('@/lib/capacitor', () => ({ getCapacitorPlugin: () => null, isNativePlat
 vi.mock('@/hooks/useIsMobile', () => ({ useIsMobile: () => false }));
 
 // Surfaces the router location so the navigate()-based menu actions
-// (Custom emojis / Incoming webhooks / Admin) can be asserted without
+// (Custom emojis / Webhooks / Admin) can be asserted without
 // mounting the real destination routes.
 function LocationProbe() {
   const location = useLocation();
@@ -159,7 +159,7 @@ describe('AccountMenu (browser)', () => {
     expect(screen.getByTestId('location-probe').element().textContent).not.toContain('/emojis');
   });
 
-  it('navigates to the incoming-webhooks admin page from the account menu', async () => {
+  it('navigates to the webhooks page from the account menu', async () => {
     const screen = await renderMenu();
     await screen.getByTestId('account-menu-trigger').click();
     await screen.getByTestId('user-menu-webhooks').click();

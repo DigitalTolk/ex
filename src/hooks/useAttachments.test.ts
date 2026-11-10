@@ -18,6 +18,7 @@ import {
   useAttachmentsBatch,
   useDeleteDraftAttachment,
 } from './useAttachments';
+import { dropTimersLeftByUploads } from '@/test/upload-timers';
 
 function createWrapper(qc?: QueryClient) {
   const client = qc ?? new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -78,6 +79,8 @@ function routeUpload(id: string) {
     return Promise.resolve({ id });
   });
 }
+
+dropTimersLeftByUploads();
 
 describe('uploadAttachment', () => {
   let originalXHR: typeof XMLHttpRequest;

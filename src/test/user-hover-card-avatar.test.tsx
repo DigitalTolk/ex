@@ -9,7 +9,7 @@ vi.mock('@/context/AuthContext', () => ({
   useAuth: () => ({ user: { id: 'u-me', displayName: 'Me' }, isAuthenticated: true, isLoading: false }),
 }));
 
-function renderCard(props: { avatarURL?: string; integrationOwnerName?: string }) {
+function renderCard(props: { avatarURL?: string; integration?: boolean; integrationOwnerID?: string }) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
@@ -35,10 +35,11 @@ describe('UserHoverCard — avatar image in the open card', () => {
   });
 
   it('shows the integration variant with its avatar image', () => {
-    renderCard({ avatarURL: 'https://cdn.example/bot.png', integrationOwnerName: 'alice' });
+    renderCard({ avatarURL: 'https://cdn.example/bot.png', integration: true, integrationOwnerID: 'u-alice' });
     fireEvent.click(screen.getByText('trigger'));
     const card = screen.getByTestId('hover-card-integration');
-    expect(card.textContent).toContain('@alice');
+    // The owner's name is still on its way (this API never answers).
+    expect(card.textContent).toContain('This post was created by an integration.');
     expect(card.querySelector('[data-slot="avatar"]')).not.toBeNull();
   });
 });

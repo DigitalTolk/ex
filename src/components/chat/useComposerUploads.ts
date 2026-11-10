@@ -2,7 +2,7 @@ import { useState, type ChangeEvent, type Dispatch, type SetStateAction } from '
 import { useQueryClient } from '@tanstack/react-query';
 import type { DraftAttachment } from '@/components/chat/AttachmentChip';
 import { uploadAttachment, useDeleteDraftAttachment } from '@/hooks/useAttachments';
-import { isImageAttachment } from '@/lib/file-helpers';
+import { isHeifAttachment, isImageAttachment, uploadContentType } from '@/lib/file-helpers';
 import { MAX_ATTACHMENTS_PER_MESSAGE } from '@/lib/limits';
 import { ApiError } from '@/lib/api';
 import { isOfficeFile, keepsOfficeFilesInOneDrive, officeFileLink, putOfficeFile, type OfficeParent } from '@/lib/office-upload';
@@ -59,9 +59,13 @@ export function useComposerUploads({ drafts, setDrafts, markLocallyEdited, offic
       ...files.map((file, i) => ({
         id: tempIDs[i],
         filename: file.name,
-        contentType: file.type || 'application/octet-stream',
+        contentType: uploadContentType(file),
         size: file.size,
-        localURL: isImageAttachment(file.type, file.name) ? URL.createObjectURL(file) : undefined,
+        // A HEIC would show in few browsers: its chip keeps the file icon.
+        localURL:
+          isImageAttachment(file.type, file.name) && !isHeifAttachment(file.type, file.name)
+            ? URL.createObjectURL(file)
+            : undefined,
         progress: 0,
       })),
     ]);

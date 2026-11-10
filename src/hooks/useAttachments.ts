@@ -3,7 +3,7 @@ import { sha256 } from '@noble/hashes/sha2.js';
 import { bytesToHex } from '@noble/hashes/utils.js';
 import { useMemo } from 'react';
 import { apiFetch } from '@/lib/api';
-import { isImageAttachment, isVideoAttachment } from '@/lib/file-helpers';
+import { isImageAttachment, isVideoAttachment, uploadContentType } from '@/lib/file-helpers';
 import { readVideoPoster } from '@/lib/video-poster';
 import { queryKeys } from '@/lib/query-keys';
 import type { Attachment } from '@/types';
@@ -86,7 +86,7 @@ export async function uploadAttachment(
     method: 'POST',
     body: JSON.stringify({
       filename: file.name,
-      contentType: file.type || 'application/octet-stream',
+      contentType: uploadContentType(file),
       size: file.size,
       sha256: sha,
       width: dims.width ?? poster?.width,

@@ -30,6 +30,8 @@ type fakeBotStore struct {
 	getErr    error
 	listErr   error
 	deleteErr error
+	// deleteBotErr fails DeleteBot.
+	deleteBotErr error
 }
 
 func newFakeBotStore(users *mockUserStore) *fakeBotStore {
@@ -106,6 +108,21 @@ func (f *fakeBotStore) DeleteBotToken(_ context.Context, hash string) error {
 	return nil
 }
 
+func (f *fakeBotStore) DeleteBot(_ context.Context, id, username string, at time.Time) error {
+	if f.deleteBotErr != nil {
+		return f.deleteBotErr
+	}
+	u, ok := f.users.users[id]
+	if !ok {
+		return store.ErrNotFound
+	}
+	u.BotDeletedAt, u.Username, u.UpdatedAt = &at, "", at
+	if f.usernames[username] == id {
+		delete(f.usernames, username)
+	}
+	return nil
+}
+
 type botFixture struct {
 	svc     *BotService
 	store   *fakeBotStore
@@ -164,7 +181,8 @@ func TestBots_OnlyAdminsManageBots(t *testing.T) {
 		_, tokensErr := f.svc.ListTokens(ctx, actor, "b")
 		_, tokenErr := f.svc.CreateToken(ctx, actor, "b", "x")
 		revokeErr := f.svc.RevokeToken(ctx, actor, "b", "t")
-		for name, err := range map[string]error{"List": listErr, "Create": createErr, "Update": updateErr, "SetEnabled": enableErr, "ListTokens": tokensErr, "CreateToken": tokenErr, "RevokeToken": revokeErr} {
+		deleteErr := f.svc.Delete(ctx, actor, "b")
+		for name, err := range map[string]error{"List": listErr, "Create": createErr, "Update": updateErr, "SetEnabled": enableErr, "ListTokens": tokensErr, "CreateToken": tokenErr, "RevokeToken": revokeErr, "Delete": deleteErr} {
 			if !errors.Is(err, ErrForbidden) {
 				t.Errorf("%s by %+v = %v, want forbidden", name, actor, err)
 			}
@@ -377,6 +395,104 @@ func TestBots_SetEnabledDeactivatesAndReactivates(t *testing.T) {
 	f.users.updateErr = boom
 	if _, err := f.svc.SetEnabled(ctx, botAdmin, bot.ID, false); !errors.Is(err, boom) {
 		t.Fatalf("SetEnabled with a failed write = %v", err)
+	}
+}
+
+// Deleting a bot ends it for good but keeps its row: its messages keep their
+// author.
+func TestBots_DeleteEndsTheBotAndKeepsItsRow(t *testing.T) {
+	f := newBotFixture()
+	ctx := context.Background()
+	bot := f.createBot(t, "incident-bot")
+	issued, err := f.svc.CreateToken(ctx, botAdmin, bot.ID, "cliffhub")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.CreateToken(ctx, botAdmin, bot.ID, "spare"); err != nil {
+		t.Fatal(err)
+	}
+	f.pub.published = nil
+
+	if err := f.svc.Delete(ctx, botAdmin, bot.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	row := f.users.users[bot.ID]
+	if row == nil || row.BotDeletedAt == nil || row.Status != "deactivated" || row.Username != "" || row.DisplayName != "Bot incident-bot" {
+		t.Fatalf("row after delete = %+v", row)
+	}
+	if len(f.store.tokens) != 0 {
+		t.Fatalf("%d tokens survive the delete", len(f.store.tokens))
+	}
+	if _, err := f.svc.Authenticate(ctx, issued.Secret); !errors.Is(err, ErrBotTokenInvalid) {
+		t.Fatalf("Authenticate with a deleted bot's token = %v", err)
+	}
+	listed, err := f.svc.List(ctx, botAdmin)
+	if err != nil || len(listed) != 0 {
+		t.Fatalf("List after delete = %v, %v", listed, err)
+	}
+	if got := f.published(pubsub.UserEvents()); !slices.Contains(got, events.EventUserUpdated) {
+		t.Fatalf("user events %v, want user.updated", got)
+	}
+	if got := f.published(pubsub.GlobalChannelEvents()); !slices.Equal(got, []string{events.EventBotChanged}) {
+		t.Fatalf("global events %v", got)
+	}
+
+	// It is gone for every bot operation, and its username is free.
+	if err := f.svc.Delete(ctx, botAdmin, bot.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("second Delete = %v, want not found", err)
+	}
+	if _, err := f.svc.SetEnabled(ctx, botAdmin, bot.ID, true); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("enabling a deleted bot = %v, want not found", err)
+	}
+	f.createBot(t, "incident-bot")
+}
+
+// A disabled bot is deleted without being disabled again, and a delete that
+// fails part way can be repeated.
+func TestBots_DeleteOfADisabledBotAndFailures(t *testing.T) {
+	f := newBotFixture()
+	ctx := context.Background()
+	bot := f.createBot(t, "incident-bot")
+	if _, err := f.svc.CreateToken(ctx, botAdmin, bot.ID, "cliffhub"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.SetEnabled(ctx, botAdmin, bot.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	boom := errors.New("boom")
+
+	// Already deactivated: the status isn't written again (this write would fail).
+	f.users.updateErr = boom
+	f.store.listErr = boom
+	if err := f.svc.Delete(ctx, botAdmin, bot.ID); !errors.Is(err, boom) {
+		t.Fatalf("Delete with a failed token list = %v", err)
+	}
+	f.store.listErr = nil
+	f.store.deleteErr = boom
+	if err := f.svc.Delete(ctx, botAdmin, bot.ID); !errors.Is(err, boom) {
+		t.Fatalf("Delete with a failed revoke = %v", err)
+	}
+	f.store.deleteErr = nil
+	f.store.deleteBotErr = boom
+	if err := f.svc.Delete(ctx, botAdmin, bot.ID); !errors.Is(err, boom) {
+		t.Fatalf("Delete with a failed store write = %v", err)
+	}
+	f.store.deleteBotErr = nil
+	if err := f.svc.Delete(ctx, botAdmin, bot.ID); err != nil {
+		t.Fatalf("repeated Delete = %v", err)
+	}
+	if f.users.users[bot.ID].BotDeletedAt == nil {
+		t.Fatal("the repeated delete didn't delete")
+	}
+
+	// An active bot whose deactivation fails stays as it was.
+	other := f.createBot(t, "other-bot")
+	if err := f.svc.Delete(ctx, botAdmin, other.ID); !errors.Is(err, boom) {
+		t.Fatalf("Delete with a failed deactivation = %v", err)
+	}
+	f.users.updateErr = nil
+	if err := f.svc.Delete(ctx, botAdmin, "missing"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Delete of a missing bot = %v", err)
 	}
 }
 

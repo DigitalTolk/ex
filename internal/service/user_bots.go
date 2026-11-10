@@ -24,10 +24,10 @@ type botEntry struct {
 }
 
 // isBotAccount reports a bot of the kind admins manage: one they created, or
-// one migrated from Mattermost. The bot behind an incoming webhook belongs to
-// its webhook.
+// one migrated from Mattermost, and not deleted. The bot behind an incoming
+// webhook belongs to its webhook.
 func isBotAccount(u *model.User) bool {
-	return u != nil && u.IsBot && !isBotUserID(u.ID)
+	return u != nil && u.IsBot && !isBotUserID(u.ID) && u.BotDeletedAt == nil
 }
 
 // BotAccounts returns the bot accounts admins manage, disabled ones included,
