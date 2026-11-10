@@ -727,3 +727,23 @@ func TestActivityService_ParentLeftManyUsers(t *testing.T) {
 		return len(changes(t, pub, "u-1")) == 1 && len(changes(t, pub, "u-2")) == 1 && len(changes(t, pub, "u-3")) == 1
 	}, "every user told")
 }
+
+// The badge is the bell's number: unread items, unread reactions left out —
+// the same rule as the client's badgeUnread.
+func TestActivityService_BadgeCount(t *testing.T) {
+	store := newFakeActivityStore()
+	store.listItems = []*model.ActivityFeedItem{
+		{ActivityItem: model.ActivityItem{ID: "a", Type: model.ActivityMention}},
+		{ActivityItem: model.ActivityItem{ID: "b", Type: model.ActivityDM}},
+		{ActivityItem: model.ActivityItem{ID: "c", Type: model.ActivityReaction}},
+		{ActivityItem: model.ActivityItem{ID: "d", Type: model.ActivityThreadReply}, Read: true},
+	}
+	svc := NewActivityService(store, newMockPublisher())
+	if n, err := svc.BadgeCount(context.Background(), "u-1"); err != nil || n != 2 {
+		t.Fatalf("BadgeCount = %d, %v; want 2", n, err)
+	}
+	store.listErr = errors.New("list boom")
+	if _, err := svc.BadgeCount(context.Background(), "u-1"); err == nil {
+		t.Fatal("expected the store error")
+	}
+}

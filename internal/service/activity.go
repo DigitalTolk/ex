@@ -244,6 +244,18 @@ func (s *ActivityService) Feed(ctx context.Context, userID string) (model.Activi
 	return feed, nil
 }
 
+// BadgeCount is the user's Activity bell number: unread items, reactions
+// left out (they never count towards the badge). The client's twin is
+// badgeUnread in src/lib/activity-feed.ts; the two must agree, since the
+// phone app's icon (set from each push) and every ex window show it.
+func (s *ActivityService) BadgeCount(ctx context.Context, userID string) (int, error) {
+	feed, err := s.Feed(ctx, userID)
+	if err != nil {
+		return 0, err
+	}
+	return feed.Unread - feed.UnreadByType[model.ActivityReaction], nil
+}
+
 // MarkSeen marks every item read, then tells the user's clients so every
 // device clears its badge instead of waiting for the next activity.new (SPEC
 // GAP-3 / I-4).
