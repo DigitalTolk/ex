@@ -149,6 +149,14 @@ function notificationsSupported(): boolean {
   return typeof window !== 'undefined' && 'Notification' in window;
 }
 
+// Whether a desktop notification should stay until dismissed or clicked.
+// Windows turns requireInteraction into a toast that never leaves the screen
+// (browsers and the desktop shell alike), so there it times out like any other
+// toast and waits in the Action Center instead.
+function keepNotificationOpen(): boolean {
+  return !/Win/i.test(window.navigator.platform) && !/Windows/i.test(window.navigator.userAgent);
+}
+
 function loadPrefs(): NotificationPrefs {
   const parsed = readJSON<Partial<NotificationPrefs>>(STORAGE_KEY, {});
   return {
@@ -395,10 +403,11 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
           // bypasses DnD. Only the shell gets DnD-correct pings.
           silent: true,
           // Stay until dismissed or clicked (Mattermost-style) instead of
-          // sliding away after a few seconds. Honoured on Windows/Linux/web;
-          // macOS decides banner-vs-alert per app in System Settings (the
-          // desktop build asks for Alerts via NSUserNotificationAlertStyle).
-          requireInteraction: true,
+          // sliding away after a few seconds — except on Windows, see
+          // keepNotificationOpen. macOS decides banner-vs-alert per app in
+          // System Settings (the desktop build asks for Alerts via
+          // NSUserNotificationAlertStyle).
+          requireInteraction: keepNotificationOpen(),
         };
         if (!window.__EX_DESKTOP__) {
           notificationOptions.icon = '/logo.svg';
@@ -560,11 +569,11 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
         const opts: NotificationOptions = {
           body,
           silent: true,
-          // A blocking gate should not evaporate before it is seen. Honoured on
-          // Windows/Linux/web; macOS decides banner-vs-alert persistence per
-          // app in System Settings, so there it is a harmless no-op rather than
-          // something to rely on.
-          requireInteraction: true,
+          // A blocking gate should not evaporate before it is seen — except on
+          // Windows, see keepNotificationOpen. macOS decides banner-vs-alert
+          // persistence per app in System Settings, so there it is a harmless
+          // no-op rather than something to rely on.
+          requireInteraction: keepNotificationOpen(),
         };
         if (!window.__EX_DESKTOP__) opts.icon = '/logo.svg';
         const note = new Notification(title, opts);

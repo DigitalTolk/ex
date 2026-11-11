@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -110,6 +111,10 @@ type OneSignalConfig struct {
 	// retry path runs instantly.
 	MaxRetries    int
 	RetryInterval time.Duration
+	// BadgeCount answers a recipient's Activity unread count, the number the
+	// phone app's icon shows (iOS sets it from each push). Nil sends no
+	// badge.
+	BadgeCount func(ctx context.Context, userID string) (int, error)
 }
 
 type OneSignalPushSender struct {
@@ -120,6 +125,7 @@ type OneSignalPushSender struct {
 	client        *http.Client
 	maxRetries    uint64
 	retryInterval time.Duration
+	badgeCount    func(ctx context.Context, userID string) (int, error)
 }
 
 func NewOneSignalPushSender(cfg OneSignalConfig) (*OneSignalPushSender, error) {
@@ -157,6 +163,7 @@ func NewOneSignalPushSender(cfg OneSignalConfig) (*OneSignalPushSender, error) {
 		client:        client,
 		maxRetries:    retries,
 		retryInterval: interval,
+		badgeCount:    cfg.BadgeCount,
 	}, nil
 }
 
@@ -185,6 +192,7 @@ func (s *OneSignalPushSender) Send(ctx context.Context, recipientUserID string, 
 			"parent_message_id": n.ParentMessageID,
 		},
 	}
+	s.setBadge(ctx, recipientUserID, &payload)
 	body := mustJSONBody(json.Marshal(payload))
 	// Retry transient failures (network error / 5xx); 4xx is permanent. A push
 	// that loses to a momentary blip would otherwise just disappear.
@@ -223,6 +231,25 @@ func (s *OneSignalPushSender) Send(ctx context.Context, recipientUserID string, 
 	return err
 }
 
+// setBadge sets the phone app icon's number to the recipient's Activity
+// unread count — the bell's number, the one every ex app shows — counted as
+// the push leaves, after its own Activity row was written. At least 1: this
+// push is unread news even when another device read it meanwhile. A failed
+// count sends the push without a badge; the alert never waits on it.
+func (s *OneSignalPushSender) setBadge(ctx context.Context, userID string, payload *oneSignalNotificationRequest) {
+	if s.badgeCount == nil {
+		return
+	}
+	n, err := s.badgeCount(ctx, userID)
+	if err != nil {
+		slog.WarnContext(ctx, "push badge count failed; sending without a badge", "error", err)
+		return
+	}
+	n = max(n, 1)
+	payload.IOSBadgeType = "SetTo"
+	payload.IOSBadgeCount = &n
+}
+
 func (s *OneSignalPushSender) absoluteURL(deepLink string) string {
 	if strings.TrimSpace(deepLink) == "" {
 		return s.publicURL.String()
@@ -256,6 +283,8 @@ type oneSignalNotificationRequest struct {
 	Contents       map[string]string   `json:"contents"`
 	URL            string              `json:"url,omitempty"`
 	Data           map[string]string   `json:"data,omitempty"`
+	IOSBadgeType   string              `json:"ios_badgeType,omitempty"`
+	IOSBadgeCount  *int                `json:"ios_badgeCount,omitempty"`
 }
 
 var _ MobilePushSender = (*OneSignalPushSender)(nil)
