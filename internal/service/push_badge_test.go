@@ -13,6 +13,7 @@ import (
 	"github.com/hibiken/asynq"
 
 	"github.com/DigitalTolk/ex/internal/model"
+	"github.com/DigitalTolk/ex/internal/store"
 )
 
 // listingActivityStore lists back what the fan-out wrote, every item unread.
@@ -39,12 +40,24 @@ func (s runNowScheduler) SchedulePush(ctx context.Context, userID string, n Noti
 	return s.handle(ctx, asynq.NewTask(TaskTypeMobilePush, payload))
 }
 
-// A message that alerts Bob reaches his phone with the icon set to his
-// Activity bell's number: what was already unread plus this message, the
-// unread reaction left out — the same number ex shows him everywhere else.
-func TestMobilePush_SetsTheIconToTheActivityCount(t *testing.T) {
+// slowWriteActivityStore lands activity writes the way a loaded box does:
+// after a beat, not instantly. The badge must still count this message's own
+// row, so the fan-out has to WAIT for the write before the push leaves; the
+// old detached write made the badge one short whenever the push won the race
+// (the CI failure this reproduces deterministically).
+type slowWriteActivityStore struct{ listingActivityStore }
+
+func (s slowWriteActivityStore) AddActivityMany(ctx context.Context, adds []store.ActivityAdd) []store.ActivityAdded {
+	time.Sleep(30 * time.Millisecond)
+	return s.listingActivityStore.AddActivityMany(ctx, adds)
+}
+
+// bobsBadgeAfterChannelPost posts a channel message that alerts Bob (offline,
+// so his push leaves at once) and returns the ios_badgeCount his push carried.
+// Bob starts with three unread items: a DM, a mention and a reaction.
+func bobsBadgeAfterChannelPost(t *testing.T, activityStore ActivityStore, seed *listingActivityStore) (float64, bool) {
+	t.Helper()
 	svc, _, members, _, chans, users := setupNotifier(t)
-	activityStore := listingActivityStore{newFakeActivityStore()}
 	activity := NewActivityService(activityStore, newMockPublisher())
 	svc.SetActivityRecorder(activity)
 	svc.SetPresence(&stubPresence{online: map[string]bool{}}) // offline: pushed at once
@@ -77,7 +90,7 @@ func TestMobilePush_SetsTheIconToTheActivityCount(t *testing.T) {
 	for _, uid := range []string{"u-author", "u-bob"} {
 		members.memberships["ch1#"+uid] = &model.ChannelMembership{ChannelID: "ch1", UserID: uid}
 	}
-	activityStore.items["u-bob"] = []*model.ActivityItem{
+	seed.items["u-bob"] = []*model.ActivityItem{
 		{ID: "old-dm", Type: model.ActivityDM},
 		{ID: "old-mention", Type: model.ActivityMention},
 		{ID: "old-reaction", Type: model.ActivityReaction},
@@ -87,7 +100,28 @@ func TestMobilePush_SetsTheIconToTheActivityCount(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	if got, ok := badges["u-bob"]; !ok || got != 3 {
+	got, ok := badges["u-bob"]
+	return got, ok
+}
+
+// A message that alerts Bob reaches his phone with the icon set to his
+// Activity bell's number: what was already unread plus this message, the
+// unread reaction left out — the same number ex shows him everywhere else.
+func TestMobilePush_SetsTheIconToTheActivityCount(t *testing.T) {
+	activityStore := listingActivityStore{newFakeActivityStore()}
+	if got, ok := bobsBadgeAfterChannelPost(t, activityStore, &activityStore); !ok || got != 3 {
+		t.Fatalf("Bob's push badge = %v (sent: %v), want 3", got, ok)
+	}
+}
+
+// The same message through a store that lands writes after a beat, as a
+// loaded box does. The push must still count this message's own row: the
+// fan-out waits for the activity write before scheduling the push, instead
+// of racing a detached goroutine (which sent badge 2 on busy CI runners).
+func TestMobilePush_BadgeWaitsForTheActivityWrite(t *testing.T) {
+	activityStore := listingActivityStore{newFakeActivityStore()}
+	slow := slowWriteActivityStore{activityStore}
+	if got, ok := bobsBadgeAfterChannelPost(t, slow, &activityStore); !ok || got != 3 {
 		t.Fatalf("Bob's push badge = %v (sent: %v), want 3", got, ok)
 	}
 }

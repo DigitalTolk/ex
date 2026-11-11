@@ -317,17 +317,22 @@ func (s *ActivityService) RemoveItems(ctx context.Context, userID string, ids []
 
 // RecordForRecipients adds one pre-built item per recipient (userID → item) to
 // their streams — the notification fan-out's hand-off for mentions, thread
-// replies and DMs. Best-effort and off the send path: one detached goroutine
-// writes them all in a pipelined batch.
+// replies and DMs — written in one pipelined batch.
+// Synchronous, unlike the other recorders: the fan-out that calls it then
+// sets each mobile push's icon number from the recipient's bell count, so
+// this message's own row must be readable before the push is scheduled (an
+// offline recipient's push leaves at once). Nobody waits on it: the fan-out
+// already runs detached from the send. A failed write stays best-effort
+// inside addMany: logged, and the alert goes out regardless.
 func (s *ActivityService) RecordForRecipients(ctx context.Context, items map[string]*model.ActivityItem) {
-	if len(items) == 0 {
+	if s.store == nil || len(items) == 0 {
 		return
 	}
 	adds := make([]store.ActivityAdd, 0, len(items))
 	for userID, item := range items {
 		adds = append(adds, store.ActivityAdd{UserID: userID, Item: item})
 	}
-	s.add(ctx, adds)
+	s.addMany(ctx, adds)
 }
 
 // RecordChannelAdded tells a user that someone else added them to a channel.
