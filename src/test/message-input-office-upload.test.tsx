@@ -197,7 +197,7 @@ describe('MessageInput - Office files', () => {
     // While the file goes up…
     const banner = await screen.findByTestId('office-upload-banner');
     expect(banner).toHaveTextContent(
-      'This will upload a new version to SharePoint — to share an existing document, use the SharePoint link instead.',
+      'This will upload a new version to SharePoint. To share an existing document, use the SharePoint link instead.',
     );
     // …and once it is there.
     await act(async () => finish({ name: 'Q3 plan.docx', webURL: ONE_DRIVE_URL, size: 5 }));

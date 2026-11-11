@@ -315,7 +315,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
       )}
       {/* An Office file headed for (or already in) OneDrive: say where it
           goes, because a downloaded-and-edited copy uploads as a NEW document
-          on SharePoint — someone meaning to share the one that exists should
+          on SharePoint; someone meaning to share the one that exists should
           paste its SharePoint link instead. Keys on the chips the upload hook
           actually routed to OneDrive, so it never shows when SharePoint is
           off, the poster is a guest, or OneDrive refused the file. */}
@@ -325,8 +325,8 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
           role="status"
           data-testid="office-upload-banner"
         >
-          <Info className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-          This will upload a new version to SharePoint — to share an existing document, use the SharePoint link instead.
+          <Info className="h-3.5 w-3.5 shrink-0 text-caution-foreground" aria-hidden="true" />
+          This will upload a new version to SharePoint. To share an existing document, use the SharePoint link instead.
         </div>
       )}
       {/* `relative` wrapper anchors the typing-indicator overlay to the
