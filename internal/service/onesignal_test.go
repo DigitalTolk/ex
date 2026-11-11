@@ -457,3 +457,48 @@ func TestOneSignalPushSender_200BodyFailOpenArms(t *testing.T) {
 type failingReader struct{}
 
 func (failingReader) Read([]byte) (int, error) { return 0, errors.New("connection reset") }
+
+// Each push sets the phone app icon's number to the recipient's Activity
+// unread count, at least 1 for the push itself; a count that fails sends the
+// push anyway, without a badge.
+func TestOneSignalPushSender_SetsTheIconBadge(t *testing.T) {
+	send := func(t *testing.T, count func(context.Context, string) (int, error)) map[string]any {
+		t.Helper()
+		var got map[string]any
+		s, err := NewOneSignalPushSender(OneSignalConfig{
+			AppID: "app", APIKey: "key", PublicURL: "https://chat.example.com/", APIURL: "https://api.onesignal.test/notifications",
+			HTTPClient: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+					t.Fatalf("decode request: %v", err)
+				}
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"id":"n-1"}`)), Header: make(http.Header)}, nil
+			})},
+			BadgeCount: count,
+		})
+		if err != nil {
+			t.Fatalf("NewOneSignalPushSender: %v", err)
+		}
+		if err := s.Send(context.Background(), "u-1", Notification{Title: "t", Body: "b"}); err != nil {
+			t.Fatalf("Send: %v", err)
+		}
+		return got
+	}
+	var asked string
+	got := send(t, func(_ context.Context, uid string) (int, error) { asked = uid; return 7, nil })
+	if asked != "u-1" || got["ios_badgeType"] != "SetTo" || got["ios_badgeCount"] != float64(7) {
+		t.Fatalf("badge = %v / %v for %q, want SetTo 7 for u-1", got["ios_badgeType"], got["ios_badgeCount"], asked)
+	}
+	got = send(t, func(context.Context, string) (int, error) { return 0, nil })
+	if got["ios_badgeCount"] != float64(1) {
+		t.Fatalf("badge for a push read elsewhere = %v, want 1", got["ios_badgeCount"])
+	}
+	for name, count := range map[string]func(context.Context, string) (int, error){
+		"count failed": func(context.Context, string) (int, error) { return 0, errors.New("redis down") },
+		"no counter":   nil,
+	} {
+		got = send(t, count)
+		if _, set := got["ios_badgeType"]; set || got["ios_badgeCount"] != nil || got["headings"] == nil {
+			t.Fatalf("%s: request = %v, want the push without badge fields", name, got)
+		}
+	}
+}

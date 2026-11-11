@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, onTestFinished } from 'vitest';
 import { useEffect } from 'react';
 import { render, act, screen } from '@testing-library/react';
 import {
@@ -115,6 +115,17 @@ function installNotification(permission: NotificationPermission) {
   return ctor;
 }
 
+// Pretend to be a Windows machine for one test. Chromium may report an empty
+// navigator.platform, so the user agent alone must be enough.
+function onWindows({ platform = 'Win32', userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' } = {}) {
+  const platformSpy = vi.spyOn(window.navigator, 'platform', 'get').mockReturnValue(platform);
+  const uaSpy = vi.spyOn(window.navigator, 'userAgent', 'get').mockReturnValue(userAgent);
+  onTestFinished(() => {
+    platformSpy.mockRestore();
+    uaSpy.mockRestore();
+  });
+}
+
 describe('NotificationProvider', () => {
   let origNotification: typeof Notification | undefined;
   let notificationCtor: ReturnType<typeof vi.fn>;
@@ -170,6 +181,29 @@ describe('NotificationProvider', () => {
     expect(opts.icon).toBe('/logo.svg');
     // The custom ping is the sound source — the banner never doubles it.
     expect(opts.silent).toBe(true);
+    // Stays until dismissed or clicked everywhere but Windows.
+    expect(opts.requireInteraction).toBe(true);
+  });
+
+  it('lets a message notification time out on Windows instead of sticking on screen', () => {
+    onWindows();
+    renderProbe();
+    act(() => {
+      dispatchSpy!(samplePayload);
+    });
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    const opts = notificationCtor.mock.calls[0][1] as NotificationOptions;
+    expect(opts.requireInteraction).toBe(false);
+  });
+
+  it('recognises Windows from the user agent when the platform is blank', () => {
+    onWindows({ platform: '' });
+    renderProbe();
+    act(() => {
+      dispatchSpy!(samplePayload);
+    });
+    const opts = notificationCtor.mock.calls[0][1] as NotificationOptions;
+    expect(opts.requireInteraction).toBe(false);
   });
 
   it('omits the web notification icon inside the desktop shell', () => {
@@ -563,6 +597,16 @@ describe('NotificationProvider', () => {
     expect(opts.requireInteraction).toBe(true);
     expect(approvalChimeMock).toHaveBeenCalledTimes(1);
     expect(playMock).not.toHaveBeenCalled();
+  });
+
+  it('lets an approval banner time out on Windows instead of sticking on screen', () => {
+    onWindows();
+    renderProbe();
+    act(() => notifyApprovalSpy!(approval));
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    const opts = notificationCtor.mock.calls[0][1] as NotificationOptions;
+    expect(opts.requireInteraction).toBe(false);
+    expect(approvalChimeMock).toHaveBeenCalledTimes(1);
   });
 
   it('says "needs your input" when the agent offers choices', () => {
