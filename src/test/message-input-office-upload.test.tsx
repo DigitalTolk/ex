@@ -186,6 +186,36 @@ describe('MessageInput - Office files', () => {
   });
 
   // Picked with another file, whose chip it leaves alone.
+  // The note stops a download-edit-reupload surprise: that flow puts a NEW
+  // document on SharePoint; sharing the one that exists is done by pasting
+  // its link.
+  it('says the upload makes a new SharePoint document while any chip goes to OneDrive', async () => {
+    let finish!: (v: unknown) => void;
+    mockPutOfficeFile.mockImplementation(() => new Promise((r) => { finish = r; }));
+    renderComposer();
+    pick(docx());
+    // While the file goes up…
+    const banner = await screen.findByTestId('office-upload-banner');
+    expect(banner).toHaveTextContent(
+      'This will upload a new version to SharePoint — to share an existing document, use the SharePoint link instead.',
+    );
+    // …and once it is there.
+    await act(async () => finish({ name: 'Q3 plan.docx', webURL: ONE_DRIVE_URL, size: 5 }));
+    await screen.findByText(/in OneDrive/);
+    expect(screen.getByTestId('office-upload-banner')).toBeInTheDocument();
+    // Removing the chip removes the note with it.
+    fireEvent.click(screen.getByLabelText('Remove Q3 plan.docx'));
+    expect(screen.queryByTestId('office-upload-banner')).toBeNull();
+  });
+
+  it('shows no SharePoint note for ordinary attachments', async () => {
+    attachedAs('att-txt');
+    renderComposer();
+    pick(new File(['n'], 'notes.txt', { type: 'text/plain' }));
+    expect(await screen.findByText('notes.txt')).toBeInTheDocument();
+    expect(screen.queryByTestId('office-upload-banner')).toBeNull();
+  });
+
   it('attaches the file instead when OneDrive refuses it', async () => {
     mockPutOfficeFile.mockRejectedValue(new Error('OneDrive upload refused (409)'));
     mockUploadAttachment.mockImplementation(async (f: File, cb?: { onInit?: (i: object) => void }) => {
@@ -200,6 +230,8 @@ describe('MessageInput - Office files', () => {
     expect(await screen.findByText('Q3 plan.docx')).toBeInTheDocument();
     expect(screen.getByText('notes.txt')).toBeInTheDocument();
     expect(screen.queryByText(/to OneDrive/)).toBeNull();
+    // No chip of this message goes to OneDrive any more, so no note.
+    expect(screen.queryByTestId('office-upload-banner')).toBeNull();
     fireEvent.click(await screen.findByLabelText('Send message'));
     await waitFor(() => expect(onSend).toHaveBeenCalledWith({ body: '', attachmentIDs: ['att-Q3 plan.docx', 'att-notes.txt'] }));
   });
