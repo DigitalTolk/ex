@@ -108,8 +108,23 @@ jobs:
       - name: Frontend deps
         run: npm ci
 
-      - name: Run vitest (all projects) with merged coverage
-        run: npx vitest run --coverage
+      # One invocation used to run everything. On the 16GB runner WebKit's
+      # WebProcess was OOM-killed every so often partway through its queue
+      # while both Chromiums and the jsdom forks churned beside it (job red
+      # with every test green). WebKit now gets the box to itself, and the
+      # blob reports merge so the 100% gate still grades ONE universe.
+      - name: Run vitest, jsdom + chromium (blob report)
+        run: npx vitest run --coverage --reporter=blob --outputFile=.vitest-reports/blob-main.json --project jsdom --project chromium-desktop --project chromium-mobile
+        env:
+          VITEST_RECORD_BLOB: '1'
+
+      - name: Run vitest, webkit alone (blob report)
+        run: npx vitest run --coverage --reporter=blob --outputFile=.vitest-reports/blob-webkit.json --project webkit-iphone
+        env:
+          VITEST_RECORD_BLOB: '1'
+
+      - name: Merge reports, grade merged coverage
+        run: npx vitest run --mergeReports .vitest-reports --coverage
 
       - name: Coverage universe (no file silently ungraded)
         run: node scripts/check-coverage-universe.mjs
