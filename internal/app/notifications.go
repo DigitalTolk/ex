@@ -57,7 +57,7 @@ func (a *App) buildNotifications(context.Context) error {
 	n.svc.SetAudienceCache(audience)
 	c.channels.SetAudienceInvalidator(audience)
 	c.users.SetAudienceInvalidator(audience)
-	push := newPushSender(cfg)
+	push := newPushSender(cfg, c.activity.BadgeCount)
 
 	// Durable task queue (asynq over Redis): mobile pushes (immediate or
 	// ack-deferred) and the notification safety net (a check per message that
@@ -99,12 +99,14 @@ func (a *App) buildNotifications(context.Context) error {
 }
 
 // newPushSender builds the OneSignal mobile-push sender; nil when it is not
-// configured, or misconfigured (mobile push then stays off, loudly).
-func newPushSender(cfg *config.Config) *service.OneSignalPushSender {
+// configured, or misconfigured (mobile push then stays off, loudly). Each
+// push sets the phone app's icon badge from badgeCount.
+func newPushSender(cfg *config.Config, badgeCount func(context.Context, string) (int, error)) *service.OneSignalPushSender {
 	p, err := service.NewOneSignalPushSender(service.OneSignalConfig{
-		AppID:     cfg.OneSignalAppID,
-		APIKey:    cfg.OneSignalRESTAPIKey,
-		PublicURL: cfg.BaseURL,
+		AppID:      cfg.OneSignalAppID,
+		APIKey:     cfg.OneSignalRESTAPIKey,
+		PublicURL:  cfg.BaseURL,
+		BadgeCount: badgeCount,
 	})
 	if err != nil {
 		slog.Warn("OneSignal mobile push disabled", "error", err)

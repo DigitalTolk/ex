@@ -21,14 +21,14 @@ import (
 )
 
 func TestNewPushSender(t *testing.T) {
-	if p := newPushSender(&config.Config{}); p != nil {
+	if p := newPushSender(&config.Config{}, nil); p != nil {
 		t.Fatalf("unconfigured push = %v, want nil", p)
 	}
-	if p := newPushSender(&config.Config{OneSignalAppID: "app", OneSignalRESTAPIKey: "key", BaseURL: "https://ex.example.com"}); p == nil {
+	if p := newPushSender(&config.Config{OneSignalAppID: "app", OneSignalRESTAPIKey: "key", BaseURL: "https://ex.example.com"}, nil); p == nil {
 		t.Fatal("configured push = nil, want a sender")
 	}
 	// A broken public URL disables push (loudly) instead of failing the boot.
-	if p := newPushSender(&config.Config{OneSignalAppID: "app", OneSignalRESTAPIKey: "key", BaseURL: "not a url"}); p != nil {
+	if p := newPushSender(&config.Config{OneSignalAppID: "app", OneSignalRESTAPIKey: "key", BaseURL: "not a url"}, nil); p != nil {
 		t.Fatalf("misconfigured push = %v, want nil", p)
 	}
 }
