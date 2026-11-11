@@ -133,7 +133,8 @@ export function UserGroupDetailDialog({ groupId, canManage, canLinkMicrosoft, on
             </div>
           )}
           {group && canManage && (
-            <DialogFooter>
+            // Up to four actions: they wrap rather than widen the dialog.
+            <DialogFooter className="sm:flex-wrap">
               {canLinkMicrosoft && (
                 <>
                   <Button variant="outline" onClick={() => setLinking(true)}>
