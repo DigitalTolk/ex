@@ -56,6 +56,8 @@ interface CustomTagProps {
   'data-channel-id'?: string;
   'data-slug'?: string;
   'data-group'?: string;
+  'data-usergroup-id'?: string;
+  'data-handle'?: string;
   'data-tag'?: string;
   'data-id'?: string;
   'data-width'?: string;
@@ -77,7 +79,7 @@ const ALLOWED_TAGS = new Set([
   'p', 'a', 'ul', 'ol', 'li', 'blockquote', 'pre', 'code',
   'em', 'strong', 's', 'hr',
   'table', 'thead', 'tbody', 'tr', 'th', 'td',
-  'ex-mention-user', 'ex-mention-channel', 'ex-mention-group',
+  'ex-mention-user', 'ex-mention-usergroup', 'ex-mention-channel', 'ex-mention-group',
   'ex-hashtag', 'ex-giphy', 'ex-media-literal', 'ex-emoji-shortcode',
   'ex-bare-url',
   // Client-injected (decoratePicks below), never server-emitted: a known
@@ -333,6 +335,26 @@ const HAST_COMPONENTS_MAP: Record<string, AnyComponent> = {
       return <Fragment>{opts.renderUserMention(userId, name, isSelf, pill)}</Fragment>;
     }
     return pill;
+  }) as AnyComponent,
+
+  'ex-mention-usergroup': ((props: CustomTagProps) => {
+    const opts = useRenderOpts();
+    const groupId = props['data-usergroup-id'] ?? '';
+    const handle = props['data-handle'] ?? '';
+    const pill = (mine: boolean) => (
+      <span
+        data-testid="usergroup-mention-pill"
+        data-usergroup-id={groupId}
+        data-mention-self={mine ? 'true' : 'false'}
+        className={`${MENTION_PILL_BASE}${mine ? MENTION_PILL_HIGHLIGHT : MENTION_PILL_OTHER}`}
+      >
+        @{handle}
+      </span>
+    );
+    if (opts?.renderUserGroupMention) {
+      return <Fragment>{opts.renderUserGroupMention(groupId, handle, pill)}</Fragment>;
+    }
+    return pill(false);
   }) as AnyComponent,
 
   'ex-mention-channel': ((props: CustomTagProps) => {

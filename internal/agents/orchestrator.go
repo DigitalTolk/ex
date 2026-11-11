@@ -3665,11 +3665,9 @@ func (o *Orchestrator) RenderMessages(ctx context.Context, msgs []*model.Message
 	return b.String()
 }
 
-// mentionMarkupRE / channelMarkupRE match the editor's raw mention tokens.
-var (
-	mentionMarkupRE = regexp.MustCompile(`@\[[^|\]]+\|([^\]]+)\]`)
-	channelMarkupRE = regexp.MustCompile(`~\[[^|\]]+\|([^\]]+)\]`)
-)
+// channelMarkupRE matches the editor's raw channel tokens; @-mention tokens
+// go through service.PlainMentions, the one scanner of that syntax.
+var channelMarkupRE = regexp.MustCompile(`~\[[^|\]]+\|([^\]]+)\]`)
 
 // defangThreadBody makes another participant's message safe to place in an
 // agent's context. Chat bodies are UNTRUSTED — a hostile member can write
@@ -3681,7 +3679,7 @@ var (
 // instruction-like prose — that is the job of the # Thread framing and the
 // system rules, which tell the model thread content is data, not commands.
 func defangThreadBody(body string) string {
-	body = mentionMarkupRE.ReplaceAllString(body, "@$1")
+	body = service.PlainMentions(body)
 	body = channelMarkupRE.ReplaceAllString(body, "~$1")
 	return body
 }

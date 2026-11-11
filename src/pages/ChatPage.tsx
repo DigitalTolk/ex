@@ -409,6 +409,12 @@ export default function ChatPage() {
       // An admin changed a bot or its tokens: the admin page's lists refetch.
       queryClient.invalidateQueries({ queryKey: queryKeys.bots() });
     },
+    [EventType.UserGroupChanged]: () => {
+      // A user group was created, edited, enabled/disabled or had its members
+      // changed: the directory, autocomplete roster, open details, pills'
+      // popovers and profiles' group lists all refetch.
+      queryClient.invalidateQueries({ queryKey: queryKeys.userGroupsAll() });
+    },
     [EventType.ProjectChanged]: () => {
       // A project or its design references changed (any member, any device):
       // the list and every open project detail refetch.
@@ -418,6 +424,8 @@ export default function ChatPage() {
       // An admin saved the workspace settings — refetch what they gate (the
       // Runners tab appears or goes away without a reload).
       queryClient.invalidateQueries({ queryKey: queryKeys.workspaceSettings() });
+      // …and who may manage user groups, which the settings decide.
+      queryClient.invalidateQueries({ queryKey: queryKeys.userGroupPermissions() });
     },
     [EventType.RunnersChanged]: () => {
       // One of my computers was connected or disconnected, or came online.

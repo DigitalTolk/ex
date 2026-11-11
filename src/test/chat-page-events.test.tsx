@@ -948,6 +948,20 @@ describe('ChatPage WebSocket handlers', () => {
     expect(spy).toHaveBeenCalledWith({ queryKey: ['bots'] });
   });
 
+  it('onUserGroupChanged refetches every user-group query', () => {
+    const { qc } = renderAt('/');
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+    (capturedOptions.onUserGroupChanged as (d: unknown) => void)({ groupId: 'group-1' });
+    expect(spy).toHaveBeenCalledWith({ queryKey: ['usergroups'] });
+  });
+
+  it('onSettingsUpdated also refetches who may manage user groups', () => {
+    const { qc } = renderAt('/');
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+    (capturedOptions.onSettingsUpdated as (d: unknown) => void)({});
+    expect(spy).toHaveBeenCalledWith({ queryKey: ['usergroups', 'permissions'] });
+  });
+
   it('onProjectChanged refreshes the projects list and every open project', () => {
     const { qc } = renderAt('/');
     const spy = vi.spyOn(qc, 'invalidateQueries');

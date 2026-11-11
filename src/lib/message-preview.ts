@@ -1,4 +1,4 @@
-import { USER_MENTION_RE_GLOBAL, CHANNEL_MENTION_RE_GLOBAL } from './mention-syntax';
+import { CHANNEL_MENTION_RE_GLOBAL, replaceMentions } from './mention-syntax';
 import { EMOJI_SHORTCODE_RE_GLOBAL, shortcodeToUnicode } from './emoji-shortcodes';
 
 // renderEmojiGlyphs replaces every known :shortcode: (and toned
@@ -15,7 +15,7 @@ function renderEmojiGlyphs(text: string): string {
 // toPlainTextPreview flattens a stored message body into readable one-line text
 // for surfaces that show a preview WITHOUT the full markdown renderer (e.g. the
 // drafts list). It mirrors the backend notification `previewBody`:
-//   - user mentions    `@[userID|DisplayName]` → `@DisplayName`
+//   - user and user-group mentions `@[id|Label]` → `@Label`
 //   - channel mentions `~[channelID|slug]`     → `~slug`
 //   - emoji shortcodes `:smile:` (and toned)   → the glyph (unknown left as-is)
 //   - collapses whitespace/newlines to single spaces
@@ -23,8 +23,6 @@ function renderEmojiGlyphs(text: string): string {
 // Surfaces that DO render markdown (the message list, search hits, unfurls) must
 // keep using renderMarkdown — this is only for plain-text/truncated previews.
 export function toPlainTextPreview(body: string): string {
-  const flattened = body
-    .replace(USER_MENTION_RE_GLOBAL, '@$2')
-    .replace(CHANNEL_MENTION_RE_GLOBAL, '~$2');
+  const flattened = replaceMentions(body, (t) => `@${t.label}`).replace(CHANNEL_MENTION_RE_GLOBAL, '~$2');
   return renderEmojiGlyphs(flattened).replace(/\s+/g, ' ').trim();
 }

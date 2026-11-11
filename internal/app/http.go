@@ -118,6 +118,7 @@ func (a *App) buildHTTP(context.Context) error {
 		Search:       handler.NewSearchHandler(s.searcher, s.access, c.users, c.channels),
 		Webhook:      handler.NewWebhookHandler(c.webhooks),
 		Bot:          handler.NewBotHandler(c.bots),
+		UserGroup:    handler.NewUserGroupHandler(c.userGroups),
 		Mattermost:   handler.NewMattermostHandler(c.bots, c.users, c.mattermost),
 		Activity:     handler.NewActivityHandler(c.activity, c.reminders),
 		Command:      handler.NewCommandHandler(c.commands),

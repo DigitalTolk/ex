@@ -145,7 +145,7 @@ export function ChannelView() {
   const channelID = channel?.id ?? knownChannel?.channelID;
   // After sending a message that @mentions people not in the channel, offer to
   // invite them in one click (see NonMemberInvitePrompt).
-  const { pendingInvites, checkMentions, clearInvites } = useNonMemberInvite(channel?.id, user?.id);
+  const { pendingInvites, pendingGroupInvites, channelIsPrivate, checkMentions, clearInvites } = useNonMemberInvite(channel?.id, user?.id);
   // Surface an invite prompt for any mentioned non-members (supersedes a
   // previous prompt; empty result clears it).
   const inviteMentioned = useCallback((value: { body: string }) => checkMentions(value.body), [checkMentions]);
@@ -426,11 +426,13 @@ export function ChannelView() {
               ) : undefined
             }
           />
-          {channel && !archived && !activeEditingMessage && pendingInvites.length > 0 && (
+          {channel && !archived && !activeEditingMessage && (pendingInvites.length > 0 || pendingGroupInvites.length > 0) && (
             <NonMemberInvitePrompt
               channelId={channel.id}
               channelName={channel.slug}
               users={pendingInvites}
+              groups={pendingGroupInvites}
+              isPrivate={channelIsPrivate}
               onDismiss={clearInvites}
             />
           )}

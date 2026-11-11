@@ -145,6 +145,28 @@ type MessageService struct {
 	// mention doesn't make them follow the thread. Optional seam
 	// (SetDeactivatedAccounts) — nil follows everyone mentioned.
 	deactivated DeactivatedAccounts
+	// userGroups turns typed "@handle"s into group mentions and resolves the
+	// groups a message mentions (SetUserGroups).
+	userGroups UserGroupMentions
+}
+
+// UserGroupMentions is what the message paths need from user groups
+// (UserGroupService).
+type UserGroupMentions interface {
+	CanonicalizeMentions(ctx context.Context, authorID, body string) string
+	MentionedMembers(ctx context.Context, authorID string, ids []string) (map[string][]string, error)
+}
+
+// SetUserGroups wires user-group mentions into sends, edits and thread follows.
+func (s *MessageService) SetUserGroups(u UserGroupMentions) { s.userGroups = u }
+
+// canonicalizeUserGroups stores a typed "@handle" of an enabled group as the
+// group's mention token.
+func (s *MessageService) canonicalizeUserGroups(ctx context.Context, authorID, body string) string {
+	if s.userGroups == nil {
+		return body
+	}
+	return s.userGroups.CanonicalizeMentions(ctx, authorID, body)
 }
 
 // DeactivatedAccounts reports which of userIDs are deactivated accounts
@@ -726,6 +748,9 @@ func (s *MessageService) sendRun(ctx context.Context, authorID, accessorID, pare
 	if err := ValidateMessageBody(body); err != nil {
 		return nil, err
 	}
+	if authorID == accessorID {
+		body = s.canonicalizeUserGroups(ctx, authorID, body)
+	}
 	if err := ValidateAttachmentCount(len(attachmentIDs)); err != nil {
 		return nil, err
 	}
@@ -955,6 +980,7 @@ func (s *MessageService) sendMachine(ctx context.Context, in WebhookMessageInput
 	if err := ValidateMessageBody(in.Body); err != nil {
 		return nil, err
 	}
+	in.Body = s.canonicalizeUserGroups(ctx, authorID, in.Body)
 	if err := ValidateAttachmentCount(len(in.Attachments)); err != nil {
 		return nil, err
 	}
@@ -1131,8 +1157,8 @@ func (s *MessageService) followMentionedThreadUsers(ctx context.Context, msg *mo
 	if s.threadFollows == nil || msg == nil || msg.ParentMessageID == "" {
 		return
 	}
-	mentions := ParseMentions(msg.Body)
-	if len(mentions.Users) == 0 {
+	mentioned := s.mentionedUserIDs(ctx, msg)
+	if len(mentioned) == 0 {
 		return
 	}
 	// Resolve access checks first, then issue a single batch write
@@ -1140,19 +1166,16 @@ func (s *MessageService) followMentionedThreadUsers(ctx context.Context, msg *mo
 	// previously cost 5 DynamoDB round-trips on the message-send path;
 	// this drops it to 1.
 	now := time.Now()
-	follows := make([]*model.ThreadFollow, 0, len(mentions.Users))
-	seen := make(map[string]struct{}, len(mentions.Users))
-	for _, mention := range mentions.Users {
-		if mention.UserID == "" || mention.UserID == msg.AuthorID {
+	follows := make([]*model.ThreadFollow, 0, len(mentioned))
+	for _, userID := range mentioned {
+		if userID == msg.AuthorID {
 			continue
 		}
-		// ParseMentions already de-duplicates users, so no dup-check here.
-		if err := s.checkAccess(ctx, mention.UserID, msg.ParentID, parentType); err != nil {
+		if err := s.checkAccess(ctx, userID, msg.ParentID, parentType); err != nil {
 			continue
 		}
-		seen[mention.UserID] = struct{}{}
 		follows = append(follows, &model.ThreadFollow{
-			UserID:         mention.UserID,
+			UserID:         userID,
 			ParentID:       msg.ParentID,
 			ParentType:     parentType,
 			ThreadRootID:   msg.ParentMessageID,
@@ -1168,6 +1191,38 @@ func (s *MessageService) followMentionedThreadUsers(ctx context.Context, msg *mo
 	if err := s.threadFollows.SetThreadFollowMany(ctx, follows); err != nil {
 		slog.WarnContext(ctx, "thread mention follow batch failed", "count", len(follows), "threadRootID", msg.ParentMessageID, "error", err)
 	}
+}
+
+// mentionedUserIDs lists, de-duplicated and in order, everyone msg mentions:
+// by name, then through each enabled group it mentions. A failed group
+// lookup leaves out the groups' members (logged): the named mentions still
+// follow.
+func (s *MessageService) mentionedUserIDs(ctx context.Context, msg *model.Message) []string {
+	mentions := ParseMentions(msg.Body)
+	ids := make([]string, 0, len(mentions.Users))
+	for _, m := range mentions.Users {
+		ids = append(ids, m.UserID)
+	}
+	if len(mentions.UserGroups) == 0 || s.userGroups == nil {
+		return ids
+	}
+	groupIDs := make([]string, len(mentions.UserGroups))
+	for i, g := range mentions.UserGroups {
+		groupIDs[i] = g.ID
+	}
+	members, err := s.userGroups.MentionedMembers(ctx, msg.AuthorID, groupIDs)
+	if err != nil {
+		slog.WarnContext(ctx, "thread mention follow: user-group lookup failed; following named mentions only", "error", err)
+		return ids
+	}
+	for _, id := range groupIDs {
+		for _, uid := range members[id] {
+			if !slices.Contains(ids, uid) {
+				ids = append(ids, uid)
+			}
+		}
+	}
+	return ids
 }
 
 // withoutDeactivated drops the follows of deactivated accounts: mentioning
@@ -1668,6 +1723,7 @@ func (s *MessageService) Edit(ctx context.Context, userID, parentID, parentType,
 	if err := ValidateMessageBody(newBody); err != nil {
 		return nil, err
 	}
+	newBody = s.canonicalizeUserGroups(ctx, userID, newBody)
 	if err := ValidateAttachmentCount(len(finalAttachments)); err != nil {
 		return nil, err
 	}

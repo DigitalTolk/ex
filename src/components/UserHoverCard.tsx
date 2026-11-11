@@ -7,6 +7,7 @@ import { MessageSquare } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
 import { useOpenDM } from '@/hooks/useConversations';
+import { useUserGroupsForUser } from '@/hooks/useUserGroups';
 import { getInitials } from '@/lib/format';
 import { PopoverPortal } from '@/components/PopoverPortal';
 import { UserStatusIndicator } from '@/components/UserStatusIndicator';
@@ -178,6 +179,9 @@ function UserHoverCardContent({
   // The shared "message this person" path: navigates on success, toasts on
   // failure (this card's own copy used to fail silently).
   const { openDM, isPending: openDMPending } = useOpenDM();
+  // The enabled groups this person belongs to. A guest viewer is refused
+  // (guests can't use groups) and sees none.
+  const { data: userGroups = [] } = useUserGroupsForUser(userId);
 
   // Non-admin viewers receive a limited payload (status, displayName,
   // avatarURL); admins get the full record including authProvider — both
@@ -290,6 +294,14 @@ function UserHoverCardContent({
               <div className="flex justify-between gap-3">
                 <dt className="text-muted-foreground">Last seen</dt>
                 <dd>{lastSeen}</dd>
+              </div>
+            )}
+            {userGroups.length > 0 && (
+              <div className="flex justify-between gap-3">
+                <dt className="text-muted-foreground">User groups</dt>
+                <dd className="min-w-0 text-right" data-testid="hover-card-usergroups">
+                  <span className="break-words">{userGroups.map((g) => `@${g.handle}`).join(', ')}</span>
+                </dd>
               </div>
             )}
           </dl>

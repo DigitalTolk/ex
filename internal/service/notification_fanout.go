@@ -287,6 +287,11 @@ func (s *NotificationService) fanOut(ctx context.Context, msg *model.Message, pa
 			explicitSet[m.UserID] = true
 		}
 	}
+	// A user-group mention IS a direct @-mention of each member (it bypasses
+	// mute and level the same way); userGroupOf keeps which group named them
+	// for the Activity row. A failed lookup alerts everyone else now and
+	// leaves the fan-out unmarked, so the safety net runs it again.
+	userGroupOf, userGroupsResolved := s.userGroupMembers(ctx, msg, mentions)
 	groupSet := make(map[string]bool)
 	if mentions.All || mentions.Here {
 		// @here needs presence for the WHOLE member list — resolve it in one
@@ -432,8 +437,10 @@ func (s *NotificationService) fanOut(ctx context.Context, msg *model.Message, pa
 		// of even the quiet "mentions, DMs & keywords" level — except for a
 		// thread they unfollowed, which goes by the levels like a channel's.
 		dm := parentType == ParentConversation && !unfollowed[uid]
+		viaUserGroup := !explicitSet[uid] && userGroupOf[uid] != nil
 		r := recipientReasons{
-			explicitMention:   explicitSet[uid],
+			explicitMention:   explicitSet[uid] || viaUserGroup,
+			viaUserGroup:      viaUserGroup,
 			groupMention:      groupSet[uid] && !eff.IgnoreGroupMentions,
 			muted:             snap.muted[uid],
 			threadReply:       isThreadReply,
@@ -459,6 +466,9 @@ func (s *NotificationService) fanOut(ctx context.Context, msg *model.Message, pa
 					item.ID = store.NewID()
 					item.Type = typ
 					item.MentionKind = kind
+					if kind == model.MentionKindUserGroup {
+						item.UserGroupID, item.UserGroupHandle = userGroupOf[uid].ID, userGroupOf[uid].Handle
+					}
 					activityItems[uid] = &item
 				}
 			}
@@ -609,14 +619,15 @@ func (s *NotificationService) fanOut(ctx context.Context, msg *model.Message, pa
 	if isThreadReply && threadRoot != nil && len(threadAudience) > 0 {
 		s.publishThreadUpdate(ctx, msg, parentType, threadRoot, threadAudience)
 	}
-	return snap.loaded
+	return snap.loaded && userGroupsResolved
 }
 
 // recipientReasons captures, for one recipient and one message, the precomputed
 // signals eligibleAtLevel needs. Keeping it a plain struct makes the decision a
 // pure function that is trivial to unit-test across the level matrix.
 type recipientReasons struct {
-	explicitMention   bool // @-mentioned by user id (bypasses mute + level)
+	explicitMention   bool // @-mentioned by user id or through a user group (bypasses mute + level)
+	viaUserGroup      bool // the explicit mention came only through a user group
 	groupMention      bool // @all/@here applies after the ignore preference
 	muted             bool // channel muted (suppresses everything but explicit @)
 	threadReply       bool // the message is a reply within a thread
@@ -647,6 +658,8 @@ func activityFor(parentType string, r recipientReasons, groupKind model.MentionK
 		return "", ""
 	}
 	switch {
+	case r.explicitMention && r.viaUserGroup:
+		return model.ActivityMention, model.MentionKindUserGroup
 	case r.explicitMention:
 		return model.ActivityMention, model.MentionKindUser
 	case r.groupMention:
@@ -691,4 +704,36 @@ func eligibleAtLevel(level model.NotificationLevel, r recipientReasons) bool {
 		return true
 	}
 	return r.keyword
+}
+
+// userGroupMembers resolves the user groups msg mentions to their members,
+// mapping each member (but the author) to the first group in the body that
+// names them. It reports false when the lookup failed after its retries: the
+// caller alerts everyone else and leaves the fan-out for the safety net.
+func (s *NotificationService) userGroupMembers(ctx context.Context, msg *model.Message, mentions ParsedMentions) (map[string]*MentionUserGroup, bool) {
+	if len(mentions.UserGroups) == 0 || s.userGroups == nil {
+		return nil, true
+	}
+	ids := make([]string, len(mentions.UserGroups))
+	for i, g := range mentions.UserGroups {
+		ids[i] = g.ID
+	}
+	members, err := retryAudienceLoad(ctx, func() (map[string][]string, error) {
+		return s.userGroups.MentionedMembers(ctx, msg.AuthorID, ids)
+	})
+	if err != nil {
+		slog.ErrorContext(ctx, "user-group mention: members unresolved — alerting the rest, the safety net will retry",
+			"messageID", msg.ID, "error", err)
+		return nil, false
+	}
+	out := make(map[string]*MentionUserGroup)
+	for i := range mentions.UserGroups {
+		g := &mentions.UserGroups[i]
+		for _, uid := range members[g.ID] {
+			if uid != msg.AuthorID && out[uid] == nil {
+				out[uid] = g
+			}
+		}
+	}
+	return out, true
 }

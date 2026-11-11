@@ -137,6 +137,8 @@ type NotificationService struct {
 	marker NotifyMarker
 	// mentions names mentioned users/channels in alert text (SetMentionResolver).
 	mentions MentionResolver
+	// userGroups resolves user-group mentions (SetUserGroups).
+	userGroups UserGroupMembers
 }
 
 // ActivityRecorder receives the Activity-tab entries the fan-out decides on
@@ -256,3 +258,13 @@ func (s *NotificationService) SetActivityRecorder(a ActivityRecorder) { s.activi
 // mentioned user and channel by its current name, looked up by ID. Optional —
 // without it mentions read as the poster typed them.
 func (s *NotificationService) SetMentionResolver(r MentionResolver) { s.mentions = r }
+
+// UserGroupMembers resolves the groups a message mentions to their members
+// (UserGroupService).
+type UserGroupMembers interface {
+	MentionedMembers(ctx context.Context, authorID string, ids []string) (map[string][]string, error)
+}
+
+// SetUserGroups wires user-group mentions into the fan-out: each member who
+// can see the message is alerted as if @-mentioned by name.
+func (s *NotificationService) SetUserGroups(u UserGroupMembers) { s.userGroups = u }

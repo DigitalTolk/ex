@@ -28,6 +28,7 @@ func (s *UserService) Wired() error {
 		wiring.Dep{Name: "automation stopper", Set: s.automations != nil},
 		wiring.Dep{Name: "audience invalidator", Set: s.audience != nil},
 		wiring.Dep{Name: "reminder canceller", Set: s.reminders != nil},
+		wiring.Dep{Name: "user-group membership", Set: s.userGroups != nil},
 	)
 }
 
@@ -72,6 +73,7 @@ func (s *MessageService) Wired() error {
 		wiring.Dep{Name: "draft clearer", Set: s.drafts != nil},
 		wiring.Dep{Name: "activity recorder", Set: s.activity != nil},
 		wiring.Dep{Name: "reminder sync", Set: s.reminders != nil},
+		wiring.Dep{Name: "user groups", Set: s.userGroups != nil},
 	))
 }
 
@@ -88,6 +90,7 @@ func (s *NotificationService) Wired() error {
 		wiring.Dep{Name: "audience cache", Set: s.audience != nil},
 		wiring.Dep{Name: "activity recorder", Set: s.activity != nil},
 		wiring.Dep{Name: "mention resolver", Set: s.mentions != nil},
+		wiring.Dep{Name: "user groups", Set: s.userGroups != nil},
 	))
 }
 
@@ -180,5 +183,15 @@ func (s *ReminderService) Wired() error {
 func (s *ScheduledMessageService) Wired() error {
 	return wiring.Check("scheduled message service",
 		wiring.Dep{Name: "draft clearer", Set: s.drafts != nil},
+	)
+}
+
+func (s *UserGroupService) Wired() error {
+	return wiring.Check("user group service",
+		wiring.Dep{Name: "group store", Set: s.groups != nil},
+		wiring.Dep{Name: "people", Set: s.people != nil},
+		wiring.Dep{Name: "bot names", Set: s.bots != nil},
+		wiring.Dep{Name: "publisher", Set: s.publisher != nil},
+		wiring.Dep{Name: "shared copy", Set: s.copies != nil},
 	)
 }
