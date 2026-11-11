@@ -1,6 +1,6 @@
 module github.com/DigitalTolk/ex
 
-go 1.26.4
+go 1.26.10
 
 require (
 	code.dny.dev/ssrf v0.3.0
@@ -35,7 +35,7 @@ require (
 	github.com/redis/go-redis/v9 v9.23.0
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/testcontainers/testcontainers-go v0.45.0
-	github.com/wneessen/go-mail v0.8.1
+	github.com/wneessen/go-mail v0.8.2
 	github.com/yuin/goldmark v1.8.7
 	golang.org/x/crypto v0.58.0
 	golang.org/x/net v0.62.0
