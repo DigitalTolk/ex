@@ -15,6 +15,17 @@ type RunnerToken struct {
 	Label     string    `json:"label" dynamodbav:"label"`
 	CreatedAt time.Time `json:"createdAt" dynamodbav:"createdAt"`
 	ExpiresAt time.Time `json:"expiresAt" dynamodbav:"expiresAt"`
+	// LastUsedAt and LastIP say when and from where the install last made a
+	// request — refreshed at most every few minutes, or when the IP changes.
+	LastUsedAt time.Time `json:"lastUsedAt,omitempty" dynamodbav:"lastUsedAt,omitempty"`
+	LastIP     string    `json:"lastIP,omitempty" dynamodbav:"lastIP,omitempty"`
+	// DeviceKey is the install's device-bound public key (base64 std of a
+	// P-256 SPKI DER). When set, every request must carry a proof signed by
+	// its private key, which never leaves the computer.
+	DeviceKey string `json:"-" dynamodbav:"deviceKey,omitempty"`
+	// DeviceKeyHardware reports that the private key lives in the computer's
+	// secure chip rather than in a file.
+	DeviceKeyHardware bool `json:"deviceKeyHardware,omitempty" dynamodbav:"deviceKeyHardware,omitempty"`
 }
 
 // RunnerGrant is the short-lived, single-use approval a signed-in user gives

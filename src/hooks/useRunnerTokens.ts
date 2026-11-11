@@ -17,6 +17,13 @@ export interface RunnerInstall {
   label: string;
   createdAt: string;
   expiresAt: string;
+  // When and from where the install last reached the server (refreshed every
+  // few minutes); absent until its first request.
+  lastUsedAt?: string;
+  lastIP?: string;
+  // What the connection is locked to: the computer's secure chip, a key file
+  // on it, or nothing yet (an ex-runner that predates device keys).
+  deviceKey?: 'hardware' | 'software' | '';
   online?: boolean;
   os?: string;
   version?: string;

@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"log/slog"
 	"net"
 	"net/http"
@@ -121,19 +123,46 @@ func AuthScopeWithUserStatus(jwtMgr *auth.JWTManager, scope string, users authUs
 	}
 }
 
-// RunnerTokenChecker reports whether a runner token's record still exists —
-// the per-install revocation check behind every runner request. false means
-// the install was revoked (Runners page, `ex-runner logout`, account
-// deactivation) or has expired; an error means the check itself failed.
-type RunnerTokenChecker interface {
-	RunnerTokenActive(ctx context.Context, claims *model.TokenClaims) (bool, error)
+// RunnerProofHeader carries a device-bound runner's signature over the
+// request: "v1.<unix-seconds>.<base64url DER signature>".
+const RunnerProofHeader = "X-Ex-Runner-Proof"
+
+// RunnerRequest is what the runner middleware hands its checker about one
+// request: enough to verify the device proof and to record where the install
+// was last used.
+type RunnerRequest struct {
+	Method string
+	Path   string
+	Proof  string
+	IP     string
 }
 
-// AuthRunner is AuthScope(runner) plus the revocation check. A revoked token
-// is a 401 — the runner stops and asks for a fresh `ex-runner login`. A
-// failed check is a 503 instead, so a store blip makes the runner back off
-// and retry rather than give up on a credential that is probably fine. A nil
-// checker fails closed: no runner token is accepted at all.
+// RunnerRefusal is a checker's answer for a request it refuses: the status
+// and the stable code the runner acts on (runner_disconnected,
+// runner_clock_skew, runner_upgrade_required).
+type RunnerRefusal struct {
+	Status  int
+	Code    string
+	Message string
+}
+
+func (e *RunnerRefusal) Error() string { return e.Message }
+
+// RunnerTokenChecker is the per-request check behind every runner route: the
+// install must still exist (revocation on the Runners page, `ex-runner
+// logout`, account deactivation, expiry) and, when it has a device key, the
+// request must prove it holds it. It answers nil for an accepted request, a
+// *RunnerRefusal, or any other error when the check itself failed.
+type RunnerTokenChecker interface {
+	CheckRunner(ctx context.Context, claims *model.TokenClaims, req RunnerRequest) error
+}
+
+// AuthRunner is AuthScope(runner) plus the per-install check. A refusal is a
+// JSON error with its status (401 for a revoked install — the runner stops
+// and asks for a fresh `ex-runner login`). A failed check is a 503 instead,
+// so a store blip makes the runner back off and retry rather than give up on
+// a credential that is probably fine. A nil checker fails closed: no runner
+// token is accepted at all.
 func AuthRunner(jwtMgr *auth.JWTManager, checker RunnerTokenChecker) func(http.Handler) http.Handler {
 	scoped := AuthScope(jwtMgr, model.TokenScopeRunner)
 	return func(next http.Handler) http.Handler {
@@ -142,13 +171,23 @@ func AuthRunner(jwtMgr *auth.JWTManager, checker RunnerTokenChecker) func(http.H
 				http.Error(w, "invalid token", http.StatusUnauthorized)
 				return
 			}
-			active, err := checker.RunnerTokenActive(r.Context(), ClaimsFromContext(r.Context()))
-			if err != nil {
-				http.Error(w, "runner token check unavailable", http.StatusServiceUnavailable)
+			err := checker.CheckRunner(r.Context(), ClaimsFromContext(r.Context()), RunnerRequest{
+				Method: r.Method,
+				Path:   r.URL.Path,
+				Proof:  r.Header.Get(RunnerProofHeader),
+				IP:     clientIP(r),
+			})
+			var refusal *RunnerRefusal
+			if errors.As(err, &refusal) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(refusal.Status)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"error": map[string]string{"code": refusal.Code, "message": refusal.Message},
+				})
 				return
 			}
-			if !active {
-				http.Error(w, "runner token revoked", http.StatusUnauthorized)
+			if err != nil {
+				http.Error(w, "runner token check unavailable", http.StatusServiceUnavailable)
 				return
 			}
 			next.ServeHTTP(w, r)

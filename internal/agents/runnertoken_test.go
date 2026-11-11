@@ -24,6 +24,8 @@ type rtFakeStore struct {
 	grants map[string]*model.RunnerGrant
 	tokens map[string]*model.RunnerToken
 	fail   map[string]error // method name → error to return
+	// touches counts last-used writes, failed ones included.
+	touches int
 }
 
 func newRTFakeStore() *rtFakeStore {
@@ -81,6 +83,30 @@ func (f *rtFakeStore) SetRunnerTokenExpiry(_ context.Context, id string, expires
 		return store.ErrNotFound
 	}
 	t.ExpiresAt = expiresAt
+	return nil
+}
+
+func (f *rtFakeStore) TouchRunnerToken(_ context.Context, id string, at time.Time, ip string) error {
+	f.touches++
+	if err := f.fail["TouchRunnerToken"]; err != nil {
+		return err
+	}
+	t, ok := f.tokens[id]
+	if !ok {
+		return store.ErrNotFound
+	}
+	t.LastUsedAt, t.LastIP = at, ip
+	return nil
+}
+
+func (f *rtFakeStore) RevokeRunnerToken(_ context.Context, id string) error {
+	if err := f.fail["RevokeRunnerToken"]; err != nil {
+		return err
+	}
+	if _, ok := f.tokens[id]; !ok {
+		return store.ErrNotFound
+	}
+	delete(f.tokens, id)
 	return nil
 }
 
@@ -264,7 +290,7 @@ func TestRunnerToken_ExchangeIssuesOnceAndRecords(t *testing.T) {
 	env := newRTEnv()
 	code, verifier := env.grant(t, "mac")
 
-	issued, err := env.svc.Exchange(ctx, code, verifier)
+	issued, err := env.svc.Exchange(ctx, code, verifier, nil)
 	if err != nil {
 		t.Fatalf("Exchange: %v", err)
 	}
@@ -279,7 +305,7 @@ func TestRunnerToken_ExchangeIssuesOnceAndRecords(t *testing.T) {
 	if rec == nil || rec.UserID != "u-alice" || rec.Label != "mac" || !rec.CreatedAt.Equal(env.now) || !rec.ExpiresAt.Equal(wantExp) {
 		t.Fatalf("record = %+v", rec)
 	}
-	if _, err := env.svc.Exchange(ctx, code, verifier); !errors.Is(err, ErrRunnerGrantInvalid) {
+	if _, err := env.svc.Exchange(ctx, code, verifier, nil); !errors.Is(err, ErrRunnerGrantInvalid) {
 		t.Fatalf("second redemption: want ErrRunnerGrantInvalid, got %v", err)
 	}
 }
@@ -291,21 +317,21 @@ func TestRunnerToken_ExchangeRefusals(t *testing.T) {
 	t.Run("malformed input", func(t *testing.T) {
 		env := newRTEnv()
 		for _, c := range [][2]string{{"", verifier}, {"code", "short"}, {"code", strings.Repeat("!", 50)}} {
-			if _, err := env.svc.Exchange(ctx, c[0], c[1]); !errors.Is(err, ErrRunnerGrantInvalid) {
+			if _, err := env.svc.Exchange(ctx, c[0], c[1], nil); !errors.Is(err, ErrRunnerGrantInvalid) {
 				t.Fatalf("%q/%q: want ErrRunnerGrantInvalid, got %v", c[0], c[1], err)
 			}
 		}
 	})
 	t.Run("unknown code", func(t *testing.T) {
 		env := newRTEnv()
-		if _, err := env.svc.Exchange(ctx, "nope", verifier); !errors.Is(err, ErrRunnerGrantInvalid) {
+		if _, err := env.svc.Exchange(ctx, "nope", verifier, nil); !errors.Is(err, ErrRunnerGrantInvalid) {
 			t.Fatalf("want ErrRunnerGrantInvalid, got %v", err)
 		}
 	})
 	t.Run("store failure", func(t *testing.T) {
 		env := newRTEnv()
 		env.store.fail["TakeRunnerGrant"] = errRTFake
-		if _, err := env.svc.Exchange(ctx, "code", verifier); !errors.Is(err, errRTFake) {
+		if _, err := env.svc.Exchange(ctx, "code", verifier, nil); !errors.Is(err, errRTFake) {
 			t.Fatalf("want errRTFake, got %v", err)
 		}
 	})
@@ -313,7 +339,7 @@ func TestRunnerToken_ExchangeRefusals(t *testing.T) {
 		env := newRTEnv()
 		code, v := env.grant(t, "mac")
 		env.now = env.now.Add(runnerGrantTTL)
-		if _, err := env.svc.Exchange(ctx, code, v); !errors.Is(err, ErrRunnerGrantInvalid) {
+		if _, err := env.svc.Exchange(ctx, code, v, nil); !errors.Is(err, ErrRunnerGrantInvalid) {
 			t.Fatalf("want ErrRunnerGrantInvalid, got %v", err)
 		}
 	})
@@ -321,10 +347,10 @@ func TestRunnerToken_ExchangeRefusals(t *testing.T) {
 		env := newRTEnv()
 		code, v := env.grant(t, "mac")
 		wrong, _ := rtPKCE("w")
-		if _, err := env.svc.Exchange(ctx, code, wrong); !errors.Is(err, ErrRunnerGrantInvalid) {
+		if _, err := env.svc.Exchange(ctx, code, wrong, nil); !errors.Is(err, ErrRunnerGrantInvalid) {
 			t.Fatalf("want ErrRunnerGrantInvalid, got %v", err)
 		}
-		if _, err := env.svc.Exchange(ctx, code, v); !errors.Is(err, ErrRunnerGrantInvalid) {
+		if _, err := env.svc.Exchange(ctx, code, v, nil); !errors.Is(err, ErrRunnerGrantInvalid) {
 			t.Fatalf("code must be spent after a wrong verifier, got %v", err)
 		}
 	})
@@ -332,21 +358,21 @@ func TestRunnerToken_ExchangeRefusals(t *testing.T) {
 		env := newRTEnv()
 		code, v := env.grant(t, "mac")
 		delete(env.users.users, "u-alice")
-		if _, err := env.svc.Exchange(ctx, code, v); !errors.Is(err, ErrRunnerGrantInvalid) {
+		if _, err := env.svc.Exchange(ctx, code, v, nil); !errors.Is(err, ErrRunnerGrantInvalid) {
 			t.Fatalf("vanished owner: want ErrRunnerGrantInvalid, got %v", err)
 		}
 
 		env = newRTEnv()
 		code, v = env.grant(t, "mac")
 		env.users.err = errRTFake
-		if _, err := env.svc.Exchange(ctx, code, v); !errors.Is(err, errRTFake) {
+		if _, err := env.svc.Exchange(ctx, code, v, nil); !errors.Is(err, errRTFake) {
 			t.Fatalf("lookup failure: want errRTFake, got %v", err)
 		}
 
 		env = newRTEnv()
 		code, v = env.grant(t, "mac")
 		env.users.users["u-alice"].Status = "deactivated"
-		if _, err := env.svc.Exchange(ctx, code, v); !errors.Is(err, ErrRunnerGrantInvalid) {
+		if _, err := env.svc.Exchange(ctx, code, v, nil); !errors.Is(err, ErrRunnerGrantInvalid) {
 			t.Fatalf("deactivated: want ErrRunnerGrantInvalid, got %v", err)
 		}
 	})
@@ -354,14 +380,14 @@ func TestRunnerToken_ExchangeRefusals(t *testing.T) {
 		env := newRTEnv()
 		code, v := env.grant(t, "mac")
 		env.minter.err = errRTFake
-		if _, err := env.svc.Exchange(ctx, code, v); !errors.Is(err, errRTFake) {
+		if _, err := env.svc.Exchange(ctx, code, v, nil); !errors.Is(err, errRTFake) {
 			t.Fatalf("mint: want errRTFake, got %v", err)
 		}
 
 		env = newRTEnv()
 		code, v = env.grant(t, "mac")
 		env.store.fail["PutRunnerToken"] = errRTFake
-		if _, err := env.svc.Exchange(ctx, code, v); !errors.Is(err, errRTFake) {
+		if _, err := env.svc.Exchange(ctx, code, v, nil); !errors.Is(err, errRTFake) {
 			t.Fatalf("record: want errRTFake, got %v", err)
 		}
 	})
@@ -379,7 +405,7 @@ func rtClaims(id, userID string) *model.TokenClaims {
 	return c
 }
 
-func TestRunnerToken_Active(t *testing.T) {
+func TestRunnerToken_Authorize(t *testing.T) {
 	ctx := context.Background()
 	env := newRTEnv()
 	env.seedToken("rt-live", "u-alice", env.now.Add(time.Hour))
@@ -388,22 +414,22 @@ func TestRunnerToken_Active(t *testing.T) {
 	cases := []struct {
 		name   string
 		claims *model.TokenClaims
-		want   bool
 	}{
-		{"no jti (pre-revocation token)", rtClaims("", "u-alice"), false},
-		{"revoked", rtClaims("rt-missing", "u-alice"), false},
-		{"someone else's id", rtClaims("rt-live", "u-bob"), false},
-		{"expired record", rtClaims("rt-old", "u-alice"), false},
-		{"live", rtClaims("rt-live", "u-alice"), true},
+		{"no jti (pre-revocation token)", rtClaims("", "u-alice")},
+		{"revoked", rtClaims("rt-missing", "u-alice")},
+		{"someone else's id", rtClaims("rt-live", "u-bob")},
+		{"expired record", rtClaims("rt-old", "u-alice")},
 	}
 	for _, c := range cases {
-		got, err := env.svc.RunnerTokenActive(ctx, c.claims)
-		if err != nil || got != c.want {
-			t.Errorf("%s: got %v, %v; want %v", c.name, got, err, c.want)
+		if err := env.svc.AuthorizeRunner(ctx, c.claims, RunnerRequest{}); !errors.Is(err, ErrRunnerTokenRevoked) {
+			t.Errorf("%s: got %v; want ErrRunnerTokenRevoked", c.name, err)
 		}
 	}
+	if err := env.svc.AuthorizeRunner(ctx, rtClaims("rt-live", "u-alice"), RunnerRequest{}); err != nil {
+		t.Fatalf("live: %v", err)
+	}
 	env.store.fail["GetRunnerToken"] = errRTFake
-	if _, err := env.svc.RunnerTokenActive(ctx, rtClaims("rt-live", "u-alice")); !errors.Is(err, errRTFake) {
+	if err := env.svc.AuthorizeRunner(ctx, rtClaims("rt-live", "u-alice"), RunnerRequest{}); !errors.Is(err, errRTFake) {
 		t.Fatalf("store failure must surface (→ 503), got %v", err)
 	}
 }
@@ -560,7 +586,7 @@ func TestRunnerToken_ChangesNotifyTheOwner(t *testing.T) {
 	env.svc.SetPublisher(pub)
 
 	code, verifier := env.grant(t, "mac")
-	if _, err := env.svc.Exchange(ctx, code, verifier); err != nil {
+	if _, err := env.svc.Exchange(ctx, code, verifier, nil); err != nil {
 		t.Fatalf("Exchange: %v", err)
 	}
 	env.seedToken("rt-x", "u-alice", env.now.Add(time.Hour))

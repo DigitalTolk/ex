@@ -3,8 +3,10 @@ package middleware
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -84,19 +86,19 @@ func TestMwCov_AuthScope(t *testing.T) {
 
 // mwCovChecker is a canned RunnerTokenChecker.
 type mwCovChecker struct {
-	active bool
 	err    error
 	seen   *model.TokenClaims
+	seenRq RunnerRequest
 }
 
-func (c *mwCovChecker) RunnerTokenActive(_ context.Context, claims *model.TokenClaims) (bool, error) {
-	c.seen = claims
-	return c.active, c.err
+func (c *mwCovChecker) CheckRunner(_ context.Context, claims *model.TokenClaims, req RunnerRequest) error {
+	c.seen, c.seenRq = claims, req
+	return c.err
 }
 
-// AuthRunner: the scope check, then the per-install revocation check — 401
-// for a revoked install, 503 when the check itself fails, fail-closed with no
-// checker wired.
+// AuthRunner: the scope check, then the per-install check — its refusal as a
+// JSON error with the checker's status and code, 503 when the check itself
+// fails, fail-closed with no checker wired.
 func TestMwCov_AuthRunner(t *testing.T) {
 	m := mwCovManager()
 	runnerTok, _ := m.GenerateRunnerToken(mwCovUser(), "rt-1", time.Now().Add(time.Hour))
@@ -107,7 +109,9 @@ func TestMwCov_AuthRunner(t *testing.T) {
 		h := AuthRunner(m, checker)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ran = ClaimsFromContext(r.Context()) != nil
 		}))
-		req := httptest.NewRequest(http.MethodPost, "/", nil)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/agent/runner/heartbeat?x=1", nil)
+		req.RemoteAddr = "203.0.113.9:4444"
+		req.Header.Set(RunnerProofHeader, "v1.1.sig")
 		if tok != "" {
 			req.Header.Set("Authorization", "Bearer "+tok)
 		}
@@ -116,27 +120,42 @@ func TestMwCov_AuthRunner(t *testing.T) {
 		return rec, ran
 	}
 
-	if rec, _ := serve(&mwCovChecker{active: true}, ""); rec.Code != http.StatusUnauthorized {
+	if rec, _ := serve(&mwCovChecker{}, ""); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("no token: want 401, got %d", rec.Code)
 	}
-	if rec, _ := serve(&mwCovChecker{active: true}, runTok); rec.Code != http.StatusUnauthorized {
+	if rec, _ := serve(&mwCovChecker{}, runTok); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("run token: want 401, got %d", rec.Code)
 	}
 	if rec, _ := serve(nil, runnerTok); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("nil checker must fail closed: got %d", rec.Code)
 	}
-	if rec, ran := serve(&mwCovChecker{active: false}, runnerTok); rec.Code != http.StatusUnauthorized || ran {
-		t.Fatalf("revoked install: want 401 and no handler, got %d (ran=%v)", rec.Code, ran)
+	refused := &mwCovChecker{err: fmt.Errorf("wrapped: %w", &RunnerRefusal{Status: http.StatusUnauthorized, Code: "runner_clock_skew", Message: "clock off"})}
+	rec, ran := serve(refused, runnerTok)
+	if rec.Code != http.StatusUnauthorized || ran {
+		t.Fatalf("refusal: want 401 and no handler, got %d (ran=%v)", rec.Code, ran)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Fatalf("refusal content type = %q", ct)
+	}
+	if body := strings.TrimSpace(rec.Body.String()); body != `{"error":{"code":"runner_clock_skew","message":"clock off"}}` {
+		t.Fatalf("refusal body = %s", body)
 	}
 	if rec, ran := serve(&mwCovChecker{err: errors.New("dynamo down")}, runnerTok); rec.Code != http.StatusServiceUnavailable || ran {
 		t.Fatalf("check failure: want 503 and no handler, got %d (ran=%v)", rec.Code, ran)
 	}
-	ok := &mwCovChecker{active: true}
-	rec, ran := serve(ok, runnerTok)
+	ok := &mwCovChecker{}
+	rec, ran = serve(ok, runnerTok)
 	if rec.Code != http.StatusOK || !ran {
 		t.Fatalf("live install: want 200 + handler, got %d (ran=%v)", rec.Code, ran)
 	}
 	if ok.seen == nil || ok.seen.ID != "rt-1" {
 		t.Fatalf("checker must see the token's claims (jti), got %+v", ok.seen)
+	}
+	want := RunnerRequest{Method: http.MethodPost, Path: "/api/v1/agent/runner/heartbeat", Proof: "v1.1.sig", IP: "203.0.113.9"}
+	if ok.seenRq != want {
+		t.Fatalf("checker saw %+v, want %+v", ok.seenRq, want)
+	}
+	if (&RunnerRefusal{Message: "m"}).Error() != "m" {
+		t.Fatal("RunnerRefusal.Error")
 	}
 }

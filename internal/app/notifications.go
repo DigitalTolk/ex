@@ -89,6 +89,8 @@ func (a *App) buildNotifications(context.Context) error {
 	// notification pipeline.
 	c.messages.SetNotifier(n.svc)
 	a.agents.orch.SetApprovalNotifier(n.svc)
+	// An install revoked for being used away from its computer alerts its owner.
+	a.agents.runnerTokens.SetOwnerNotifier(n.svc)
 	n.svc.SetActivityRecorder(c.activity) // mentions, thread replies, DMs
 	c.reminders.SetDelivery(c.activity, n.svc)
 	n.svc.SetMentionResolver(c.mentions)

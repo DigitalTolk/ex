@@ -140,6 +140,22 @@ func (s *TokenStoreImpl) SetRunnerTokenExpiry(ctx context.Context, id string, ex
 	upd := expression.
 		Set(expression.Name("expiresAt"), expression.Value(expiresAt)).
 		Set(expression.Name("ttl"), expression.Value(expiresAt.Unix()))
+	return s.updateRunnerToken(ctx, id, upd, "renew")
+}
+
+// TouchRunnerToken records when and from where an install was last used.
+// Conditional on the row existing, so a touch racing a revoke cannot
+// resurrect the token as a bare row.
+func (s *TokenStoreImpl) TouchRunnerToken(ctx context.Context, id string, at time.Time, ip string) error {
+	upd := expression.
+		Set(expression.Name("lastUsedAt"), expression.Value(at)).
+		Set(expression.Name("lastIP"), expression.Value(ip))
+	return s.updateRunnerToken(ctx, id, upd, "touch")
+}
+
+// updateRunnerToken applies one update to a token row that still exists; a
+// gone row answers ErrNotFound.
+func (s *TokenStoreImpl) updateRunnerToken(ctx context.Context, id string, upd expression.UpdateBuilder, what string) error {
 	cond := expression.Name("PK").AttributeExists()
 	expr := mustExpr(expression.NewBuilder().WithUpdate(upd).WithCondition(cond).Build())
 	_, err := s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
@@ -154,7 +170,7 @@ func (s *TokenStoreImpl) SetRunnerTokenExpiry(ctx context.Context, id string, ex
 		if isConditionCheckFailed(err) {
 			return ErrNotFound
 		}
-		return fmt.Errorf("store: renew runner token: %w", err)
+		return fmt.Errorf("store: %s runner token: %w", what, err)
 	}
 	return nil
 }
@@ -196,6 +212,24 @@ func (s *TokenStoreImpl) DeleteRunnerToken(ctx context.Context, id string) error
 	})
 	if err != nil {
 		return fmt.Errorf("store: delete runner token: %w", err)
+	}
+	return nil
+}
+
+// RevokeRunnerToken deletes a token that still exists and answers
+// ErrNotFound when it was already gone — so of several requests revoking the
+// same token at once, exactly one wins (and alerts the owner).
+func (s *TokenStoreImpl) RevokeRunnerToken(ctx context.Context, id string) error {
+	_, err := s.Client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName:           aws.String(s.Table),
+		Key:                 compositeKey(runnerTokenPK(id), metaSK()),
+		ConditionExpression: aws.String("attribute_exists(PK)"),
+	})
+	if err != nil {
+		if isConditionCheckFailed(err) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("store: revoke runner token: %w", err)
 	}
 	return nil
 }

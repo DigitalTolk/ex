@@ -14,7 +14,7 @@ import (
 )
 
 func makeRunnerToken(id, userID string, created time.Time) *model.RunnerToken {
-	return &model.RunnerToken{ID: id, UserID: userID, Label: "mac", CreatedAt: created, ExpiresAt: created.Add(30 * 24 * time.Hour)}
+	return &model.RunnerToken{ID: id, UserID: userID, Label: "mac", CreatedAt: created, ExpiresAt: created.Add(7 * 24 * time.Hour)}
 }
 
 func makeRunnerGrant(hash string) *model.RunnerGrant {
@@ -121,6 +121,57 @@ func TestRunnerToken_Lifecycle(t *testing.T) {
 	}
 }
 
+// The device key is written with the row; the last-used stamp is a
+// conditional update, and neither a touch nor a second revoke can resurrect
+// a revoked row.
+func TestRunnerToken_DeviceKeyAndUse(t *testing.T) {
+	db := setupDynamoDB(t)
+	ctx := context.Background()
+	s := NewTokenStore(db)
+	now := time.Now().Truncate(time.Millisecond)
+	plain := makeRunnerToken("rt-plain", "u-rt", now)
+	keyed := makeRunnerToken("rt-key", "u-rt", now)
+	keyed.DeviceKey, keyed.DeviceKeyHardware = "KEY1", true
+	for _, tok := range []*model.RunnerToken{plain, keyed} {
+		if err := s.PutRunnerToken(ctx, tok); err != nil {
+			t.Fatalf("PutRunnerToken %s: %v", tok.ID, err)
+		}
+	}
+	fresh, _ := s.GetRunnerToken(ctx, "rt-plain")
+	if fresh.DeviceKey != "" || fresh.DeviceKeyHardware || !fresh.LastUsedAt.IsZero() || fresh.LastIP != "" {
+		t.Fatalf("a keyless token carries no key or use: %+v", fresh)
+	}
+	if got, _ := s.GetRunnerToken(ctx, "rt-key"); got.DeviceKey != "KEY1" || !got.DeviceKeyHardware {
+		t.Fatalf("keyed record = %+v", got)
+	}
+
+	used := now.Add(time.Minute)
+	if err := s.TouchRunnerToken(ctx, "rt-plain", used, "198.51.100.4"); err != nil {
+		t.Fatalf("TouchRunnerToken: %v", err)
+	}
+	if got, _ := s.GetRunnerToken(ctx, "rt-plain"); !got.LastUsedAt.Equal(used) || got.LastIP != "198.51.100.4" {
+		t.Fatalf("touched record = %+v", got)
+	}
+	// Listing carries the same fields the Runners page shows.
+	mine, err := s.ListRunnerTokens(ctx, "u-rt")
+	if err != nil || len(mine) != 2 {
+		t.Fatalf("ListRunnerTokens = %+v, %v", mine, err)
+	}
+
+	if err := s.RevokeRunnerToken(ctx, "rt-plain"); err != nil {
+		t.Fatalf("RevokeRunnerToken: %v", err)
+	}
+	if err := s.RevokeRunnerToken(ctx, "rt-plain"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("second revoke: want ErrNotFound, got %v", err)
+	}
+	if err := s.TouchRunnerToken(ctx, "rt-plain", used, "198.51.100.4"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("touch after revoke: want ErrNotFound, got %v", err)
+	}
+	if _, err := s.GetRunnerToken(ctx, "rt-plain"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a touch resurrected the revoked row: %v", err)
+	}
+}
+
 func TestRunnerToken_Faults(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
@@ -151,7 +202,10 @@ func TestRunnerToken_Faults(t *testing.T) {
 	_, err = faulted(func(f *faultClient) { f.failDeleteItem = true }).TakeRunnerGrant(ctx, "h-live")
 	wantInjected("TakeRunnerGrant delete", err)
 	wantInjected("DeleteRunnerToken", faulted(func(f *faultClient) { f.failDeleteItem = true }).DeleteRunnerToken(ctx, "rt-live"))
-	wantInjected("SetRunnerTokenExpiry", faulted(func(f *faultClient) { f.failUpdateItem = true }).SetRunnerTokenExpiry(ctx, "rt-live", time.Now()))
+	update := faulted(func(f *faultClient) { f.failUpdateItem = true })
+	wantInjected("SetRunnerTokenExpiry", update.SetRunnerTokenExpiry(ctx, "rt-live", time.Now()))
+	wantInjected("TouchRunnerToken", update.TouchRunnerToken(ctx, "rt-live", time.Now(), "198.51.100.1"))
+	wantInjected("RevokeRunnerToken", faulted(func(f *faultClient) { f.failDeleteItem = true }).RevokeRunnerToken(ctx, "rt-live"))
 
 	query := faulted(func(f *faultClient) { f.failQuery = true })
 	_, err = query.ListRunnerTokens(ctx, "u-rt")

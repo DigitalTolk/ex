@@ -652,6 +652,36 @@
     }
   },
   {
+    "case": "row: runner: this computer's clock is more than 10 minutes off",
+    "status": 401,
+    "body": {
+      "error": {
+        "code": "runner_clock_skew",
+        "message": "runner: this computer's clock is more than 10 minutes off"
+      }
+    }
+  },
+  {
+    "case": "row: runner: this ex-runner is too old for this workspace — update ex-runner, then run ex-runner login again",
+    "status": 401,
+    "body": {
+      "error": {
+        "code": "runner_upgrade_required",
+        "message": "runner: this ex-runner is too old for this workspace — update ex-runner, then run ex-runner login again"
+      }
+    }
+  },
+  {
+    "case": "row: runner: the device key is not a P-256 public key",
+    "status": 400,
+    "body": {
+      "error": {
+        "code": "invalid_device_key",
+        "message": "runner: the device key is not a P-256 public key"
+      }
+    }
+  },
+  {
     "case": "row: task: this project already has an active task",
     "status": 409,
     "body": {
