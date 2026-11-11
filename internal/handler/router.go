@@ -228,6 +228,7 @@ func NewRouter(d *Deps) http.Handler {
 		mux.Handle("POST /api/v1/activity/items/remove", middleware.WrapFunc(activityH.RemoveItems, authMW, writeLimit))
 		mux.Handle("POST /api/v1/reminders", middleware.WrapFunc(activityH.CreateReminder, authMW, writeLimit))
 		mux.Handle("GET /api/v1/reminders", middleware.WrapFunc(activityH.ListReminders, authMW))
+		mux.Handle("PATCH /api/v1/reminders/{id}", middleware.WrapFunc(activityH.UpdateReminder, authMW, writeLimit))
 		mux.Handle("DELETE /api/v1/reminders/{id}", middleware.WrapFunc(activityH.CancelReminder, authMW))
 	}
 
@@ -352,6 +353,7 @@ func NewRouter(d *Deps) http.Handler {
 		mux.Handle("GET /api/v1/admin/bots", middleware.WrapFunc(botH.List, authMW))
 		mux.Handle("POST /api/v1/admin/bots", middleware.WrapFunc(botH.Create, authMW, writeLimit))
 		mux.Handle("PATCH /api/v1/admin/bots/{id}", middleware.WrapFunc(botH.Update, authMW, writeLimit))
+		mux.Handle("DELETE /api/v1/admin/bots/{id}", middleware.WrapFunc(botH.Delete, authMW, writeLimit))
 		mux.Handle("POST /api/v1/admin/bots/{id}/enable", middleware.WrapFunc(botH.Enable, authMW, writeLimit))
 		mux.Handle("POST /api/v1/admin/bots/{id}/disable", middleware.WrapFunc(botH.Disable, authMW, writeLimit))
 		mux.Handle("GET /api/v1/admin/bots/{id}/tokens", middleware.WrapFunc(botH.ListTokens, authMW))

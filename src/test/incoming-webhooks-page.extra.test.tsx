@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
@@ -96,9 +96,10 @@ describe('IncomingWebhooksPage (channel merge + form arms)', () => {
     renderPage();
 
     fireEvent.click(await screen.findByRole('button', { name: /Edit CI/i }));
-    expect((screen.getByLabelText(/^Username$/i) as HTMLInputElement).value).toBe('');
-    expect((screen.getByLabelText(/Profile picture URL/i) as HTMLInputElement).value).toBe('');
-    expect(screen.getByRole('button', { name: /Save changes/i })).toBeInTheDocument();
+    const row = screen.getByTestId('webhook-wh-1');
+    expect((within(row).getByLabelText(/^Username$/i) as HTMLInputElement).value).toBe('');
+    expect((within(row).getByLabelText(/Profile picture URL/i) as HTMLInputElement).value).toBe('');
+    expect(within(row).getByRole('button', { name: /Save changes/i })).toBeInTheDocument();
   });
 
   it('shows "Creating..." while the create mutation is in flight', async () => {
@@ -115,6 +116,7 @@ describe('IncomingWebhooksPage (channel merge + form arms)', () => {
     renderPage();
 
     fireEvent.change(await screen.findByLabelText(/^Title$/i), { target: { value: 'CI' } });
+    await screen.findByRole('option', { name: 'general' });
     fireEvent.click(screen.getByRole('button', { name: /Create webhook/i }));
     expect(await screen.findByRole('button', { name: /Creating\.\.\./i })).toBeDisabled();
   });
@@ -151,6 +153,7 @@ describe('IncomingWebhooksPage (channel merge + form arms)', () => {
     renderPage();
 
     fireEvent.change(await screen.findByLabelText(/^Title$/i), { target: { value: 'CI' } });
+    await screen.findByRole('option', { name: 'general' });
     fireEvent.click(screen.getByRole('button', { name: /Create webhook/i }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Request failed');
   });

@@ -31,6 +31,14 @@ describe('SettingsDialog', () => {
     expect(document.querySelector('[data-testid="settings-dialog"]')).toBeNull();
   });
 
+  // A phone shows it as a sheet over the whole screen, not a box as tall as
+  // the page in it.
+  it.runIf(document.documentElement.classList.contains('tier-mobile'))('fills the screen on a phone', async () => {
+    const screen = await render(<SettingsDialog open onOpenChange={vi.fn()} />);
+    const dialog = screen.getByTestId('settings-dialog').element() as HTMLElement;
+    await expect.poll(() => dialog.offsetHeight).toBe(window.innerHeight);
+  });
+
   it('opens on Profile by default and switches pages from the nav', async () => {
     const screen = await render(<SettingsDialog open onOpenChange={vi.fn()} />);
     await expect.element(screen.getByRole('heading', { name: 'Profile' })).toBeVisible();

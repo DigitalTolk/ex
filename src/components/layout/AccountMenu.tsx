@@ -175,7 +175,7 @@ export function AccountMenu({ variant = 'footer' }: AccountMenuProps) {
           {
             key: 'webhooks',
             icon: <Webhook className="h-4 w-4" />,
-            label: 'Incoming webhooks',
+            label: 'Webhooks',
             onSelect: () => navigate('/webhooks'),
             testID: 'user-menu-webhooks',
           } satisfies MenuAction,

@@ -19,7 +19,7 @@ export function CustomEmojiDialog({ open, onOpenChange }: CustomEmojiDialogProps
         // Start in the shortcode field (not the image picker) so you can type
         // right away; guests have no form, so fall back to the dialog itself.
         initialFocus={() => document.getElementById('emoji-name') ?? true}
-        className="h-[min(720px,calc(100dvh-2rem))] grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden p-0 mobile:h-auto mobile:overflow-hidden mobile:p-0"
+        className="h-[min(720px,calc(100dvh-2rem))] grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden p-0 mobile:overflow-hidden mobile:p-0"
         data-testid="custom-emoji-dialog"
       >
         <DialogHeader className="border-b px-6 pt-5 pb-4 mobile:px-4 mobile:pt-[calc(env(safe-area-inset-top)+0.75rem)]">

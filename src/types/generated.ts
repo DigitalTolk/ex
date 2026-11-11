@@ -189,6 +189,24 @@ export interface Reminder {
   parentMessageID?: string;
   channelSlug?: string;
   messagePreview?: string;
+  /**
+   * UserIDs are the people the owner added: when it comes due, the reminder
+   * bot replies to the message tagging the owner and them. Without any, the
+   * bot DMs the owner alone.
+   */
+  userIDs?: string[];
+  /**
+   * Everyone: the reminder is for every member of the chat (UserIDs is then
+   * empty) but ExcludedUserIDs, the few the owner left out. The bot's reply
+   * tags @all, and its notifications skip them.
+   */
+  everyone?: boolean;
+  excludedUserIDs?: string[];
+  /**
+   * Note is the owner's own words for context, shown with the reminder
+   * when it comes due.
+   */
+  note?: string;
   remindAt: string /* RFC3339 */;
   createdAt: string /* RFC3339 */;
 }
@@ -2154,6 +2172,13 @@ export interface Message {
   webhookAvatarURL?: string;
   webhookIconEmoji?: string; // emoji name (no colons) from icon_emoji; rendered as the avatar
   messageAttachments?: MessageAttachment[];
+  /**
+   * WebhookOwnerID is the person who set up the webhook that posted the
+   * message: the integration card names them. The author can't, being the
+   * "webhook" sentinel (or the webhook's bot, in a DM). Empty on posts from
+   * before it was recorded.
+   */
+  webhookOwnerID?: string;
   /**
    * AgentInvokerID attributes an agent-authored message to the human whose
    * invocation produced it. Agents are shared ("gg" belongs to no one), so

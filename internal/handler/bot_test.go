@@ -65,6 +65,16 @@ func (s *handlerBotStore) GetBotToken(_ context.Context, hash string) (*model.Bo
 	return nil, store.ErrNotFound
 }
 
+func (s *handlerBotStore) DeleteBot(_ context.Context, id, username string, at time.Time) error {
+	u, ok := s.users.users[id]
+	if !ok {
+		return store.ErrNotFound
+	}
+	u.BotDeletedAt, u.Username = &at, ""
+	delete(s.usernames, username)
+	return nil
+}
+
 func (s *handlerBotStore) ListBotTokens(_ context.Context, botID string) ([]*model.BotToken, error) {
 	var out []*model.BotToken
 	for _, t := range s.tokens {
@@ -289,6 +299,25 @@ func TestBotHandler_AdminManagesBotsAndTokens(t *testing.T) {
 	if rec := f.do(http.MethodGet, "/api/v4/users/me", "Bearer "+issued.Secret, ""); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("users/me with a revoked token = %d", rec.Code)
 	}
+
+	// Deleted, the bot leaves the list and its token stops working.
+	rec = f.do(http.MethodPost, "/api/v1/admin/bots/"+created.ID+"/tokens", admin, `{"description":"Second"}`)
+	second := decodeBody[model.BotTokenIssued](t, rec)
+	rec = f.do(http.MethodDelete, "/api/v1/admin/bots/"+created.ID, admin, "")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("delete = %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := f.do(http.MethodGet, "/api/v4/users/me", "Bearer "+second.Secret, ""); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("users/me with a deleted bot's token = %d", rec.Code)
+	}
+	for _, b := range decodeBody[[]model.BotAccount](t, f.do(http.MethodGet, "/api/v1/admin/bots", admin, "")) {
+		if b.ID == created.ID {
+			t.Fatal("the deleted bot is still listed")
+		}
+	}
+	if rec := f.do(http.MethodDelete, "/api/v1/admin/bots/"+created.ID, admin, ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("second delete = %d, want 404", rec.Code)
+	}
 }
 
 func TestBotHandler_Refusals(t *testing.T) {
@@ -304,6 +333,7 @@ func TestBotHandler_Refusals(t *testing.T) {
 		{http.MethodGet, "/api/v1/admin/bots/" + id + "/tokens", ""},
 		{http.MethodPost, "/api/v1/admin/bots/" + id + "/tokens", `{"description":"x"}`},
 		{http.MethodDelete, "/api/v1/admin/bots/" + id + "/tokens/t-1", ""},
+		{http.MethodDelete, "/api/v1/admin/bots/" + id, ""},
 	} {
 		if rec := f.do(c.method, c.path, member, c.body); rec.Code != http.StatusForbidden {
 			t.Errorf("member %s %s = %d, want 403", c.method, c.path, rec.Code)

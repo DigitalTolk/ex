@@ -6,12 +6,14 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { CopyButton } from '@/components/ui/copy-button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { TooltipIconButton } from '@/components/ui/tooltip-icon-button';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
 import {
   useBots,
   useBotTokens,
   useCreateBot,
   useCreateBotToken,
+  useDeleteBot,
   useRevokeBotToken,
   useSetBotEnabled,
   useUpdateBot,
@@ -22,96 +24,65 @@ import type { BotAccount, BotToken, BotTokenIssued } from '@/types/generated';
 
 const EMPTY_FORM: BotInput = { username: '', displayName: '', description: '' };
 
+const DESTRUCTIVE_ICON = 'text-destructive hover:bg-destructive/10 hover:text-destructive';
+
 function errorText(err: unknown): string {
   return err instanceof Error ? err.message : 'Request failed';
 }
 
+// What a form shows of the mutation it submits to.
+interface MutationState {
+  isPending: boolean;
+  isError: boolean;
+  error: unknown;
+}
+
 // BotsPanel manages the bot accounts integrations act as through the
 // Mattermost-compatible API: the ones created here and the ones migrated
-// from Mattermost. Laid out like the incoming webhooks: the form on top,
-// the bots below.
+// from Mattermost. Laid out like the webhooks: the form for a new bot on
+// top, the bots below, each edited in place.
 export function BotsPanel() {
   const { data: bots = [] } = useBots();
   const sorted = useMemo(() => [...bots].sort((a, b) => a.displayName.localeCompare(b.displayName)), [bots]);
   const ownerIDs = useMemo(() => [...new Set(bots.map((b) => b.ownerID).filter(Boolean))], [bots]);
   const { map: owners } = useUsersBatch(ownerIDs);
   const create = useCreateBot();
-  const update = useUpdateBot();
   const setEnabled = useSetBotEnabled();
-  const [form, setForm] = useState(EMPTY_FORM);
+  const remove = useDeleteBot();
+  // A new key empties the create form after a bot is made.
+  const [createKey, setCreateKey] = useState(0);
   const [editingID, setEditingID] = useState<string | null>(null);
   const [tokensFor, setTokensFor] = useState<string | null>(null);
-
-  const saving = editingID ? update : create;
-
-  function set<K extends keyof BotInput>(key: K, value: string) {
-    setForm((f) => ({ ...f, [key]: value }));
-  }
-
-  function resetForm() {
-    setForm(EMPTY_FORM);
-    setEditingID(null);
-  }
-
-  function startEdit(bot: BotAccount) {
-    setEditingID(bot.id);
-    setForm({ username: bot.username, displayName: bot.displayName, description: bot.description });
-  }
-
-  function submit() {
-    const input = {
-      username: form.username.trim(),
-      displayName: form.displayName.trim(),
-      description: form.description.trim(),
-    };
-    if (editingID) {
-      update.mutate({ id: editingID, input }, { onSuccess: resetForm });
-    } else {
-      create.mutate(input, { onSuccess: resetForm });
-    }
-  }
+  const [toDelete, setToDelete] = useState<BotAccount | null>(null);
 
   return (
     <section className="space-y-4 rounded-lg border bg-card p-5 text-sm">
-      <div className="grid gap-3 md:grid-cols-2">
-        <div className="space-y-2">
-          <Label htmlFor="bot-username">Username</Label>
-          <Input id="bot-username" value={form.username} onChange={(e) => set('username', e.target.value)} />
-        </div>
-        <div className="space-y-2">
-          <Label htmlFor="bot-display-name">Display name</Label>
-          <Input id="bot-display-name" value={form.displayName} onChange={(e) => set('displayName', e.target.value)} />
-        </div>
-        <div className="space-y-2 md:col-span-2">
-          <Label htmlFor="bot-description">Description</Label>
-          <Input id="bot-description" value={form.description} onChange={(e) => set('description', e.target.value)} />
-        </div>
-      </div>
+      <BotForm
+        key={createKey}
+        idPrefix="bot"
+        initial={EMPTY_FORM}
+        submitLabel="Create bot"
+        pendingLabel="Creating..."
+        mutation={create}
+        onSubmit={(input) => create.mutate(input, { onSuccess: () => setCreateKey((k) => k + 1) })}
+      />
 
-      <div className="flex items-center gap-2">
-        <Button onClick={submit} disabled={saving.isPending || !form.username.trim()}>
-          {saving.isPending ? (editingID ? 'Saving...' : 'Creating...') : editingID ? 'Save changes' : 'Create bot'}
-        </Button>
-        {editingID && (
-          <Button variant="outline" onClick={resetForm} disabled={saving.isPending}>
-            Cancel
-          </Button>
-        )}
-      </div>
-
-      {saving.isError && (
-        <p className="text-sm text-destructive" role="alert">
-          {errorText(saving.error)}
-        </p>
-      )}
       {setEnabled.isError && (
         <p className="text-sm text-destructive" role="alert">
           {errorText(setEnabled.error)}
         </p>
       )}
+      {remove.isError && (
+        <p className="text-sm text-destructive" role="alert">
+          {errorText(remove.error)}
+        </p>
+      )}
 
       <div className="space-y-2">
         {sorted.map((bot) => {
+          if (editingID === bot.id) {
+            return <BotEditor key={bot.id} bot={bot} onDone={() => setEditingID(null)} />;
+          }
           const disabled = bot.status === 'deactivated';
           const owner = owners.get(bot.ownerID)?.displayName;
           const details = [bot.username && `@${bot.username}`, bot.description, owner && `Created by ${owner}`].filter(Boolean);
@@ -139,27 +110,41 @@ export function BotsPanel() {
                   )}
                 </div>
                 <div className="flex shrink-0 items-center gap-1">
-                  <Button
-                    variant="ghost"
+                  <TooltipIconButton
                     size="icon-sm"
+                    label="Access tokens"
+                    ariaLabel={`Access tokens for ${bot.displayName}`}
+                    expanded={tokensFor === bot.id}
                     onClick={() => setTokensFor(tokensFor === bot.id ? null : bot.id)}
-                    aria-label={`Tokens for ${bot.displayName}`}
-                    aria-expanded={tokensFor === bot.id}
                   >
                     <KeyRound className="h-4 w-4" />
-                  </Button>
-                  <Button variant="ghost" size="icon-sm" onClick={() => startEdit(bot)} aria-label={`Edit ${bot.displayName}`}>
-                    <Pencil className="h-4 w-4" />
-                  </Button>
-                  <Button
-                    variant="ghost"
+                  </TooltipIconButton>
+                  <TooltipIconButton
                     size="icon-sm"
-                    onClick={() => setEnabled.mutate({ id: bot.id, enabled: disabled })}
+                    label="Edit"
+                    ariaLabel={`Edit ${bot.displayName}`}
+                    onClick={() => setEditingID(bot.id)}
+                  >
+                    <Pencil className="h-4 w-4" />
+                  </TooltipIconButton>
+                  <TooltipIconButton
+                    size="icon-sm"
+                    label={disabled ? 'Enable' : 'Disable'}
+                    ariaLabel={`${disabled ? 'Enable' : 'Disable'} ${bot.displayName}`}
                     disabled={setEnabled.isPending}
-                    aria-label={`${disabled ? 'Enable' : 'Disable'} ${bot.displayName}`}
+                    onClick={() => setEnabled.mutate({ id: bot.id, enabled: disabled })}
                   >
                     <Power className="h-4 w-4" />
-                  </Button>
+                  </TooltipIconButton>
+                  <TooltipIconButton
+                    size="icon-sm"
+                    label="Delete"
+                    ariaLabel={`Delete ${bot.displayName}`}
+                    className={DESTRUCTIVE_ICON}
+                    onClick={() => setToDelete(bot)}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </TooltipIconButton>
                 </div>
               </div>
               {tokensFor === bot.id && <BotTokens botID={bot.id} />}
@@ -167,7 +152,109 @@ export function BotsPanel() {
           );
         })}
       </div>
+
+      <ConfirmDialog
+        open={toDelete !== null}
+        // It has no trigger of its own: it only ever asks to close.
+        onOpenChange={() => setToDelete(null)}
+        title={`Delete "${toDelete?.displayName ?? ''}"?`}
+        description="Its tokens stop working at once. This cannot be undone."
+        confirmLabel="Delete bot"
+        destructive
+        onConfirm={() => {
+          if (toDelete) remove.mutate(toDelete.id);
+          setToDelete(null);
+        }}
+      />
     </section>
+  );
+}
+
+// BotEditor edits one bot where it is listed.
+function BotEditor({ bot, onDone }: { bot: BotAccount; onDone: () => void }) {
+  const update = useUpdateBot();
+  return (
+    <div className="rounded-md border p-3" data-testid={`bot-${bot.id}`}>
+      <BotForm
+        idPrefix={`bot-${bot.id}`}
+        initial={{ username: bot.username, displayName: bot.displayName, description: bot.description }}
+        submitLabel="Save changes"
+        pendingLabel="Saving..."
+        mutation={update}
+        onSubmit={(input) => update.mutate({ id: bot.id, input }, { onSuccess: onDone })}
+        onCancel={onDone}
+      />
+    </div>
+  );
+}
+
+// BotForm is a bot's username, display name and description: the form for a
+// new bot, and a bot's own when it is being edited.
+function BotForm({
+  idPrefix,
+  initial,
+  submitLabel,
+  pendingLabel,
+  mutation,
+  onSubmit,
+  onCancel,
+}: {
+  idPrefix: string;
+  initial: BotInput;
+  submitLabel: string;
+  pendingLabel: string;
+  mutation: MutationState;
+  onSubmit: (input: BotInput) => void;
+  onCancel?: () => void;
+}) {
+  const [form, setForm] = useState(initial);
+
+  function set<K extends keyof BotInput>(key: K, value: string) {
+    setForm((f) => ({ ...f, [key]: value }));
+  }
+
+  function submit() {
+    onSubmit({
+      username: form.username.trim(),
+      displayName: form.displayName.trim(),
+      description: form.description.trim(),
+    });
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-3 md:grid-cols-2">
+        <div className="space-y-2">
+          <Label htmlFor={`${idPrefix}-username`}>Username</Label>
+          <Input id={`${idPrefix}-username`} value={form.username} onChange={(e) => set('username', e.target.value)} />
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor={`${idPrefix}-display-name`}>Display name</Label>
+          <Input id={`${idPrefix}-display-name`} value={form.displayName} onChange={(e) => set('displayName', e.target.value)} />
+        </div>
+        <div className="space-y-2 md:col-span-2">
+          <Label htmlFor={`${idPrefix}-description`}>Description</Label>
+          <Input id={`${idPrefix}-description`} value={form.description} onChange={(e) => set('description', e.target.value)} />
+        </div>
+      </div>
+
+      <div className="flex items-center gap-2">
+        <Button onClick={submit} disabled={mutation.isPending || !form.username.trim()}>
+          {mutation.isPending ? pendingLabel : submitLabel}
+        </Button>
+        {onCancel && (
+          <Button variant="outline" onClick={onCancel} disabled={mutation.isPending}>
+            Cancel
+          </Button>
+        )}
+      </div>
+
+      {mutation.isError && (
+        <p className="text-sm text-destructive" role="alert">
+          {errorText(mutation.error)}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -206,15 +293,15 @@ function BotTokens({ botID }: { botID: string }) {
         <div key={t.id} className="flex items-center gap-2" data-testid={`bot-token-${t.id}`}>
           <span className="min-w-0 flex-1 truncate">{t.description}</span>
           <span className="shrink-0 text-xs text-muted-foreground">{formatLongDate(t.createdAt)}</span>
-          <Button
-            variant="ghost"
+          <TooltipIconButton
             size="icon-sm"
+            label="Revoke"
+            ariaLabel={`Revoke ${t.description}`}
+            className={DESTRUCTIVE_ICON}
             onClick={() => setToRevoke(t)}
-            aria-label={`Revoke ${t.description}`}
-            className="text-destructive hover:bg-destructive/10 hover:text-destructive"
           >
             <Trash2 className="h-4 w-4" />
-          </Button>
+          </TooltipIconButton>
         </div>
       ))}
       <div className="space-y-2">

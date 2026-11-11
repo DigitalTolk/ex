@@ -5,6 +5,7 @@ import { apiFetch } from '@/lib/api';
 import { queryKeys, parentPath } from '@/lib/query-keys';
 import { useAttachmentLightbox } from '@/hooks/useAttachmentLightbox';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
+import { useEventCallback } from '@/hooks/useEventCallback';
 import { useLiveInView } from '@/hooks/useInView';
 import { iconForAttachment, isImageContentType } from '@/lib/file-helpers';
 import { formatBytes, formatRelative } from '@/lib/format';
@@ -48,6 +49,20 @@ interface FilesPanelProps {
   postedIn?: string;
 }
 
+// FilesEnd sits under the list and asks for the next page while it is on
+// screen. One mounts per page (keyed by the page count), only once that page
+// is in: watched from before — an empty list while the first page loads — it
+// would still count as on screen in the render where the page pushes it out
+// of view, and load a page nobody scrolled to.
+function FilesEnd({ onEnd }: { onEnd: () => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const atEnd = useLiveInView(ref);
+  useEffect(() => {
+    if (atEnd) onEnd();
+  }, [atEnd, onEnd]);
+  return <div ref={ref} aria-hidden="true" data-testid="files-end" />;
+}
+
 export function FilesPanel({
   channelId,
   conversationId,
@@ -82,11 +97,7 @@ export function FilesPanel({
 
   // The next page loads once the end of the list scrolls into view (and
   // again while it stays in view, until the list fills the panel).
-  const endRef = useRef<HTMLDivElement>(null);
-  const atEnd = useLiveInView(endRef);
-  useEffect(() => {
-    if (atEnd && hasNextPage && !isFetchingNextPage) void fetchNextPage();
-  }, [atEnd, hasNextPage, isFetchingNextPage, fetchNextPage]);
+  const loadMore = useEventCallback(() => void fetchNextPage());
 
   // Author + timestamp differ per row (same channel, many uploaders),
   // so each slide carries its own header metadata.
@@ -219,7 +230,9 @@ export function FilesPanel({
             );
           })}
       </ul>
-      <div ref={endRef} aria-hidden="true" data-testid="files-end" />
+      {hasNextPage && !isFetchingNextPage && !isPlaceholderData && (
+        <FilesEnd key={data?.pages.length} onEnd={loadMore} />
+      )}
       {isFetchingNextPage && (
         <p className="p-2 text-xs text-muted-foreground">Loading more…</p>
       )}

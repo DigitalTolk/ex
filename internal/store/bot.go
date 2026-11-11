@@ -55,13 +55,13 @@ func (s *BotStoreImpl) putNew(item any) types.TransactWriteItem {
 	}}
 }
 
-// transact runs a bot write; ErrAlreadyExists when one of its conditions
+// transact runs a bot write; conditionFailed when one of its conditions
 // failed.
-func (s *BotStoreImpl) transact(ctx context.Context, what string, items []types.TransactWriteItem) error {
+func (s *BotStoreImpl) transact(ctx context.Context, what string, items []types.TransactWriteItem, conditionFailed error) error {
 	_, err := s.Client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items})
 	if err != nil {
 		if isTransactionCancelledWithCondition(err) {
-			return ErrAlreadyExists
+			return conditionFailed
 		}
 		return fmt.Errorf("store: %s: %w", what, err)
 	}
@@ -78,7 +78,7 @@ func (s *BotStoreImpl) CreateBot(ctx context.Context, u *model.User) error {
 		s.putNew(userEmailItem{PK: userEmailPK(u.Email), SK: profileSK(), UserID: u.ID}),
 		s.putNew(botUsernameItem{PK: botUsernamePK(u.Username), SK: metaSK(), UserID: u.ID}),
 		s.noUserGroupHandled(u.Username),
-	})
+	}, ErrAlreadyExists)
 }
 
 // noUserGroupHandled is a transaction step that fails while a user group holds
@@ -123,7 +123,41 @@ func (s *BotStoreImpl) UpdateBot(ctx context.Context, u *model.User, previousUse
 			}})
 		}
 	}
-	return s.transact(ctx, "update bot", items)
+	return s.transact(ctx, "update bot", items, ErrAlreadyExists)
+}
+
+// DeleteBot marks a bot deleted and lets its username go, both or neither.
+// The row itself stays: the bot's messages keep their author. ErrNotFound when
+// the bot is gone, or its username is held by another bot.
+func (s *BotStoreImpl) DeleteBot(ctx context.Context, id, username string, at time.Time) error {
+	upd := expression.
+		Set(expression.Name("botDeletedAt"), expression.Value(at)).
+		Set(expression.Name("updatedAt"), expression.Value(at)).
+		Remove(expression.Name("username"))
+	expr := mustExpr(expression.NewBuilder().WithUpdate(upd).WithCondition(expression.Name("PK").AttributeExists()).Build())
+	items := []types.TransactWriteItem{{Update: &types.Update{
+		TableName:                 aws.String(s.Table),
+		Key:                       compositeKey(userPK(id), profileSK()),
+		UpdateExpression:          expr.Update(),
+		ConditionExpression:       expr.Condition(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	}}}
+	if username != "" {
+		// A migrated bot may hold its username without a claim.
+		owned := mustExpr(expression.NewBuilder().WithCondition(expression.Or(
+			expression.Name("PK").AttributeNotExists(),
+			expression.Name("userID").Equal(expression.Value(id)),
+		)).Build())
+		items = append(items, types.TransactWriteItem{Delete: &types.Delete{
+			TableName:                 aws.String(s.Table),
+			Key:                       compositeKey(botUsernamePK(username), metaSK()),
+			ConditionExpression:       owned.Condition(),
+			ExpressionAttributeNames:  owned.Names(),
+			ExpressionAttributeValues: owned.Values(),
+		}})
+	}
+	return s.transact(ctx, "delete bot", items, ErrNotFound)
 }
 
 // UsernameOwner returns the ID of the bot holding username; ErrNotFound when

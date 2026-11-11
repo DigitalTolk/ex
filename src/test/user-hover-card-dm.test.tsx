@@ -13,9 +13,10 @@ function renderCard(opts: {
   userId?: string;
   currentUserId?: string;
   online?: boolean;
-  integrationOwnerName?: string;
+  integration?: boolean;
+  integrationOwnerID?: string;
 } = {}) {
-  const { userId = 'u-other', currentUserId = 'u-me', online, integrationOwnerName } = opts;
+  const { userId = 'u-other', currentUserId = 'u-me', online, integration, integrationOwnerID } = opts;
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
@@ -29,7 +30,8 @@ function renderCard(opts: {
                 displayName="Bob"
                 online={online}
                 currentUserId={currentUserId}
-                integrationOwnerName={integrationOwnerName}
+                integration={integration}
+                integrationOwnerID={integrationOwnerID}
               >
                 <span>trigger</span>
               </UserHoverCard>
@@ -130,17 +132,26 @@ describe('UserHoverCard — click-to-open + DM action', () => {
     expect(screen.queryByRole('button', { name: /Direct message/i })).toBeNull();
   });
 
-  it('renders the minimal integration card with no user fetch or DM action', async () => {
-    renderCard({ integrationOwnerName: 'Alice' });
+  it('renders the minimal integration card naming its owner, with no DM action', async () => {
+    apiFetchMock.mockImplementation((path: string) =>
+      path === '/api/v1/users/u-alice' ? Promise.resolve({ id: 'u-alice', displayName: 'Alice' }) : Promise.reject(new Error(path)),
+    );
+    renderCard({ integration: true, integrationOwnerID: 'u-alice' });
     fireEvent.click(screen.getByText('trigger'));
     expect(await screen.findByTestId('hover-card-integration')).toBeInTheDocument();
-    expect(
-      screen.getByText(/This post was created by an integration from @Alice\./i),
-    ).toBeInTheDocument();
-    // No user record is fetched and no DM/status chrome is shown.
-    expect(apiFetchMock).not.toHaveBeenCalled();
+    expect(await screen.findByText('This post was created by an integration from @Alice.')).toBeInTheDocument();
+    // Only the owner is fetched (not the post's author), and no DM/status
+    // chrome is shown.
+    expect(apiFetchMock.mock.calls.map((c) => c[0])).toEqual(['/api/v1/users/u-alice']);
     expect(screen.queryByRole('button', { name: /Direct message/i })).toBeNull();
     expect(screen.queryByTestId('hover-card-header')).toBeNull();
+  });
+
+  it('names no one on an integration post from before owners were recorded', async () => {
+    renderCard({ integration: true });
+    fireEvent.click(screen.getByText('trigger'));
+    expect(await screen.findByText('This post was created by an integration.')).toBeInTheDocument();
+    expect(apiFetchMock).not.toHaveBeenCalled();
   });
 
   it('clicking Direct message creates a conversation and navigates to it', async () => {

@@ -930,9 +930,32 @@ type WebhookMessageInput struct {
 	// WebhookID is the posting webhook, stamped on the message so its threads
 	// stay its own.
 	WebhookID string
+	// NotifyExcept are members the post's notifications skip (a reminder for
+	// everyone but them).
+	NotifyExcept []string
+	// OwnerID is who set the webhook up, named by the post's integration card.
+	OwnerID string
 }
 
 func (s *MessageService) SendWebhook(ctx context.Context, in WebhookMessageInput) (*model.Message, error) {
+	return s.sendMachine(ctx, in, func(parentID, authorID string) error {
+		return s.checkWebhookThreadRoot(ctx, parentID, in.ParentMessageID, authorID, in.WebhookID)
+	})
+}
+
+// SendReminder posts the reminder bot's message: a DM as the bot account, or a
+// channel reply as the shared sentinel under the bot's name. Unlike a webhook
+// (an unauthenticated URL, kept to its own threads) it is the server's own
+// post, so it may reply in any live thread.
+func (s *MessageService) SendReminder(ctx context.Context, in WebhookMessageInput) (*model.Message, error) {
+	return s.sendMachine(ctx, in, func(parentID, _ string) error {
+		return s.checkLiveThreadRoot(ctx, parentID, in.ParentMessageID)
+	})
+}
+
+// sendMachine posts a message no person typed (a webhook's or the reminder
+// bot's). checkRoot vets in.ParentMessageID when the post is a thread reply.
+func (s *MessageService) sendMachine(ctx context.Context, in WebhookMessageInput, checkRoot func(parentID, authorID string) error) (*model.Message, error) {
 	parentID := in.ParentID
 	if parentID == "" {
 		parentID = in.ChannelID
@@ -962,7 +985,7 @@ func (s *MessageService) SendWebhook(ctx context.Context, in WebhookMessageInput
 		return nil, err
 	}
 	if in.ParentMessageID != "" {
-		if err := s.checkWebhookThreadRoot(ctx, parentID, in.ParentMessageID, authorID, in.WebhookID); err != nil {
+		if err := checkRoot(parentID, authorID); err != nil {
 			return nil, err
 		}
 	}
@@ -977,6 +1000,8 @@ func (s *MessageService) SendWebhook(ctx context.Context, in WebhookMessageInput
 		WebhookIconEmoji:   in.IconEmoji,
 		MessageAttachments: in.Attachments,
 		WebhookID:          in.WebhookID,
+		NotifyExcept:       in.NotifyExcept,
+		WebhookOwnerID:     in.OwnerID,
 		CreatedAt:          time.Now(),
 	}
 	if msg.WebhookUsername == "" {
@@ -1057,6 +1082,25 @@ func (s *MessageService) checkWebhookThreadRoot(ctx context.Context, parentID, r
 	recentLegacySentinelRoot := root.WebhookID == "" && authorID == WebhookAuthorID && time.Since(root.CreatedAt) < legacyWebhookRootGrace
 	if root.AuthorID != authorID || root.System || (root.WebhookID != webhookID && !legacyBotRoot && !recentLegacySentinelRoot) {
 		return fmt.Errorf("%w: root was not posted by this webhook", ErrInvalidThreadRoot)
+	}
+	return nil
+}
+
+// checkLiveThreadRoot gates a reminder reply: its root must still be a live
+// top-level message.
+func (s *MessageService) checkLiveThreadRoot(ctx context.Context, parentID, rootID string) error {
+	root, err := s.messages.GetMessage(ctx, parentID, rootID)
+	if errors.Is(err, store.ErrNotFound) {
+		return fmt.Errorf("%w: root not found", ErrInvalidThreadRoot)
+	}
+	if err != nil {
+		return fmt.Errorf("message: thread root: %w", err)
+	}
+	if root.Deleted {
+		return ErrThreadDeleted
+	}
+	if root.ParentMessageID != "" {
+		return fmt.Errorf("%w: root is itself a reply", ErrInvalidThreadRoot)
 	}
 	return nil
 }

@@ -13,7 +13,11 @@ type Message struct {
 	// admin reindex) — for machine-posted ephemera like /mstmeetings join
 	// links, where a stale meeting URL surfacing in search is noise. Internal
 	// only, never serialized to clients.
-	NoIndex         bool       `json:"-" dynamodbav:"noIndex,omitempty"`
+	NoIndex bool `json:"-" dynamodbav:"noIndex,omitempty"`
+	// NotifyExcept are members this message's notifications skip: a
+	// reminder for everyone but them. Internal only, never serialized to
+	// clients; stored, so the fan-out's safety net skips them too.
+	NotifyExcept    []string   `json:"-" dynamodbav:"notifyExcept,omitempty"`
 	ParentMessageID string     `json:"parentMessageID,omitempty" dynamodbav:"parentMessageID,omitempty"` // root message of the thread
 	ReplyCount      int        `json:"replyCount,omitempty" dynamodbav:"replyCount,omitempty"`           // count of replies (only set on root messages)
 	LastReplyAt     *time.Time `json:"lastReplyAt,omitempty" dynamodbav:"lastReplyAt,omitempty"`         // timestamp of the latest reply (only set on root messages)
@@ -63,6 +67,11 @@ type Message struct {
 	// webhooks all author as the shared "webhook" sentinel, so this is what
 	// lets a webhook continue only ITS OWN threads. Internal only.
 	WebhookID string `json:"-" dynamodbav:"webhookID,omitempty"`
+	// WebhookOwnerID is the person who set up the webhook that posted the
+	// message: the integration card names them. The author can't, being the
+	// "webhook" sentinel (or the webhook's bot, in a DM). Empty on posts from
+	// before it was recorded.
+	WebhookOwnerID string `json:"webhookOwnerID,omitempty" dynamodbav:"webhookOwnerID,omitempty"`
 	// AgentInvokerID attributes an agent-authored message to the human whose
 	// invocation produced it. Agents are shared ("gg" belongs to no one), so
 	// a reader — human or another agent's context bundle — needs this to say

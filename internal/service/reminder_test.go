@@ -34,6 +34,25 @@ type fakeReminderStore struct {
 	syncErr       error
 	cancelAllUser string
 	cancelAllN    int
+
+	// Editing: the pending reminder GetPendingReminder answers, and what
+	// RescheduleReminder was given.
+	getR        *model.Reminder
+	getErr      error
+	rescheduled []*model.Reminder
+	reschedErr  error
+}
+
+func (f *fakeReminderStore) GetPendingReminder(context.Context, string, string) (*model.Reminder, error) {
+	return f.getR, f.getErr
+}
+
+func (f *fakeReminderStore) RescheduleReminder(_ context.Context, r *model.Reminder) error {
+	if f.reschedErr != nil {
+		return f.reschedErr
+	}
+	f.rescheduled = append(f.rescheduled, r)
+	return nil
 }
 
 func (f *fakeReminderStore) record(call string) {

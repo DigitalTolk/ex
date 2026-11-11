@@ -174,6 +174,9 @@ func (s *ReminderService) Wired() error {
 		wiring.Dep{Name: "publisher", Set: s.events != nil},
 		wiring.Dep{Name: "owner lookup", Set: s.owners != nil},
 		wiring.Dep{Name: "mention resolver", Set: s.mentions != nil},
+		wiring.Dep{Name: "reminder bot poster", Set: s.poster != nil},
+		wiring.Dep{Name: "reminder bot account", Set: s.bots != nil},
+		wiring.Dep{Name: "reminder bot DMs", Set: s.dms != nil},
 	)
 }
 

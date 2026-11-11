@@ -29,9 +29,12 @@ interface UserHoverCardProps {
   triggerClassName?: string;
   // When set, the card renders the minimal "integration" variant: the
   // display name + "This post was created by an integration from @owner",
-  // with no status/email/timezone/DM fields and no user fetch. Used for
-  // incoming-webhook posts so they read as an integration, not the creator.
-  integrationOwnerName?: string;
+  // with no status/email/timezone/DM fields. Used for incoming-webhook posts
+  // so they read as an integration, not a person. The owner is fetched by
+  // integrationOwnerID when the card opens; without one (posts from before
+  // owners were recorded) the card names nobody.
+  integration?: boolean;
+  integrationOwnerID?: string;
   children: ReactNode;
 }
 
@@ -48,7 +51,8 @@ function UserHoverCardImpl({
   currentUserId,
   showInlineStatus = true,
   triggerClassName = 'inline-flex cursor-pointer items-center gap-1 align-middle',
-  integrationOwnerName,
+  integration,
+  integrationOwnerID,
   children,
 }: UserHoverCardProps) {
   const [open, setOpen] = useState(false);
@@ -76,7 +80,7 @@ function UserHoverCardImpl({
         }}
       >
         {children}
-        {showInlineStatus && !integrationOwnerName && <UserStatusIndicator status={inlineStatus} />}
+        {showInlineStatus && !integration && <UserStatusIndicator status={inlineStatus} />}
       </span>
       <PopoverPortal
         open={open}
@@ -91,24 +95,8 @@ function UserHoverCardImpl({
         className="w-72 rounded-md border bg-popover p-3 shadow-lg touch:w-screen touch:max-w-none touch:rounded-b-none touch:rounded-t-xl touch:border-b-0 touch:pb-[calc(var(--sheet-safe-bottom,env(safe-area-inset-bottom))+0.75rem)] touch:pl-[max(0.75rem,env(safe-area-inset-left))] touch:pr-[max(0.75rem,env(safe-area-inset-right))]"
       >
         {open ? (
-          integrationOwnerName ? (
-          <div data-testid="hover-card-integration">
-            <div className="flex items-start gap-3">
-              <Avatar className="h-12 w-12">
-                {avatarURL && <AvatarImage src={avatarURL} alt="" />}
-                <AvatarFallback className="bg-primary/10 text-sm">
-                  {getInitials(displayName)}
-                </AvatarFallback>
-              </Avatar>
-              <div className="flex-1 min-w-0">
-                <p className="truncate text-sm font-semibold">{displayName}</p>
-                <p className="text-xs text-muted-foreground">Integration</p>
-              </div>
-            </div>
-            <p className="mt-3 text-sm leading-snug text-muted-foreground">
-              This post was created by an integration from @{integrationOwnerName}.
-            </p>
-          </div>
+          integration ? (
+            <IntegrationCardContent displayName={displayName} avatarURL={avatarURL} ownerID={integrationOwnerID} />
           ) : (
             <UserHoverCardContent
               userId={userId}
@@ -128,6 +116,46 @@ function UserHoverCardImpl({
 }
 
 export const UserHoverCard = memo(UserHoverCardImpl);
+
+// IntegrationCardContent is the open card of a webhook post: the integration
+// and, once fetched, the person who set it up.
+function IntegrationCardContent({
+  displayName,
+  avatarURL,
+  ownerID,
+}: {
+  displayName: string;
+  avatarURL?: string;
+  ownerID?: string;
+}) {
+  const { data: owner } = useQuery<Partial<User>>({
+    queryKey: queryKeys.user(ownerID ?? ''),
+    queryFn: () => apiFetch<Partial<User>>(`/api/v1/users/${ownerID}`),
+    enabled: !!ownerID,
+    staleTime: 30_000,
+  });
+  return (
+    <div data-testid="hover-card-integration">
+      <div className="flex items-start gap-3">
+        <Avatar className="h-12 w-12">
+          {avatarURL && <AvatarImage src={avatarURL} alt="" />}
+          <AvatarFallback className="bg-primary/10 text-sm">
+            {getInitials(displayName)}
+          </AvatarFallback>
+        </Avatar>
+        <div className="flex-1 min-w-0">
+          <p className="truncate text-sm font-semibold">{displayName}</p>
+          <p className="text-xs text-muted-foreground">Integration</p>
+        </div>
+      </div>
+      <p className="mt-3 text-sm leading-snug text-muted-foreground">
+        {owner?.displayName
+          ? `This post was created by an integration from @${owner.displayName}.`
+          : 'This post was created by an integration.'}
+      </p>
+    </div>
+  );
+}
 
 function UserHoverCardContent({
   userId,

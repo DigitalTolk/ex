@@ -23,6 +23,7 @@ type ReminderService interface {
 	Schedule(ctx context.Context, userID string, in service.ReminderInput) (*model.Reminder, error)
 	ListPending(ctx context.Context, userID string) ([]*model.Reminder, error)
 	Cancel(ctx context.Context, userID, id string) error
+	Update(ctx context.Context, userID, id string, in service.ReminderUpdate) (*model.Reminder, error)
 }
 
 // activityItemsBodyBytes caps a per-item request body: room for the most ids a
@@ -137,17 +138,25 @@ func (h *ActivityHandler) CreateReminder(w http.ResponseWriter, r *http.Request)
 		ParentType  string    `json:"parentType"`
 		ChannelSlug string    `json:"channelSlug"`
 		RemindAt    time.Time `json:"remindAt"`
+		UserIDs     []string  `json:"userIDs"`
+		Everyone    bool      `json:"everyone"`
+		Excluded    []string  `json:"excludedUserIDs"`
+		Note        string    `json:"note"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
 		return
 	}
 	reminder, err := h.reminder.Schedule(r.Context(), userID, service.ReminderInput{
-		MessageID:   body.MessageID,
-		ParentID:    body.ParentID,
-		ParentType:  body.ParentType,
-		ChannelSlug: body.ChannelSlug,
-		RemindAt:    body.RemindAt,
+		MessageID:       body.MessageID,
+		ParentID:        body.ParentID,
+		ParentType:      body.ParentType,
+		ChannelSlug:     body.ChannelSlug,
+		RemindAt:        body.RemindAt,
+		UserIDs:         body.UserIDs,
+		Everyone:        body.Everyone,
+		ExcludedUserIDs: body.Excluded,
+		Note:            body.Note,
 	})
 	if err != nil {
 		writeServiceError(w, r, err)
@@ -172,6 +181,26 @@ func (h *ActivityHandler) ListReminders(w http.ResponseWriter, r *http.Request) 
 		reminders = []*model.Reminder{}
 	}
 	writeJSON(w, http.StatusOK, reminders)
+}
+
+// UpdateReminder changes a pending reminder's time, people and note.
+func (h *ActivityHandler) UpdateReminder(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.UserIDFromContext(r.Context())
+	if userID == "" {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+	var body service.ReminderUpdate
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
+		return
+	}
+	reminder, err := h.reminder.Update(r.Context(), userID, pathParam(r, "id"), body)
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, reminder)
 }
 
 // CancelReminder cancels a pending reminder.

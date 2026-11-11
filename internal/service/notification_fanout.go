@@ -424,7 +424,14 @@ func (s *NotificationService) fanOut(ctx context.Context, msg *model.Message, pa
 	// Activity, alerted or not (thread-reply notifications off), so the
 	// Threads view and the Activity tab always agree on what is unread.
 	var threadUnread []string
+	except := make(map[string]bool, len(msg.NotifyExcept))
+	for _, uid := range msg.NotifyExcept {
+		except[uid] = true
+	}
 	for _, uid := range snap.memberIDs {
+		if except[uid] {
+			continue
+		}
 		eff := snap.prefs[uid]
 		// DMs always notify their participants — "direct messages" is part
 		// of even the quiet "mentions, DMs & keywords" level — except for a

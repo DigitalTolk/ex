@@ -23,7 +23,8 @@ import (
 // display name, a description), issues it access tokens, and an integration
 // written against Mattermost's REST API (/api/v4) acts as that bot with one.
 // Like a person, a bot only posts where it is a member. Disabling a bot
-// deactivates its account, which stops its tokens too.
+// deactivates its account, which stops its tokens too; deleting one also
+// revokes them, frees its username and drops it from the bot list.
 
 // Mattermost's limits for a bot: a username of 3 to 22 lowercase letters,
 // digits, '.', '-' and '_' starting with a letter, a display name of at most
@@ -58,6 +59,7 @@ type BotStore interface {
 	GetBotToken(ctx context.Context, hash string) (*model.BotToken, error)
 	ListBotTokens(ctx context.Context, botID string) ([]*model.BotToken, error)
 	DeleteBotToken(ctx context.Context, hash string) error
+	DeleteBot(ctx context.Context, id, username string, at time.Time) error
 }
 
 // BotAccountDirectory lists the bot accounts and flips their status
@@ -218,6 +220,41 @@ func (s *BotService) SetEnabled(ctx context.Context, actor BotActor, id string, 
 	}
 	s.publishChanged(ctx)
 	return bot, nil
+}
+
+// Delete deletes a bot for good: its account is deactivated (as disabling
+// it does), its tokens are revoked, its username is freed for another bot,
+// and it leaves the bot list. Its row stays, so its messages keep their
+// author. A delete that fails part way is safe to repeat.
+func (s *BotService) Delete(ctx context.Context, actor BotActor, id string) error {
+	if err := actor.check(); err != nil {
+		return err
+	}
+	bot, err := s.bot(ctx, id)
+	if err != nil {
+		return err
+	}
+	if bot.Status != "deactivated" {
+		if _, err := s.accounts.SetStatus(ctx, id, true); err != nil {
+			return err
+		}
+	}
+	tokens, err := s.bots.ListBotTokens(ctx, id)
+	if err != nil {
+		return fmt.Errorf("bot: list tokens: %w", err)
+	}
+	for _, t := range tokens {
+		if err := s.bots.DeleteBotToken(ctx, t.TokenHash); err != nil {
+			return fmt.Errorf("bot: revoke token: %w", err)
+		}
+	}
+	if err := s.bots.DeleteBot(ctx, id, bot.Username, time.Now()); err != nil {
+		return fmt.Errorf("bot: delete: %w", err)
+	}
+	forgetCachedUser(ctx, s.cache, id)
+	events.Publish(ctx, s.publisher, pubsub.UserEvents(), events.EventUserUpdated, map[string]any{"id": id})
+	s.publishChanged(ctx)
+	return nil
 }
 
 // ListTokens returns a bot's tokens, oldest first.
