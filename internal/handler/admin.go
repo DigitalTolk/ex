@@ -43,7 +43,14 @@ type AdminHandler struct {
 	mailer        email.Sender
 	emailProvider string
 	emailFrom     string
+	// sharePointHosts are the SharePoint hosts whose posted links are shared
+	// (SetSharePointHosts); empty when SharePoint sharing is off.
+	sharePointHosts []string
 }
+
+// SetSharePointHosts tells clients which links are SharePoint links: they
+// show those as file cards and open them for editing.
+func (h *AdminHandler) SetSharePointHosts(hosts []string) { h.sharePointHosts = hosts }
 
 // NewAdminHandler constructs an AdminHandler.
 func NewAdminHandler(settings *service.SettingsService) *AdminHandler {
@@ -159,15 +166,19 @@ type settingsResponse struct {
 	GiphyAPIKey       string   `json:"giphyAPIKey,omitempty"`
 	GiphyEnabled      bool     `json:"giphyEnabled"`
 	RunnersInApp      bool     `json:"runnersInApp"`
+	// SharePointHosts are the hosts whose links are shared SharePoint
+	// files; "*.example.com" matches every subdomain.
+	SharePointHosts []string `json:"sharePointHosts,omitempty"`
 }
 
-func newSettingsResponse(ws *model.WorkspaceSettings) settingsResponse {
+func (h *AdminHandler) newSettingsResponse(ws *model.WorkspaceSettings) settingsResponse {
 	return settingsResponse{
 		MaxUploadBytes:    ws.MaxUploadBytes,
 		AllowedExtensions: ws.AllowedExtensions,
 		GiphyAPIKey:       ws.GiphyAPIKey,
 		GiphyEnabled:      ws.GiphyAPIKey != "",
 		RunnersInApp:      ws.RunnersInApp,
+		SharePointHosts:   h.sharePointHosts,
 	}
 }
 
@@ -181,7 +192,7 @@ func (h *AdminHandler) GetSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "unauthorized", "authentication required")
 		return
 	}
-	writeJSON(w, http.StatusOK, newSettingsResponse(h.settings.Effective(r.Context())))
+	writeJSON(w, http.StatusOK, h.newSettingsResponse(h.settings.Effective(r.Context())))
 }
 
 // PushStats returns this instance's mobile-push pipeline counters
@@ -328,5 +339,5 @@ func (h *AdminHandler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 		writeServiceError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, newSettingsResponse(out))
+	writeJSON(w, http.StatusOK, h.newSettingsResponse(out))
 }

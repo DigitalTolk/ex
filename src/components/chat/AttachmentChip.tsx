@@ -14,6 +14,12 @@ interface DraftAttachment {
   squareThumbnailURL?: string;
   // [0, 1] while uploading; undefined or 1 means done.
   progress?: number;
+  // Where the file goes when not into ex itself ("OneDrive"), named on the
+  // chip.
+  destination?: string;
+  // A file kept there: the markdown link the message carries instead of an
+  // attachment (see composerValue).
+  link?: string;
 }
 
 interface AttachmentChipProps {
@@ -56,13 +62,14 @@ export function AttachmentChip({ att, onRemove }: AttachmentChipProps) {
       </div>
       <div className="min-w-0 flex-1">
         <p className="text-xs font-medium truncate">{att.filename}</p>
-        <p className="text-xs text-muted-foreground">
+        <p className="text-xs text-muted-foreground truncate">
           {formatBytes(att.size)}
+          {att.destination && ` · ${uploading ? 'to' : 'in'} ${att.destination}`}
         </p>
         {uploading && (
           <div
             role="progressbar"
-            aria-label={`Uploading ${att.filename}`}
+            aria-label={`Uploading ${att.filename}${att.destination ? ` to ${att.destination}` : ''}`}
             aria-valuenow={Math.round(pct * 100)}
             aria-valuemin={0}
             aria-valuemax={100}

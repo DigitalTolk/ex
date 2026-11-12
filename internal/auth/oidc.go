@@ -25,6 +25,10 @@ type OIDCUserInfo struct {
 	// EmailVerified is the `email_verified` claim, nil when the provider
 	// omits it (Entra ID does).
 	EmailVerified *bool
+	// Token is the provider's token response. With extra scopes requested
+	// (NewOIDCProvider) its access and refresh tokens act as the user on the
+	// API those scopes name.
+	Token *oauth2.Token
 }
 
 // OIDCProvider wraps an OpenID Connect provider for authentication.
@@ -35,7 +39,9 @@ type OIDCProvider struct {
 }
 
 // NewOIDCProvider discovers the OIDC provider and configures OAuth2.
-func NewOIDCProvider(ctx context.Context, issuer, clientID, clientSecret, redirectURL string) (*OIDCProvider, error) {
+// extraScopes are requested on top of openid/profile/email, e.g.
+// offline_access plus an API scope when the app acts as the user later.
+func NewOIDCProvider(ctx context.Context, issuer, clientID, clientSecret, redirectURL string, extraScopes ...string) (*OIDCProvider, error) {
 	provider, err := oidc.NewProvider(ctx, issuer)
 	if err != nil {
 		return nil, fmt.Errorf("oidc discovery: %w", err)
@@ -46,7 +52,7 @@ func NewOIDCProvider(ctx context.Context, issuer, clientID, clientSecret, redire
 		ClientSecret: clientSecret,
 		RedirectURL:  redirectURL,
 		Endpoint:     provider.Endpoint(),
-		Scopes:       []string{oidc.ScopeOpenID, "profile", "email"},
+		Scopes:       append([]string{oidc.ScopeOpenID, "profile", "email"}, extraScopes...),
 	}
 
 	verifier := provider.Verifier(&oidc.Config{ClientID: clientID})
@@ -56,6 +62,13 @@ func NewOIDCProvider(ctx context.Context, issuer, clientID, clientSecret, redire
 		oauth2Config: oauth2Cfg,
 		verifier:     verifier,
 	}, nil
+}
+
+// OAuth2Config is the provider's OAuth2 client, for renewing a user's token
+// with the refresh token their login returned.
+func (p *OIDCProvider) OAuth2Config() *oauth2.Config {
+	c := p.oauth2Config
+	return &c
 }
 
 // AuthURL returns the URL to redirect the user to for authentication. The nonce
@@ -110,6 +123,7 @@ func (p *OIDCProvider) Exchange(ctx context.Context, code, nonce string) (*OIDCU
 		Issuer:        idToken.Issuer,
 		Subject:       idToken.Subject,
 		EmailVerified: verified,
+		Token:         oauth2Token,
 	}, nil
 }
 

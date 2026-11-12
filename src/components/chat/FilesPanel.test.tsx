@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router-dom';
 import { FilesPanel } from './FilesPanel';
@@ -29,12 +29,12 @@ vi.mock('@/lib/api', () => ({
 // are jsdom-hostile (PointerEvent, ResizeObserver, animation frames).
 // Stubbing the hook keeps this unit test focused on the row-rendering
 // surface — the lightbox itself has its own tests.
+const lightbox = vi.hoisted(() => ({ open: vi.fn(), sources: [] as { key: string; slide: unknown }[] }));
 vi.mock('@/hooks/useAttachmentLightbox', () => ({
-  useAttachmentLightbox: ({ sources }: { sources: { key: string; slide: unknown }[] }) => ({
-    isOpenable: (k: string) => !!sources.find((s) => s.key === k && s.slide),
-    open: vi.fn(),
-    lightbox: null,
-  }),
+  useAttachmentLightbox: ({ sources }: { sources: { key: string; slide: unknown }[] }) => {
+    lightbox.sources = sources;
+    return { isOpenable: (k: string) => !!sources.find((s) => s.key === k && s.slide), open: lightbox.open, lightbox: null };
+  },
 }));
 
 interface Attachment {
@@ -46,12 +46,23 @@ interface Attachment {
   downloadURL?: string;
   squareThumbnailURL?: string;
 }
+interface SharePointFile {
+  id: string;
+  name: string;
+  size: number;
+  folder?: boolean;
+  mimeType?: string;
+  webURL: string;
+  editURL?: string;
+}
+
 interface FileEntry {
   attachmentID: string;
   messageID: string;
   authorID: string;
   createdAt: string;
-  attachment: Attachment;
+  attachment?: Attachment;
+  sharePoint?: SharePointFile;
 }
 interface FilePage {
   files: FileEntry[];
@@ -262,5 +273,50 @@ describe('FilesPanel', () => {
       '/api/v1/channels/ch-1/files',
       '/api/v1/channels/ch-1/files?cursor=c2',
     ]);
+  });
+
+  it('lists SharePoint files, which open in the lightbox (a folder in SharePoint)', async () => {
+    const doc: SharePointFile = {
+      id: 'f-1',
+      name: 'Budget.xlsx',
+      size: 9,
+      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      webURL: 'https://contoso.sharepoint.com/Budget.xlsx',
+      editURL: 'https://contoso.sharepoint.com/_layouts/15/Doc.aspx?action=edit',
+    };
+    const folder: SharePointFile = { id: 'f-2', name: 'Reports', size: 0, folder: true, webURL: 'https://contoso.sharepoint.com/Reports' };
+    setupAPI({
+      files: [
+        { attachmentID: 'sp:f-1', messageID: 'm-2', authorID: 'u-1', createdAt: '2026-05-02T12:00:00Z', sharePoint: doc },
+        { attachmentID: 'sp:f-2', messageID: 'm-3', authorID: 'u-gone', createdAt: '2026-05-02T12:00:00Z', sharePoint: folder },
+        // Microsoft 365 reports no type for some files.
+        { attachmentID: 'sp:f-3', messageID: 'm-4', authorID: 'u-1', createdAt: '2026-05-02T12:00:00Z', sharePoint: { id: 'f-3', name: 'notes', size: 1, webURL: 'https://contoso.sharepoint.com/notes' } },
+        entry(spec),
+      ],
+    });
+    renderPanel();
+    const budget = await screen.findByRole('button', { name: 'Open Budget.xlsx' });
+    expect(budget.textContent).toContain('Alice');
+    expect(budget.textContent).toContain('SharePoint');
+    expect(within(budget).getByTestId('file-type-icon')).toHaveAttribute('data-kind', 'spreadsheet');
+    fireEvent.click(budget);
+    expect(lightbox.open).toHaveBeenCalledWith('sp:f-1:m-2');
+    // A slide among the attachments, shown as the viewer in its own viewer.
+    expect(lightbox.sources[0].slide).toEqual({
+      authorName: 'Alice',
+      authorAvatarURL: undefined,
+      postedAt: '2026-05-02T12:00:00Z',
+      sharePoint: { file: doc, parent: { channelId: 'ch-1', conversationId: undefined } },
+    });
+    // A folder opens in SharePoint.
+    const reports = screen.getByRole('link', { name: 'Open Reports' });
+    expect(reports).toHaveAttribute('href', folder.webURL);
+    expect(reports).toHaveAttribute('target', '_blank');
+    expect(reports.textContent).toContain('Unknown');
+    expect(lightbox.sources[1].slide).toBeNull();
+    // A file of no known type still opens; the attachment beside them too.
+    expect(within(screen.getByRole('button', { name: 'Open notes' })).getByTestId('file-type-icon')).toHaveAttribute('data-kind', 'other');
+    expect(screen.getByRole('button', { name: 'Open spec.pdf' })).toBeEnabled();
+    expect(screen.getAllByTestId('files-row')).toHaveLength(4);
   });
 });

@@ -140,6 +140,11 @@ const (
 	// to the moment of the click.
 	EventViewOpened  = "view.opened"
 	EventViewUpdated = "view.updated"
+	// EventSharePointChanged tells a channel's or conversation's members that
+	// SharePoint links posted there changed state (shared, failed, a member
+	// given or denied access), so their link cards and Files panel refetch.
+	// data is model.SharePointChangedEvent. Sent to the parent's topic.
+	EventSharePointChanged = "sharepoint.changed"
 )
 
 // ephemeralTypes are events that exist only for the live socket — they

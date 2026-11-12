@@ -22,6 +22,7 @@ import (
 	"github.com/DigitalTolk/ex/internal/safe"
 	"github.com/DigitalTolk/ex/internal/store"
 	"golang.org/x/crypto/bcrypt"
+	"golang.org/x/oauth2"
 )
 
 // generalChannelID is a deterministic ULID derived from the name "general"
@@ -56,6 +57,9 @@ type AuthService struct {
 	// attributes (phone + manager). Lookups are fail-open: an outage
 	// degrades to an un-enriched login.
 	directory DirectoryLookup
+	// delegated keeps the Microsoft token each SSO login returns, so posted
+	// SharePoint links can be shared as their poster (SetDelegatedTokens).
+	delegated DelegatedTokenSaver
 	// publisher broadcasts user.updated when a login-time directory sync
 	// changes an existing profile, so open clients refresh it live.
 	publisher Publisher
@@ -204,6 +208,16 @@ func (s *AuthService) SetIndexer(i UserIndexer) { s.indexer = i }
 // enrich OIDC logins with phone + manager. Optional; nil disables enrichment.
 func (s *AuthService) SetDirectory(d DirectoryLookup) { s.directory = d }
 
+// DelegatedTokenSaver keeps the Microsoft token an SSO login returned
+// (DelegatedTokens).
+type DelegatedTokenSaver interface {
+	SaveDelegatedToken(ctx context.Context, userID string, tok *oauth2.Token) error
+}
+
+// SetDelegatedTokens wires keeping each SSO login's Microsoft token. Optional:
+// only when SharePoint sharing is configured.
+func (s *AuthService) SetDelegatedTokens(t DelegatedTokenSaver) { s.delegated = t }
+
 // SetPublisher wires the event publisher used to broadcast user.updated when
 // a directory sync changes a profile. Optional.
 func (s *AuthService) SetPublisher(p Publisher) { s.publisher = p }
@@ -283,12 +297,24 @@ func (s *AuthService) HandleOIDCCallback(ctx context.Context, code, state, nonce
 
 	// Ensure #general exists and the user is a member.
 	s.ensureGeneralChannel(ctx, user)
+	s.saveDelegatedToken(ctx, user.ID, info.Token)
 
 	accessToken, refreshTokenRaw, err = s.issueTokens(ctx, user)
 	if err != nil {
 		return "", "", nil, err
 	}
 	return accessToken, refreshTokenRaw, user, nil
+}
+
+// saveDelegatedToken keeps the login's Microsoft token. Fail-open: without
+// it the login works and only SharePoint sharing asks for a new sign-in.
+func (s *AuthService) saveDelegatedToken(ctx context.Context, userID string, tok *oauth2.Token) {
+	if s.delegated == nil {
+		return
+	}
+	if err := s.delegated.SaveDelegatedToken(ctx, userID, tok); err != nil {
+		slog.WarnContext(ctx, "auth: Microsoft token not saved; SharePoint links will ask this user to sign in again", "userID", userID, "error", err)
+	}
 }
 
 // lookupDirectory enriches an SSO login with employee-directory attributes

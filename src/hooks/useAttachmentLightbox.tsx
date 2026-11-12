@@ -1,16 +1,46 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import { ImageLightbox, type LightboxImage } from '@/components/chat/ImageLightbox';
+import type { SharePointParent } from '@/hooks/useSharePoint';
 import type { Attachment } from '@/types';
+import type { SharePointFile } from '@/types/generated';
 
 // LightboxSlide is everything the lightbox header needs to display the
 // authoring context for one slide. Per-slide rather than per-component so a
 // list of files from many authors (e.g. the channel files panel) can show
 // the right author + timestamp on each.
-export interface LightboxSlide {
-  attachment: Attachment;
+export type LightboxSlide = {
   authorName: string;
   authorAvatarURL?: string;
   postedAt: string;
+} & (
+  | { attachment: Attachment; sharePoint?: undefined }
+  // A SharePoint file a posted link shared, shown in its own viewer.
+  | { attachment?: undefined; sharePoint: { file: SharePointFile; parent: SharePointParent } }
+);
+
+function lightboxItem(slide: LightboxSlide): LightboxImage {
+  if (slide.sharePoint) {
+    const { file, parent } = slide.sharePoint;
+    return {
+      url: file.webURL,
+      // An item Microsoft 365 gave no SharePoint ids has no download
+      // address: it downloads from its own page.
+      downloadURL: file.downloadURL || file.webURL,
+      filename: file.name,
+      contentType: file.mimeType ?? '',
+      size: file.size,
+      sharePoint: { parent, fileID: file.id, editURL: file.editURL },
+    };
+  }
+  const a = slide.attachment;
+  return {
+    url: a.url ?? '',
+    downloadURL: a.downloadURL,
+    thumbnailURL: a.thumbnailURL,
+    filename: a.filename,
+    contentType: a.contentType,
+    size: a.size,
+  };
 }
 
 export interface AttachmentLightboxSource<K> {
@@ -50,15 +80,7 @@ export function useAttachmentLightbox<K>({
       if (!slide) continue;
       idx.set(key, items.length);
       slideOrder.push(slide);
-      const a = slide.attachment;
-      items.push({
-        url: a.url ?? '',
-        downloadURL: a.downloadURL,
-        thumbnailURL: a.thumbnailURL,
-        filename: a.filename,
-        contentType: a.contentType,
-        size: a.size,
-      });
+      items.push(lightboxItem(slide));
     }
     return { lightboxItems: items, slides: slideOrder, indexByKey: idx };
   }, [sources]);

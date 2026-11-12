@@ -201,6 +201,7 @@ func TestNewRouter_AllOptionalHandlersWired(t *testing.T) {
 		Webhook:      &WebhookHandler{},
 		Interaction:  &InteractionHandler{},
 		Command:      &CommandHandler{},
+		SharePoint:   &SharePointHandler{},
 		JWT:          jwtMgr,
 		AppVersion:   "test",
 		AllowOrigins: []string{"*"},
@@ -226,6 +227,8 @@ func TestNewRouter_AllOptionalHandlersWired(t *testing.T) {
 		"/api/v1/unfurl",
 		"/api/v1/admin/webhooks",
 		"/api/v1/commands",
+		"/api/v1/sharepoint/link",
+		"/api/v1/sharepoint/preview",
 	}
 	for _, p := range paths {
 		req := httptest.NewRequest(http.MethodGet, p, nil)

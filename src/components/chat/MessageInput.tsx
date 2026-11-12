@@ -1,5 +1,5 @@
 import { useRef, useCallback, useImperativeHandle, forwardRef, type ReactNode } from 'react';
-import { Send, Loader2 } from 'lucide-react';
+import { Send, Loader2, Info } from 'lucide-react';
 import { useEventCallback } from '@/hooks/useEventCallback';
 import { Button } from '@/components/ui/button';
 import { AttachmentChip, type DraftAttachment } from '@/components/chat/AttachmentChip';
@@ -21,6 +21,7 @@ import { useComposerUploads } from './useComposerUploads';
 import { useLinkDialog } from './useLinkDialog';
 import { useSlashCommands } from './useSlashCommands';
 import { useTypingPing } from './useTypingPing';
+import { useOptionalAuth } from '@/context/AuthContext';
 
 export interface MessageInputValue {
   body: string;
@@ -134,10 +135,14 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     onDraftChange,
     suppressAutoFocus,
   });
+  // Only a Microsoft sign-in can keep files in OneDrive; a guest's are
+  // attached without asking.
+  const signedInWithMicrosoft = useOptionalAuth()?.user?.authProvider === 'oidc';
   const { isUploading, uploadError, uploadFiles, handleFileUpload, removeDraft } = useComposerUploads({
     drafts,
     setDrafts,
     markLocallyEdited,
+    officeParent: signedInWithMicrosoft && typingParentType && typingParentID ? { type: typingParentType, id: typingParentID } : undefined,
   });
   const {
     editorFocused,
@@ -306,6 +311,22 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
           data-testid="message-attachments-too-many"
         >
           Up to {MAX_ATTACHMENTS_PER_MESSAGE} attachments per message — remove a few to send.
+        </div>
+      )}
+      {/* An Office file headed for (or already in) OneDrive: say where it
+          goes, because a downloaded-and-edited copy uploads as a NEW document
+          on SharePoint; someone meaning to share the one that exists should
+          paste its SharePoint link instead. Keys on the chips the upload hook
+          actually routed to OneDrive, so it never shows when SharePoint is
+          off, the poster is a guest, or OneDrive refused the file. */}
+      {drafts.some((d) => d.destination === 'OneDrive') && (
+        <div
+          className="mb-2 flex items-center gap-2 rounded-md bg-muted p-2 text-xs text-muted-foreground"
+          role="status"
+          data-testid="office-upload-banner"
+        >
+          <Info className="h-3.5 w-3.5 shrink-0 text-caution-foreground" aria-hidden="true" />
+          This will upload a new version to SharePoint. To share an existing document, use the SharePoint link instead.
         </div>
       )}
       {/* `relative` wrapper anchors the typing-indicator overlay to the
