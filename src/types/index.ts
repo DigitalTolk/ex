@@ -119,6 +119,10 @@ export interface Message {
   // Skills the run USED (explicit /picks + invoke_skill calls) — rendered as
   // badges next to the "for <invoker>" tag.
   agentSkills?: string[];
+  // Agent user id → whose watcher brought that agent here (a channel
+  // subscription, not a mention). The reaction tooltip names them, since an
+  // agent's run-state reactions look the same however it was invoked.
+  agentWatchers?: Record<string, string>;
   // Echo of the sender's X-Client-Nonce (only on this client's own sends).
   clientNonce?: string;
   // Client-only: an optimistic row for a message still being sent, or one

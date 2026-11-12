@@ -443,6 +443,40 @@ describe('MessageItem content branches', () => {
   });
 });
 
+// A watcher agent's name is an accent you can hover, inside the reaction
+// tooltip, to see whose watcher brought it.
+describe('MessageItem reaction tooltip watcher agents', () => {
+  it('reveals whose watcher an agent is when its name is hovered', async () => {
+    if (window.innerWidth <= 767) return; // touch has no tooltip; the toast covers it
+    await renderWithProviders(
+      <MessageItem
+        message={makeMessage({
+          reactions: { '👀': ['agent-gg', 'agent-qib'] },
+          agentWatchers: { 'agent-qib': 'user-2' },
+        })}
+        authorName="Alice"
+        isOwn={false}
+        channelId="channel-1"
+        currentUserId="user-1"
+        userMap={{ get: (id: string) => ({ displayName: { 'agent-gg': 'gg', 'agent-qib': 'qib', 'user-2': 'Bob' }[id] ?? id }) }}
+      />,
+    );
+    await userEvent.hover(document.querySelector('[data-testid="reaction-badge"]') as HTMLElement);
+    const agent = await vi.waitFor(() => {
+      const el = document.querySelector('[data-testid="reaction-watcher-agent"]') as HTMLElement | null;
+      expect(el).not.toBeNull();
+      return el!;
+    }, { timeout: 3000 });
+    const owner = agent.querySelector('[data-testid="reaction-watcher-owner"]') as HTMLElement;
+    expect(getComputedStyle(owner).display).toBe('none');
+    // Moving onto the name keeps the tooltip open and shows the owner.
+    await userEvent.hover(agent);
+    await vi.waitFor(() => expect(getComputedStyle(owner).display).toBe('block'), { timeout: 3000 });
+    expect(owner.textContent).toBe('Bob’s watcher');
+    expect(document.querySelectorAll('[data-testid="reaction-watcher-agent"]')).toHaveLength(1);
+  });
+});
+
 describe('MessageItem mobile action sheet branches', () => {
   it('opens the long-press sheet, suppresses it while the reaction picker is open', async () => {
     if (window.innerWidth > 767) return;
