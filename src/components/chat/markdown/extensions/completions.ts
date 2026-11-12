@@ -1,11 +1,14 @@
 import {
   acceptCompletion,
   autocompletion,
+  completionStatus,
+  currentCompletions,
   selectedCompletionIndex,
   setSelectedCompletion,
+  type Completion,
 } from '@codemirror/autocomplete';
-import { Prec } from '@codemirror/state';
-import { ViewPlugin, keymap, type EditorView } from '@codemirror/view';
+import { Prec, type EditorState } from '@codemirror/state';
+import { EditorView, ViewPlugin, keymap } from '@codemirror/view';
 import {
   userMentionSource,
   channelMentionSource,
@@ -14,6 +17,8 @@ import {
 import { emojiSource, type EmojiProviders } from './emojiAutocomplete';
 import { slashCommandSource, type SlashCommandProviders } from './slashCommands';
 import { renderMentionOption } from './optionRender';
+import { deviceKind } from '@/lib/device';
+import { numberedShortcut, numberedShortcutLabel } from '@/lib/platform';
 
 // Single CodeMirror autocompletion instance combining every composer source:
 // @-mentions, ~-channels, :emoji: and /commands. CM6 merges sibling
@@ -52,6 +57,48 @@ const hoverSelect = ViewPlugin.fromClass(
   },
 );
 
+// ⌘1 to ⌘9 (Ctrl elsewhere) accept the first nine options of the open
+// typeahead, so a known pick is one chord away. While the typeahead is open the
+// chord always belongs to it, even past the end of a short list, so a slip
+// never reaches the browser or shell (which would switch tabs). With nothing
+// open it passes through untouched.
+export function acceptNumberedCompletion(n: number) {
+  return (view: EditorView): boolean => {
+    if (completionStatus(view.state) !== 'active') return false;
+    if (n <= currentCompletions(view.state).length) {
+      view.dispatch({ effects: setSelectedCompletion(n - 1) });
+      acceptCompletion(view);
+    }
+    return true;
+  };
+}
+
+// Read off the keydown rather than a `Mod-1` keymap: CodeMirror maps Mod to
+// Cmd only where navigator.platform says Mac, so an iPad with a keyboard would
+// want Ctrl while the hint (and the search's ⌘K) say ⌘.
+const numberedKeys = EditorView.domEventHandlers({
+  keydown: (event, view) => {
+    const n = numberedShortcut(event, navigator.userAgent);
+    if (n === null || !acceptNumberedCompletion(n)(view)) return false;
+    event.preventDefault();
+    return true;
+  },
+});
+
+// renderOption draws the rich row, plus the ⌘1 to ⌘9 hint on the first nine
+// rows where there is a keyboard to press it with.
+export function renderOption(completion: Completion, state: EditorState): Node | null {
+  const row = renderMentionOption(completion);
+  if (!row || deviceKind() === 'touch') return row;
+  const index = currentCompletions(state).indexOf(completion);
+  if (index < 0 || index >= 9) return row;
+  const hint = document.createElement('kbd');
+  hint.className = 'cm-option-key';
+  hint.textContent = numberedShortcutLabel(index + 1, navigator.userAgent);
+  row.appendChild(hint);
+  return row;
+}
+
 export function composerAutocomplete(providers: CompletionProviders) {
   return [
     autocompletion({
@@ -65,7 +112,7 @@ export function composerAutocomplete(providers: CompletionProviders) {
       icons: false,
       // Render a rich custom row (avatar / channel icon / large emoji + text
       // column) per option; the default label/detail are hidden in the theme.
-      addToOptions: [{ render: renderMentionOption, position: 20 }],
+      addToOptions: [{ render: renderOption, position: 20 }],
     }),
     // Tab accepts the highlighted option while the typeahead is open —
     // Slack/IDE muscle memory alongside the default Enter. acceptCompletion
@@ -74,6 +121,7 @@ export function composerAutocomplete(providers: CompletionProviders) {
     // future lower-precedence Tab binding (e.g. indentation) can't shadow it
     // while the popup is open.
     Prec.high(keymap.of([{ key: 'Tab', run: acceptCompletion }])),
+    Prec.high(numberedKeys),
     hoverSelect,
   ];
 }

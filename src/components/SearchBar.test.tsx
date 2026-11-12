@@ -178,6 +178,84 @@ describe('SearchBar', () => {
     expect(input.value).toBe('');
   });
 
+  describe('⌘1 to ⌘9 / Ctrl+1 to Ctrl+9', () => {
+    const hits = () => {
+      useSearchChannelsMock.mockReturnValue({
+        data: { hits: [{ id: 'c1', _source: { name: 'general', slug: 'general' } }] },
+        isLoading: false,
+      });
+      useSearchUsersMock.mockReturnValue({
+        data: { hits: [{ id: 'u1', _source: { displayName: 'Alice' } }] },
+        isLoading: false,
+      });
+      useUserConversationsMock.mockReturnValue({
+        data: [{ conversationID: 'g1', type: 'group', displayName: 'Alice, Bob' }],
+      });
+    };
+
+    it('labels the first rows Ctrl 1, Ctrl 2… in order and picks the one pressed', () => {
+      hits();
+      renderBar();
+      const input = screen.getByTestId('searchbar-input');
+      fireEvent.change(input, { target: { value: 'al' } });
+      expect(within(screen.getByTestId('searchbar-channel-c1')).getByText('Ctrl 1')).toBeInTheDocument();
+      expect(within(screen.getByTestId('searchbar-user-u1')).getByText('Ctrl 2')).toBeInTheDocument();
+      expect(within(screen.getByTestId('searchbar-group-g1')).getByText('Ctrl 3')).toBeInTheDocument();
+      expect(within(screen.getByTestId('searchbar-show-results')).getByText('Ctrl 4')).toBeInTheDocument();
+      fireEvent.keyDown(input, { key: '3', ctrlKey: true });
+      expect(lastLocation.pathname).toBe('/conversation/g1');
+    });
+
+    it('Ctrl+2 opens the person in the second row', () => {
+      hits();
+      renderBar();
+      const input = screen.getByTestId('searchbar-input');
+      fireEvent.change(input, { target: { value: 'al' } });
+      fireEvent.keyDown(input, { key: '2', ctrlKey: true });
+      expect(openDMMock).toHaveBeenCalledWith('u1', expect.anything());
+    });
+
+    it('uses ⌘ on Apple platforms', () => {
+      const restore = stubUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)');
+      try {
+        hits();
+        renderBar();
+        const input = screen.getByTestId('searchbar-input');
+        fireEvent.change(input, { target: { value: 'al' } });
+        expect(within(screen.getByTestId('searchbar-channel-c1')).getByText('⌘1')).toBeInTheDocument();
+        fireEvent.keyDown(input, { key: '1', metaKey: true });
+        expect(lastLocation.pathname).toBe('/channel/general');
+      } finally {
+        restore();
+      }
+    });
+
+    it('past the last row the chord is swallowed; with no list it passes through', () => {
+      renderBar();
+      const input = screen.getByTestId('searchbar-input');
+      fireEvent.focus(input);
+      // No list yet: the chord is not ours.
+      expect(fireEvent.keyDown(input, { key: '1', ctrlKey: true })).toBe(true);
+      fireEvent.change(input, { target: { value: 'hello' } });
+      // One row (search messages); Ctrl+5 does nothing, but is still taken.
+      expect(fireEvent.keyDown(input, { key: '5', ctrlKey: true })).toBe(false);
+      expect(lastLocation.pathname).toBe('/');
+      expect(screen.getByTestId('searchbar-dropdown')).toBeInTheDocument();
+    });
+
+    it('labels only the first nine rows', () => {
+      useSearchChannelsMock.mockReturnValue({
+        data: { hits: Array.from({ length: 10 }, (_, i) => ({ id: `c${i}`, _source: { name: `ch${i}`, slug: `ch${i}` } })) },
+        isLoading: false,
+      });
+      renderBar();
+      fireEvent.change(screen.getByTestId('searchbar-input'), { target: { value: 'ch' } });
+      expect(within(screen.getByTestId('searchbar-channel-c8')).getByText('Ctrl 9')).toBeInTheDocument();
+      expect(within(screen.getByTestId('searchbar-channel-c9')).queryByText(/Ctrl/)).toBeNull();
+      expect(within(screen.getByTestId('searchbar-show-results')).queryByText(/Ctrl/)).toBeNull();
+    });
+  });
+
   describe('⌘K / Ctrl+K', () => {
     it('opens on Ctrl+K on non-Apple platforms (the ambient jsdom default)', () => {
       renderBar();

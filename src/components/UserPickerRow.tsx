@@ -1,6 +1,7 @@
 import { Check } from 'lucide-react';
 import { UserAvatar } from '@/components/UserAvatar';
 import { UserStatusIndicator } from '@/components/UserStatusIndicator';
+import { ShortcutHint } from '@/components/ShortcutHint';
 import type { UserStatus } from '@/types';
 
 export interface UserPickerRowProps {
@@ -29,6 +30,9 @@ export interface UserPickerRowProps {
   // to a text field). onSelect stays wired to click as the touch fallback —
   // callers keep pick() idempotent.
   pickOnMouseDown?: boolean;
+  // Keyboard shortcut that picks this row (⌘1 to ⌘9 in the search dropdown),
+  // shown at its right edge.
+  shortcut?: string;
 }
 
 // The ONE user row for every people dropdown (global search, add-member,
@@ -49,6 +53,7 @@ export function UserPickerRow({
   onHover,
   onSelect,
   pickOnMouseDown = false,
+  shortcut,
 }: UserPickerRowProps) {
   return (
     <button
@@ -91,6 +96,7 @@ export function UserPickerRow({
           <Check className="h-4 w-4" />
         </span>
       )}
+      {shortcut && <ShortcutHint>{shortcut}</ShortcutHint>}
     </button>
   );
 }

@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Clock3, Search, FileSearch, X, Loader2, Users } from 'lucide-react';
+import { Clock3, Search, FileSearch, X, Loader2, Users, UserRound } from 'lucide-react';
 import { Link, matchPath, useLocation, useNavigate } from 'react-router-dom';
 import { useChannelBySlug, useUserChannels } from '@/hooks/useChannels';
 import { useUserConversations, useOpenDM } from '@/hooks/useConversations';
@@ -14,9 +14,19 @@ import { useIsOnline } from '@/stores/presence';
 import { Badge } from '@/components/ui/badge';
 import { ChannelIcon } from '@/components/ChannelIcon';
 import { UserPickerRow } from '@/components/UserPickerRow';
-import { isApplePlatform, searchShortcutLabel } from '@/lib/platform';
+import { isApplePlatform, numberedShortcut, numberedShortcutLabel, searchShortcutLabel } from '@/lib/platform';
+import { ShortcutHint } from '@/components/ShortcutHint';
 import type { UserConversation, UserStatus } from '@/types';
-import { addRecentSearch, clearRecentSearches, removeRecentSearch, useRecentSearchesStore } from '@/stores/recent-searches';
+import {
+  addRecentOpened,
+  addRecentSearch,
+  clearRecentOpened,
+  clearRecentSearches,
+  removeRecentOpened,
+  removeRecentSearch,
+  useRecentSearchesStore,
+  type RecentOpened,
+} from '@/stores/recent-searches';
 
 // ⌘K on Apple platforms, Ctrl K elsewhere. The keydown handler matches the
 // SAME platform chord as this hint — on Apple only Cmd+K (a bare Ctrl+K is
@@ -80,9 +90,10 @@ interface SearchBarProps {
 
 export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) {
   const sheet = variant === 'sheet';
-  // The signed-in user's recent searches; only the sheet shows (or records)
-  // them.
+  // The signed-in user's recent searches and what they opened from search;
+  // only the sheet shows (or records) them.
   const recent = useRecentSearchesStore((st) => st.queries);
+  const opened = useRecentSearchesStore((st) => st.opened);
   const [q, setQ] = useState('');
   // Sheet only: the message search the user ran, shown in place. Editing the
   // text goes back to the live suggestions until they run it again.
@@ -243,6 +254,10 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
   const defaultIdx = items.findIndex((it) => it.kind === 'message');
   const keyedIdx = highlightKey === null ? -1 : items.findIndex((it) => itemKey(it) === highlightKey);
   const safeHighlight = keyedIdx >= 0 ? keyedIdx : Math.max(defaultIdx, 0);
+  // ⌘1 to ⌘9 (Ctrl elsewhere) pick the first nine rows; the desktop bar labels
+  // them. The sheet is the phone's, with no keyboard to show them for.
+  const shortcutFor = (idx: number) =>
+    !sheet && idx < 9 ? numberedShortcutLabel(idx + 1, navigator.userAgent) : undefined;
 
   function reset() {
     setOpen(false);
@@ -274,6 +289,27 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
     setSubmitted({ q: query });
   }
 
+  // Opening a channel, person or group from the sheet puts it on top of its
+  // "Recently opened" list, so it's one tap away next time.
+  function remember(entry: RecentOpened) {
+    if (sheet) addRecentOpened(entry);
+  }
+
+  function openRecent(entry: RecentOpened) {
+    if (entry.kind === 'user') {
+      openDM(entry.id, {
+        onSuccess: () => {
+          remember(entry);
+          reset();
+        },
+      });
+      return;
+    }
+    remember(entry);
+    reset();
+    navigate(entry.kind === 'channel' ? `/channel/${entry.slug}` : `/conversation/${entry.id}`);
+  }
+
   function activate(idx = safeHighlight) {
     /* istanbul ignore next -- safeHighlight is clamped in-range; the ?? fallback and the !item guard are defensive (the dropdown only renders when items is non-empty) */
     const item = items[idx] ?? items[0];
@@ -281,14 +317,28 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
     if (!item) return;
     if (item.kind === 'channel') {
       const slug = String(item.hit._source.slug || item.hit.id);
+      remember({
+        kind: 'channel',
+        id: item.hit.id,
+        slug,
+        name: String(item.hit._source.name || item.hit.id),
+        private: item.hit._source.type === 'private',
+      });
       reset();
       navigate(`/channel/${slug}`);
     } else if (item.kind === 'user') {
       // reset() only on success: a failed DM-create keeps the typed query
       // and the open dropdown (plus useOpenDM's error toast) so the user
       // can retry instead of facing a silently cleared search box.
-      openDM(item.hit.id, { onSuccess: reset });
+      const entry: RecentOpened = { kind: 'user', id: item.hit.id, name: String(item.hit._source.displayName || item.hit.id) };
+      openDM(item.hit.id, {
+        onSuccess: () => {
+          remember(entry);
+          reset();
+        },
+      });
     } else if (item.kind === 'group') {
+      remember({ kind: 'group', id: item.conversation.conversationID, name: item.conversation.displayName });
       reset();
       navigate(`/conversation/${item.conversation.conversationID}`);
     } else {
@@ -315,7 +365,7 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
     submitted?.scope ? { in: submitted.scope.parentId } : undefined,
   );
   const messageHits = messagesQuery.data?.hits ?? [];
-  const showRecent = sheet && !trimmed && recent.length > 0;
+  const showRecent = sheet && !trimmed && (recent.length > 0 || opened.length > 0);
   const listOpen = showDropdown && items.length > 0;
 
   return (
@@ -349,7 +399,14 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
               // hidden item list (empty/cleared input) must never be
               // activatable; the old handler navigated to stale hits on
               // Enter with an empty search box.
-              if (e.key === 'Enter') {
+              const picked = numberedShortcut(e, navigator.userAgent);
+              if (picked !== null) {
+                // While the list is up the chord is its own, even past the
+                // last row, so a slip never switches the browser tab.
+                if (!showDropdown || items.length === 0) return;
+                e.preventDefault();
+                if (picked <= items.length) activate(picked - 1);
+              } else if (e.key === 'Enter') {
                 e.preventDefault();
                 if (showDropdown && items.length > 0) activate();
               } else if (e.key === 'Escape') {
@@ -465,6 +522,7 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
                     id={optionId(items[flatIndex])}
                     hit={hit}
                     joined={joinedIDs.has(hit.id)}
+                    shortcut={shortcutFor(flatIndex)}
                     highlighted={flatIndex === safeHighlight}
                     onHover={() => setHighlightKey(`channel:${hit.id}`)}
                     onSelect={() => activate(flatIndex)}
@@ -488,6 +546,7 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
                     hit={hit}
                     avatarURL={userAvatarMap.get(hit.id)?.avatarURL}
                     userStatus={userAvatarMap.get(hit.id)?.userStatus}
+                    shortcut={shortcutFor(flatIndex)}
                     highlighted={flatIndex === safeHighlight}
                     onHover={() => setHighlightKey(`user:${hit.id}`)}
                     onSelect={() => activate(flatIndex)}
@@ -509,6 +568,7 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
                     key={conversation.conversationID}
                     id={optionId(items[flatIndex])}
                     conversation={conversation}
+                    shortcut={shortcutFor(flatIndex)}
                     highlighted={flatIndex === safeHighlight}
                     onHover={() => setHighlightKey(`group:${conversation.conversationID}`)}
                     onSelect={() => activate(flatIndex)}
@@ -528,6 +588,7 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
                   (it) => it.kind === 'message' && it.suggestion === s,
                 );
                 const isHighlighted = flatIndex === safeHighlight;
+                const shortcut = shortcutFor(flatIndex);
                 const Icon = s.kind === 'in-scope' ? FileSearch : Search;
                 const scopeNoun =
                   s.kind === 'in-scope'
@@ -576,8 +637,11 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
                         )}
                       </span>
                     </span>
-                    {isHighlighted && (
-                      <kbd className="rounded border bg-muted px-1.5 py-0.5 text-xs mobile:hidden">Enter</kbd>
+                    {(isHighlighted || shortcut) && (
+                      <span className="flex shrink-0 items-center gap-1">
+                        {isHighlighted && <ShortcutHint>Enter</ShortcutHint>}
+                        {shortcut && <ShortcutHint>{shortcut}</ShortcutHint>}
+                      </span>
                     )}
                   </button>
                 );
@@ -624,6 +688,57 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
       )}
       {showRecent && (
         <div className="mt-2" data-testid="recent-searches">
+          {opened.length > 0 && (
+            <>
+              <div className="flex items-center justify-between">
+                <SectionHeader>Recently opened</SectionHeader>
+                <button
+                  type="button"
+                  onClick={clearRecentOpened}
+                  className="min-h-11 px-3 text-xs font-medium text-muted-foreground hover:text-foreground"
+                  data-testid="recent-opened-clear"
+                >
+                  Clear
+                </button>
+              </div>
+              {opened.map((entry) => {
+                const label = entry.kind === 'channel' ? `~${entry.name}` : entry.name;
+                return (
+                  <div key={`${entry.kind}:${entry.id}`} className="flex items-center">
+                    <button
+                      type="button"
+                      onClick={() => openRecent(entry)}
+                      className="flex min-h-12 min-w-0 flex-1 items-center gap-3 px-3 text-left text-base"
+                      data-testid="recent-opened"
+                    >
+                      {entry.kind === 'channel' ? (
+                        <ChannelIcon
+                          type={entry.private ? 'private' : 'public'}
+                          className="h-4 w-4 shrink-0 text-muted-foreground"
+                          ariaLabel=""
+                        />
+                      ) : entry.kind === 'group' ? (
+                        <Users className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                      ) : (
+                        <UserRound className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                      )}
+                      <span className="truncate">{label}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => removeRecentOpened(entry)}
+                      aria-label={`Remove ${label} from recently opened`}
+                      className="inline-flex h-11 w-11 shrink-0 items-center justify-center text-muted-foreground"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                );
+              })}
+            </>
+          )}
+          {recent.length > 0 && (
+          <>
           <div className="flex items-center justify-between">
             <SectionHeader>Recent searches</SectionHeader>
             <button
@@ -656,6 +771,8 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
               </button>
             </div>
           ))}
+          </>
+          )}
         </div>
       )}
     </div>
@@ -696,12 +813,14 @@ function SectionHeader({ children }: { children: React.ReactNode }) {
 function GroupRow({
   id,
   conversation,
+  shortcut,
   highlighted,
   onHover,
   onSelect,
 }: {
   id: string;
   conversation: UserConversation;
+  shortcut?: string;
   highlighted: boolean;
   onHover: () => void;
   onSelect: () => void;
@@ -722,6 +841,7 @@ function GroupRow({
     >
       <Users className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
       <span className="flex-1 truncate font-medium">{conversation.displayName}</span>
+      {shortcut && <ShortcutHint>{shortcut}</ShortcutHint>}
     </button>
   );
 }
@@ -730,6 +850,7 @@ function ChannelRow({
   id,
   hit,
   joined,
+  shortcut,
   highlighted,
   onHover,
   onSelect,
@@ -737,6 +858,7 @@ function ChannelRow({
   id: string;
   hit: SearchHit;
   joined: boolean;
+  shortcut?: string;
   highlighted: boolean;
   onHover: () => void;
   onSelect: () => void;
@@ -768,6 +890,7 @@ function ChannelRow({
           Join
         </Badge>
       )}
+      {shortcut && <ShortcutHint>{shortcut}</ShortcutHint>}
     </button>
   );
 }
@@ -777,6 +900,7 @@ function UserRow({
   hit,
   avatarURL,
   userStatus,
+  shortcut,
   highlighted,
   onHover,
   onSelect,
@@ -785,6 +909,7 @@ function UserRow({
   hit: SearchHit;
   avatarURL?: string;
   userStatus?: UserStatus | null;
+  shortcut?: string;
   highlighted: boolean;
   onHover: () => void;
   onSelect: () => void;
@@ -804,6 +929,7 @@ function UserRow({
       avatarURL={avatarURL}
       online={online}
       userStatus={userStatus}
+      shortcut={shortcut}
       highlighted={highlighted}
       onHover={onHover}
       onSelect={onSelect}
