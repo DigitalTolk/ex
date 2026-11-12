@@ -76,7 +76,11 @@ export default defineConfig({
       // human-readable stdout summary — stdout formatting is fragile across
       // vitest versions and hides the failure mode "tests passed but summary
       // line wasn't emitted" behind a coverage=0 false negative.
-      reporter: ['text', 'lcov', 'json-summary'],
+      // A CI blob-recording invocation (VITEST_RECORD_BLOB=1) runs only a
+      // slice of the projects: it must still instrument, so the blob carries
+      // raw coverage, but reports and the 100% gate belong to the
+      // --mergeReports invocation that sees the whole universe.
+      reporter: process.env.VITEST_RECORD_BLOB ? [] : ['text', 'lcov', 'json-summary'],
       reportsDirectory: './coverage',
       // NOTE deliberately NO `include` here: vitest-4's include-universe
       // statically instruments never-loaded files, which double-instruments
@@ -103,12 +107,14 @@ export default defineConfig({
       // Full 100% gate on every metric over the MERGED report — vitest
       // enforces it itself (non-zero exit), so `make check` and CI gate on
       // it without extra scripting.
-      thresholds: {
-        statements: 100,
-        branches: 100,
-        functions: 100,
-        lines: 100,
-      },
+      thresholds: process.env.VITEST_RECORD_BLOB
+        ? undefined
+        : {
+            statements: 100,
+            branches: 100,
+            functions: 100,
+            lines: 100,
+          },
     },
     projects: [
       {
