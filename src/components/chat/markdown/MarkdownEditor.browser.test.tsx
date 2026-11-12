@@ -212,6 +212,7 @@ describe('MarkdownEditor handle + keymap branches', () => {
     Object.defineProperty(evt, 'clipboardData', {
       value: {
         files: [],
+        getData: () => '',
         items: [
           { kind: 'file', getAsFile: () => shot },
           { kind: 'file', getAsFile: () => null },
@@ -221,6 +222,20 @@ describe('MarkdownEditor handle + keymap branches', () => {
     });
     el.dispatchEvent(evt);
     expect(onPasteFiles).toHaveBeenCalledWith([shot]);
+  });
+
+  it('text copied from Word or Outlook pastes as text, not as the picture that rides along', async () => {
+    const onPasteFiles = vi.fn();
+    const { ref } = await mount({ onPasteFiles });
+    const el = ref.current!.getElement()!.querySelector('[contenteditable]') as HTMLElement;
+    ref.current!.focus();
+    const dt = new DataTransfer();
+    dt.setData('text/plain', 'What do you mean?');
+    dt.setData('text/html', '<html xmlns:o="urn:schemas-microsoft-com:office:office"><body><p>What do you mean?</p></body></html>');
+    dt.items.add(new File(['x'], 'image.png', { type: 'image/png' }));
+    el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+    expect(onPasteFiles).not.toHaveBeenCalled();
+    await expect.poll(() => ref.current!.getElement()!.textContent).toContain('What do you mean?');
   });
 
   it('renders a custom-emoji shortcode as an image glyph via customEmojiMap', async () => {
