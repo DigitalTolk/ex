@@ -125,6 +125,19 @@ body > :not(#root) {
   }
 }
 
+:root {
+  /* Chart series, in their fixed order (charts never let an app pick): a
+   * categorical set validated for colour-blind separation on this surface.
+   * A plain :root block, not @theme — Tailwind only emits theme variables a
+   * utility uses, and charts read these through var() alone. html.dark
+   * redefines them for the dark surface. */
+  --color-series-1: #2A78D6;
+  --color-series-2: #EB6834;
+  --color-series-3: #1BAF7A;
+  --color-series-4: #EDA100;
+  --color-series-5: #6250D6;
+}
+
 @theme {
   --animate-accordion-down: accordion-down 0.2s ease-out;
   --animate-accordion-up: accordion-up 0.2s ease-out;
@@ -195,6 +208,25 @@ body > :not(#root) {
   /* Pinned-message affordance (amber accent bar + "Pinned" label). Tokenised
    * so the pin marker stops using raw `amber-*` palette classes. */
   --color-pinned: #D97706;
+  /* Rich text palette (an app's rich_text blocks): eight named colours for
+   * text, highlights and pills. Text shades meet WCAG AA on the base; the
+   * tints sit behind foreground text. No pink — that's the brand accent. */
+  --color-rt-gray: #6B6862;
+  --color-rt-brown: #8A5A44;
+  --color-rt-orange: #B4530A;
+  --color-rt-yellow: #8F6200;
+  --color-rt-green: #2F7A50;
+  --color-rt-blue: #1F6FA3;
+  --color-rt-purple: #7E4FA6;
+  --color-rt-red: #C2362F;
+  --color-rt-gray-bg: #EEEDEA;
+  --color-rt-brown-bg: #F3EAE5;
+  --color-rt-orange-bg: #FBE9D9;
+  --color-rt-yellow-bg: #FAF0D2;
+  --color-rt-green-bg: #E3F1E8;
+  --color-rt-blue-bg: #E1EEF7;
+  --color-rt-purple-bg: #F0E8F7;
+  --color-rt-red-bg: #FBE6E4;
   /* Caution accent (amber) — for "notify everyone" group mentions etc. Matches
      the amber the pinned-message affordance already uses. */
   --color-caution: #FEF3C7;
@@ -456,6 +488,31 @@ body > :not(#root) {
     --color-online: #34D399;
     /* Pinned amber, brighter gold for the dark surface. */
     --color-pinned: #FBBF24;
+    /* Rich text palette for the dark surface: lighter text shades (AA on
+     * the base), deep tints behind light foreground text. */
+    --color-rt-gray: #A7A5A6;
+    --color-rt-brown: #D39C82;
+    --color-rt-orange: #F0A15E;
+    --color-rt-yellow: #E8C26A;
+    --color-rt-green: #6CCB94;
+    --color-rt-blue: #6CB8EA;
+    --color-rt-purple: #C29CEB;
+    --color-rt-red: #F2837C;
+    --color-rt-gray-bg: #3A3637;
+    --color-rt-brown-bg: #45332B;
+    --color-rt-orange-bg: #4D3420;
+    --color-rt-yellow-bg: #463A1D;
+    --color-rt-green-bg: #1F3A2B;
+    --color-rt-blue-bg: #183447;
+    --color-rt-purple-bg: #362A45;
+    --color-rt-red-bg: #4A2624;
+    /* Chart series for the dark surface: their own steps, validated against
+     * it — not an automatic flip of the light set. */
+    --color-series-1: #3987E5;
+    --color-series-2: #D95926;
+    --color-series-3: #199E70;
+    --color-series-4: #C98500;
+    --color-series-5: #9085E9;
     /* Caution accent (amber), tuned for the dark surface. */
     --color-caution: #3B2F12;
     --color-caution-foreground: #FCD34D;

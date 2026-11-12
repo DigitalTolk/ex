@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -11,7 +13,9 @@ import (
 	"github.com/DigitalTolk/ex/internal/config"
 	"github.com/DigitalTolk/ex/internal/email"
 	"github.com/DigitalTolk/ex/internal/handler"
+	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/msgraph"
+	"github.com/DigitalTolk/ex/internal/netguard"
 	"github.com/DigitalTolk/ex/internal/service"
 	"github.com/DigitalTolk/ex/internal/store"
 )
@@ -35,6 +39,7 @@ type chat struct {
 	settings      *service.SettingsService
 	unfurl        *service.UnfurlService
 	webhooks      *service.IncomingWebhookService
+	interactions  *service.InteractionService
 	bots          *service.BotService
 	mattermost    *service.MattermostService
 	commands      *service.CommandService
@@ -177,6 +182,17 @@ func (a *App) buildChat(ctx context.Context) error {
 	c.webhooks.SetBotProvisioner(c.users)
 	c.webhooks.SetMembershipResolver(members)
 	c.webhooks.SetPublisher(in.pubsub)
+	internalDomains, _ := netguard.ParseDomains(cfg.ConnectorPrivateDomains)
+	c.interactions = service.NewInteractionService(c.messages, c.webhooks, in.cache,
+		clickLimiter{middleware.NewRedisRateLimiter(in.cache.Client())}, in.pubsub,
+		service.InteractionConfig{
+			SigningKey: interactivitySigningKey(cfg),
+			BaseURL:    cfg.BaseURL,
+			// Like connectors: a development workspace's app may run on the
+			// same machine, over plain HTTP.
+			AllowPrivate:    cfg.IsDev(),
+			InternalDomains: internalDomains,
+		})
 
 	// ------------------------------------------------------------- Bots + the Mattermost-compatible API
 	// Admins manage bot accounts and their tokens; an integration written
@@ -315,4 +331,31 @@ func newMailer(ctx context.Context, cfg *config.Config) (email.Sender, error) {
 	}
 	return email.NewSMTPSender(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPass, cfg.EmailFrom,
 		email.TLSPolicy(cfg.SMTPTLSPolicy))
+}
+
+// clickLimiter holds each person to 30 clicks a minute per app, in the
+// shared (Redis) limiter every server uses.
+type clickLimiter struct{ limiter *middleware.RedisRateLimiter }
+
+func (c clickLimiter) AllowClick(ctx context.Context, key string) (bool, error) {
+	ok, _, err := c.limiter.Allow(ctx, key, middleware.PerMinute("click", 30, 30))
+	return ok, err
+}
+
+// AllowAppCall holds each app to 300 calls a minute to ex, in bursts of up
+// to 60.
+func (c clickLimiter) AllowAppCall(ctx context.Context, webhookID string) (bool, time.Duration, error) {
+	return c.limiter.Allow(ctx, "appapi:"+webhookID, middleware.PerMinute("appapi", 300, 60))
+}
+
+// interactivitySigningKey is the key apps' signing secrets derive from: its
+// own setting, or else one derived from the JWT secret (labelled, so the two
+// never coincide).
+func interactivitySigningKey(cfg *config.Config) []byte {
+	if cfg.InteractivitySigningKey != "" {
+		return []byte(cfg.InteractivitySigningKey)
+	}
+	mac := hmac.New(sha256.New, []byte(cfg.JWTSecret))
+	mac.Write([]byte("ex/interactivity-signing-key"))
+	return mac.Sum(nil)
 }

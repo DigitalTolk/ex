@@ -511,3 +511,26 @@ func TestMergeMessageRefs_Branches(t *testing.T) {
 		t.Fatal("stringsFromAny of non-slice should be empty")
 	}
 }
+
+// A message's blocks are searchable: their text joins the body, except what
+// the body already says (a card-only message's body is drawn from it).
+func TestMessageDoc_SearchesBlockText(t *testing.T) {
+	m := &model.Message{
+		ID:   "m1",
+		Body: "Platform sync: 2 items",
+		Blocks: model.Blocks{
+			{Type: model.BlockSection, Text: &model.TextObject{Type: model.TextMarkdown, Text: "Platform sync: 2 items"}},
+			{Type: model.BlockContext, Elements: []model.BlockElement{{Type: model.TextPlain, Content: "via MeetingMind"}}},
+		},
+		MessageAttachments: []model.MessageAttachment{{Blocks: model.Blocks{
+			{Type: model.BlockSection, Fields: []model.TextObject{{Type: model.TextPlain, Text: ""}, {Type: model.TextPlain, Text: "A3 load test"}}},
+		}}},
+	}
+	if got := messageDoc(m, "channel")["body"]; got != "Platform sync: 2 items\nvia MeetingMind\nA3 load test" {
+		t.Fatalf("body = %q", got)
+	}
+	plain := &model.Message{ID: "m2", Body: "just text"}
+	if got := messageDoc(plain, "channel")["body"]; got != "just text" {
+		t.Fatalf("plain body = %q", got)
+	}
+}

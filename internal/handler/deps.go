@@ -75,6 +75,8 @@ type Deps struct {
 	Sidebar    *SidebarHandler
 	Search     *SearchHandler
 	Webhook    *WebhookHandler
+	// Interaction serves app interactivity (setup, response URLs).
+	Interaction *InteractionHandler
 	// Bot accounts: the admin page's API, and the Mattermost-compatible API
 	// (/api/v4) bots call with their tokens.
 	Bot        *BotHandler

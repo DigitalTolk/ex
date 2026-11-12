@@ -1148,6 +1148,537 @@ export interface RefreshToken {
 }
 
 //////////
+// source: blocks.go
+
+/**
+ * Block kinds a message can carry (Slack's Block Kit, the subset ex draws).
+ * The service layer drops any other kind when it normalizes a payload.
+ */
+export const BlockSection = "section";
+/**
+ * Block kinds a message can carry (Slack's Block Kit, the subset ex draws).
+ * The service layer drops any other kind when it normalizes a payload.
+ */
+export const BlockActions = "actions";
+/**
+ * Block kinds a message can carry (Slack's Block Kit, the subset ex draws).
+ * The service layer drops any other kind when it normalizes a payload.
+ */
+export const BlockContext = "context";
+/**
+ * Block kinds a message can carry (Slack's Block Kit, the subset ex draws).
+ * The service layer drops any other kind when it normalizes a payload.
+ */
+export const BlockDivider = "divider";
+/**
+ * Block kinds a message can carry (Slack's Block Kit, the subset ex draws).
+ * The service layer drops any other kind when it normalizes a payload.
+ */
+export const BlockHeader = "header";
+/**
+ * BlockInput is a form field: a label, an optional hint, and one input
+ * element. Forms (views) only; a message drops it.
+ */
+export const BlockInput = "input";
+/**
+ * BlockImage is a picture with alt text and an optional title, drawn
+ * through ex's image proxy.
+ */
+export const BlockImage = "image";
+/**
+ * BlockRichText is formatted text built from parts rather than markdown:
+ * paragraphs, headings, lists, quotes and code (Content), with styled
+ * pieces — bold, colours, links, mentions, dates, pills — in each.
+ */
+export const BlockRichText = "rich_text";
+/**
+ * BlockCallout is rich text in a tinted box with an emoji: a note, a
+ * warning, a tip.
+ */
+export const BlockCallout = "callout";
+/**
+ * BlockToggle is a summary line people click to show the blocks under it
+ * (logs, details) — kept out of the way until wanted.
+ */
+export const BlockToggle = "toggle";
+/**
+ * BlockTable is rows and columns of rich text: status matrices, rotas.
+ */
+export const BlockTable = "table";
+/**
+ * BlockColumns lays 2 or 3 column blocks side by side (stacked when
+ * narrow); BlockColumn is one of them, holding its own blocks.
+ */
+export const BlockColumns = "columns";
+/**
+ * Block kinds a message can carry (Slack's Block Kit, the subset ex draws).
+ * The service layer drops any other kind when it normalizes a payload.
+ */
+export const BlockColumn = "column";
+/**
+ * BlockChart is a bar, line or donut chart ex draws from the app's
+ * numbers — no image, nothing fetched.
+ */
+export const BlockChart = "chart";
+/**
+ * Chart kinds.
+ */
+export const ChartBar = "bar";
+/**
+ * Chart kinds.
+ */
+export const ChartLine = "line";
+/**
+ * Chart kinds.
+ */
+export const ChartDonut = "donut";
+/**
+ * ChartSeries is one named series of a chart: a value per label.
+ */
+export interface ChartSeries {
+  name?: string;
+  values: number /* float64 */[];
+}
+/**
+ * Table column alignments.
+ */
+export const AlignLeft = "left";
+/**
+ * Table column alignments.
+ */
+export const AlignCenter = "center";
+/**
+ * Table column alignments.
+ */
+export const AlignRight = "right";
+/**
+ * TableColumn is a table's column: its plain header (may be empty) and how
+ * its cells align.
+ */
+export interface TableColumn {
+  header?: string;
+  align?: string;
+}
+/**
+ * TableCell is one cell: rich text pieces. On the way in, Text is a plain
+ * shorthand for a single text piece; ex stores Spans.
+ */
+export interface TableCell {
+  text?: string;
+  spans?: RichSpan[];
+}
+/**
+ * Rich text nodes: the paragraph-level parts of a rich_text block.
+ */
+export const RichParagraph = "paragraph";
+/**
+ * Rich text nodes: the paragraph-level parts of a rich_text block.
+ */
+export const RichHeading = "heading";
+/**
+ * Rich text nodes: the paragraph-level parts of a rich_text block.
+ */
+export const RichList = "list";
+/**
+ * Rich text nodes: the paragraph-level parts of a rich_text block.
+ */
+export const RichQuote = "quote";
+/**
+ * Rich text nodes: the paragraph-level parts of a rich_text block.
+ */
+export const RichCode = "code";
+/**
+ * Rich text spans: the inline pieces of a paragraph, heading, quote or list
+ * item. A span with no type is text.
+ */
+export const RichSpanText = "text";
+/**
+ * Rich text spans: the inline pieces of a paragraph, heading, quote or list
+ * item. A span with no type is text.
+ */
+export const RichSpanUser = "user";
+/**
+ * Rich text spans: the inline pieces of a paragraph, heading, quote or list
+ * item. A span with no type is text.
+ */
+export const RichSpanChannel = "channel";
+/**
+ * Rich text spans: the inline pieces of a paragraph, heading, quote or list
+ * item. A span with no type is text.
+ */
+export const RichSpanEmoji = "emoji";
+/**
+ * Rich text spans: the inline pieces of a paragraph, heading, quote or list
+ * item. A span with no type is text.
+ */
+export const RichSpanDate = "date";
+/**
+ * Rich text spans: the inline pieces of a paragraph, heading, quote or list
+ * item. A span with no type is text.
+ */
+export const RichSpanPill = "pill";
+/**
+ * List styles.
+ */
+export const RichListBullet = "bullet";
+/**
+ * List styles.
+ */
+export const RichListOrdered = "ordered";
+/**
+ * RichNode is one paragraph-level part of a rich_text block:
+ *   - paragraph, quote: Spans.
+ *   - heading: Spans and a Level, 1 to 3.
+ *   - list: Items (each may hold Items of its own) and a Style, bullet or
+ *     ordered.
+ *   - code: Text, and an optional Language for highlighting.
+ */
+export interface RichNode {
+  type: string;
+  level?: number /* int */;
+  style?: string;
+  spans?: RichSpan[];
+  items?: RichItem[];
+  language?: string;
+  text?: string;
+}
+/**
+ * RichItem is one list item: its text, and the items nested under it.
+ */
+export interface RichItem {
+  spans?: RichSpan[];
+  items?: RichItem[];
+}
+/**
+ * RichSpan is an inline piece of rich text.
+ *   - text: Text, styled by Bold … Code, Color and Highlight; Link makes it a
+ *     link (http, https or mailto).
+ *   - user, channel: a mention. The app names it (User: an ID or an email;
+ *     Channel: a name or an ID); ex stores the ID it resolved to, with Name
+ *     (the person's display name, the channel's slug) for drawing.
+ *   - emoji: Name, like "rocket".
+ *   - date: Timestamp (Unix seconds) shown in each reader's own time zone
+ *     through Format's {date_short}, {date}, {date_long} and {time}, with
+ *     Fallback for places that can't.
+ *   - pill: Text in a small coloured label (Color).
+ */
+export interface RichSpan {
+  type?: string;
+  text?: string;
+  bold?: boolean;
+  italic?: boolean;
+  strike?: boolean;
+  underline?: boolean;
+  code?: boolean;
+  color?: string;
+  highlight?: string;
+  link?: string;
+  user?: string;
+  channel?: string;
+  name?: string;
+  timestamp?: number /* int64 */;
+  format?: string;
+  fallback?: string;
+}
+/**
+ * Text kinds. "mrkdwn" is accepted from Slack-shaped payloads and stored as
+ * "markdown": both mean ex markdown (**bold**), not Slack's *bold*.
+ */
+export const TextPlain = "plain_text";
+/**
+ * Text kinds. "mrkdwn" is accepted from Slack-shaped payloads and stored as
+ * "markdown": both mean ex markdown (**bold**), not Slack's *bold*.
+ */
+export const TextMarkdown = "markdown";
+/**
+ * Text kinds. "mrkdwn" is accepted from Slack-shaped payloads and stored as
+ * "markdown": both mean ex markdown (**bold**), not Slack's *bold*.
+ */
+export const TextMrkdwn = "mrkdwn";
+/**
+ * ElementButton is a button: a link, a built-in action, or a call to the app.
+ */
+export const ElementButton = "button";
+/**
+ * ElementImage is a small picture: a section's accessory or a context row's.
+ */
+export const ElementImage = "image";
+/**
+ * Elements that take a value. Each one can sit in a form field; the ones
+ * IsMessageInteractive names can also sit in a message's actions row or a
+ * section's accessory, where using them calls the app.
+ */
+export const ElementPlainTextInput = "plain_text_input";
+/**
+ * Elements that take a value. Each one can sit in a form field; the ones
+ * IsMessageInteractive names can also sit in a message's actions row or a
+ * section's accessory, where using them calls the app.
+ */
+export const ElementNumberInput = "number_input";
+/**
+ * Elements that take a value. Each one can sit in a form field; the ones
+ * IsMessageInteractive names can also sit in a message's actions row or a
+ * section's accessory, where using them calls the app.
+ */
+export const ElementEmailInput = "email_text_input";
+/**
+ * Elements that take a value. Each one can sit in a form field; the ones
+ * IsMessageInteractive names can also sit in a message's actions row or a
+ * section's accessory, where using them calls the app.
+ */
+export const ElementURLInput = "url_text_input";
+/**
+ * Elements that take a value. Each one can sit in a form field; the ones
+ * IsMessageInteractive names can also sit in a message's actions row or a
+ * section's accessory, where using them calls the app.
+ */
+export const ElementDatepicker = "datepicker";
+/**
+ * Elements that take a value. Each one can sit in a form field; the ones
+ * IsMessageInteractive names can also sit in a message's actions row or a
+ * section's accessory, where using them calls the app.
+ */
+export const ElementTimepicker = "timepicker";
+/**
+ * Elements that take a value. Each one can sit in a form field; the ones
+ * IsMessageInteractive names can also sit in a message's actions row or a
+ * section's accessory, where using them calls the app.
+ */
+export const ElementStaticSelect = "static_select";
+/**
+ * Elements that take a value. Each one can sit in a form field; the ones
+ * IsMessageInteractive names can also sit in a message's actions row or a
+ * section's accessory, where using them calls the app.
+ */
+export const ElementMultiStaticSelect = "multi_static_select";
+/**
+ * Elements that take a value. Each one can sit in a form field; the ones
+ * IsMessageInteractive names can also sit in a message's actions row or a
+ * section's accessory, where using them calls the app.
+ */
+export const ElementUsersSelect = "users_select";
+/**
+ * Elements that take a value. Each one can sit in a form field; the ones
+ * IsMessageInteractive names can also sit in a message's actions row or a
+ * section's accessory, where using them calls the app.
+ */
+export const ElementMultiUsersSelect = "multi_users_select";
+/**
+ * Elements that take a value. Each one can sit in a form field; the ones
+ * IsMessageInteractive names can also sit in a message's actions row or a
+ * section's accessory, where using them calls the app.
+ */
+export const ElementCheckboxes = "checkboxes";
+/**
+ * Elements that take a value. Each one can sit in a form field; the ones
+ * IsMessageInteractive names can also sit in a message's actions row or a
+ * section's accessory, where using them calls the app.
+ */
+export const ElementRadioButtons = "radio_buttons";
+/**
+ * ElementOverflow is a ⋯ menu of up to five options (messages only).
+ */
+export const ElementOverflow = "overflow";
+/**
+ * SelectOption is one choice of a select, overflow menu, checkbox or radio
+ * group. Description is a second line (checkboxes and radios); URL makes an
+ * overflow option open a link (http or https only).
+ */
+export interface SelectOption {
+  text: TextObject;
+  value: string;
+  description?: TextObject;
+  url?: string;
+}
+/**
+ * Button styles.
+ */
+export const ButtonPrimary = "primary";
+/**
+ * Button styles.
+ */
+export const ButtonDanger = "danger";
+/**
+ * ExActionAck records who acknowledged first; the button gives way to
+ * "Acknowledged by …".
+ */
+export const ExActionAck = "ack";
+/**
+ * ExActionVote toggles the clicker's vote and shows the count.
+ */
+export const ExActionVote = "vote";
+/**
+ * TextObject is a piece of text in a block: plain, or ex markdown.
+ */
+export interface TextObject {
+  type: string;
+  text: string;
+}
+/**
+ * ConfirmDialog asks before a button's click is sent. All four texts are
+ * plain text.
+ */
+export interface ConfirmDialog {
+  title: TextObject;
+  text: TextObject;
+  confirm: TextObject;
+  deny: TextObject;
+}
+/**
+ * BlockElement is a button (in an actions row or a section's accessory) or a
+ * text element (in a context row). On the wire a text element carries its
+ * text as a plain string — {"type":"markdown","text":"…"} — while a button's
+ * label is a TextObject; Content holds a text element's string.
+ */
+export interface BlockElement {
+  type: string;
+  /**
+   * Text is a button's label; on the wire a text element's text (Content)
+   * takes its place as a plain string.
+   */
+  text?: TextObject | string;
+  action_id?: string;
+  value?: string;
+  style?: string;
+  url?: string;
+  confirm?: ConfirmDialog;
+  /**
+   * AllowedUsers are the ex user IDs that may see and click the button
+   * (resolved from the emails or IDs the app gave). Empty: everyone who can
+   * see the message.
+   */
+  allowed_users?: string[];
+  /**
+   * ExAction makes the button a built-in action (ExActionAck, ExActionVote).
+   */
+  ex_action?: string;
+  /**
+   * Input elements (forms only): placeholder for all three; Multiline,
+   * InitialValue and Min/MaxLength for text; InitialDate (YYYY-MM-DD) for
+   * a date; Options and InitialOption for a select.
+   */
+  placeholder?: TextObject;
+  multiline?: boolean;
+  initial_value?: string;
+  min_length?: number /* int */;
+  max_length?: number /* int */;
+  initial_date?: string;
+  options?: SelectOption[];
+  initial_option?: SelectOption;
+  /**
+   * More value elements: InitialOptions (multi-select, checkboxes),
+   * InitialTime (HH:MM), InitialUser(s) (ex user IDs), MaxSelectedItems
+   * (multi-selects), and a number field's IsDecimalAllowed and Min/Max
+   * (decimal strings, as Slack has them).
+   */
+  initial_options?: SelectOption[];
+  initial_time?: string;
+  initial_user?: string;
+  initial_users?: string[];
+  max_selected_items?: number /* int */;
+  is_decimal_allowed?: boolean;
+  min_value?: string;
+  max_value?: string;
+  /**
+   * An image element: its proxied URL, alt text and (once ex has fetched
+   * it) intrinsic size.
+   */
+  image_url?: string;
+  alt_text?: string;
+  image_width?: number /* int */;
+  image_height?: number /* int */;
+}
+/**
+ * Block is one piece of a message's layout.
+ *   - section: Text and/or Fields, and an optional Accessory button.
+ *   - actions: a row of buttons (Elements).
+ *   - context: small text (Elements are text elements).
+ *   - divider: a rule.
+ *   - header: Text, plain.
+ *   - input (forms only): Label, an optional Hint, Optional, and one
+ *     input Element; DispatchAction sends each change to the app.
+ *   - image: ImageURL, AltText, an optional plain Title (Text), and the
+ *     intrinsic size ex measured.
+ *   - rich_text: Content, its paragraph-level parts.
+ *   - callout: Content in a box tinted Color, with an Icon (an emoji name).
+ *   - toggle: Summary (rich text pieces) over child Blocks (text-only kinds,
+ *     see IsToggleChild), shown when opened; Open starts it open.
+ *   - table: Columns and Rows of cells.
+ *   - columns: child column Blocks; column: a Width (1 to 3, a share of the
+ *     row) and its own Blocks (see IsColumnChild).
+ *   - chart: a Kind (bar, line, donut), an optional plain title (Text),
+ *     Labels, Series (a value per label) and a Unit for its numbers.
+ */
+export interface Block {
+  type: string;
+  block_id?: string;
+  text?: TextObject;
+  fields?: TextObject[];
+  accessory?: BlockElement;
+  elements?: BlockElement[];
+  label?: TextObject;
+  hint?: TextObject;
+  optional?: boolean;
+  element?: BlockElement;
+  /**
+   * DispatchAction (input only) sends the field's changes to the app as
+   * they happen, so it can reshape the form.
+   */
+  dispatch_action?: boolean;
+  /**
+   * Image block.
+   */
+  image_url?: string;
+  alt_text?: string;
+  image_width?: number /* int */;
+  image_height?: number /* int */;
+  /**
+   * Rich text, callout.
+   */
+  content?: RichNode[];
+  icon?: string;
+  color?: string;
+  /**
+   * Toggle.
+   */
+  summary?: RichSpan[];
+  blocks?: Blocks;
+  open?: boolean;
+  /**
+   * Table.
+   */
+  columns?: TableColumn[];
+  rows?: TableCell[][];
+  /**
+   * Column.
+   */
+  width?: number /* int */;
+  /**
+   * Chart.
+   */
+  kind?: string;
+  labels?: string[];
+  series?: ChartSeries[];
+  unit?: string;
+}
+/**
+ * Blocks is a message's (or an attachment's) layout. DynamoDB stores it as
+ * one JSON string: a nested list of maps of every block and element would
+ * cost far more item size and marshal time, and nothing queries into it.
+ */
+export type Blocks = Block[];
+/**
+ * ActionTally is the state of one built-in action on a message: who
+ * acknowledged (the first clicker) or who voted, and when it last changed.
+ */
+export interface ActionTally {
+  blockID: string;
+  actionID: string;
+  userIDs: string[];
+  at: string /* RFC3339 */;
+}
+
+//////////
 // source: bot.go
 
 /**
@@ -1930,6 +2461,73 @@ export interface CustomEmoji {
 }
 
 //////////
+// source: interaction.go
+
+/**
+ * ResponseURLRecord is what a response_url stands for: one interaction's
+ * message, its app and its clicker. Kept only for the URL's short life.
+ */
+export interface ResponseURLRecord {
+  webhookID: string;
+  parentID: string;
+  parentType: string;
+  messageID: string;
+  userID: string;
+}
+/**
+ * Interaction kinds and results, as the webhooks panel's history lists them.
+ */
+export const InteractionClick = "click";
+/**
+ * Interaction kinds and results, as the webhooks panel's history lists them.
+ */
+export const InteractionResponseURL = "response_url";
+/**
+ * Interaction kinds and results, as the webhooks panel's history lists them.
+ */
+export const InteractionTest = "test";
+/**
+ * InteractionSubmission is a form submitted to the app; InteractionAPI
+ * is a call the app made to ex (ActionID names the method).
+ */
+export const InteractionSubmission = "view_submission";
+/**
+ * Interaction kinds and results, as the webhooks panel's history lists them.
+ */
+export const InteractionAPI = "api";
+/**
+ * InteractionClosed is a form closed without submitting, told to the
+ * app because the form asked (notify_on_close).
+ */
+export const InteractionClosed = "view_closed";
+/**
+ * Interaction kinds and results, as the webhooks panel's history lists them.
+ */
+export const InteractionOK = "ok";
+/**
+ * Interaction kinds and results, as the webhooks panel's history lists them.
+ */
+export const InteractionFailed = "failed";
+/**
+ * Interaction kinds and results, as the webhooks panel's history lists them.
+ */
+export const InteractionTimeout = "timeout";
+/**
+ * InteractionEntry is one line of an app's interaction history: a click or a
+ * form sent to it, a use of a response_url, a call it made, or a test.
+ */
+export interface InteractionEntry {
+  at: string /* RFC3339 */;
+  kind: string;
+  userID?: string;
+  actionID?: string;
+  result: string;
+  status?: number /* int */;
+  latencyMs: number /* int64 */;
+  error?: string;
+}
+
+//////////
 // source: invite.go
 
 export interface Invite {
@@ -2197,6 +2795,29 @@ export interface Message {
    * arrives first. Never persisted.
    */
   clientNonce?: string;
+  /**
+   * Blocks lay out an app's message (Block Kit); Body stays its plain-text
+   * fallback for notifications, search and clients that can't draw them.
+   */
+  blocks?: Blocks;
+  /**
+   * ActionTallies hold the state of the message's built-in actions: who
+   * acknowledged, who voted.
+   */
+  actionTallies?: ActionTally[];
+  /**
+   * Version counts the changes made to an app's message (its blocks, its
+   * tallies). A change is written only over the version it was made on, so
+   * two at once can't undo each other.
+   */
+  version?: number /* int */;
+  /**
+   * AppButtons: the message was posted (or last replaced) by its app with
+   * the app's bot token, so its app buttons send their clicks to the app.
+   * A message posted with the webhook URL alone — which anyone holding a
+   * leaked URL could do — never reaches the app.
+   */
+  appButtons?: boolean;
 }
 export interface MessageAttachment {
   fallback?: string;
@@ -2221,6 +2842,15 @@ export interface MessageAttachment {
   thumb_url?: string;
   footer?: string;
   footer_icon?: string;
+  /**
+   * Icon (rich webhooks only) is an emoji name shown before the title,
+   * Notion-style.
+   */
+  icon?: string;
+  /**
+   * Blocks inside a card sit on the card's tint.
+   */
+  blocks?: Blocks;
 }
 export interface MessageAttachmentField {
   title?: string;
@@ -2758,6 +3388,85 @@ export interface MarkUnreadResult {
 }
 
 //////////
+// source: view.go
+
+/**
+ * ViewModal is the one kind of view: a form in a dialog.
+ */
+export const ViewModal = "modal";
+/**
+ * View is a form an app opens for one person (Slack's modal): a title,
+ * submit and close labels, and blocks — a message's blocks plus input
+ * fields. This is the shape the app sends and the person's client draws;
+ * what ex keeps beside it is StoredView.
+ */
+export interface View {
+  id: string;
+  type: string;
+  callback_id?: string;
+  title: TextObject;
+  submit?: TextObject;
+  close?: TextObject;
+  blocks: Blocks;
+  private_metadata?: string;
+  external_id?: string;
+  /**
+   * NotifyOnClose has ex tell the app (view_closed) when the person
+   * closes the form without submitting it.
+   */
+  notify_on_close?: boolean;
+  /**
+   * PreviousViewID / RootViewID place a pushed form in its stack: the
+   * form under it, and the first form. Set by ex.
+   */
+  previous_view_id?: string;
+  root_view_id?: string;
+  /**
+   * Hash changes with every update; an app's views.update naming an old
+   * hash is refused, so two updates can't silently overwrite each other.
+   */
+  hash: string;
+}
+/**
+ * StoredView is an open form as ex keeps it (in Redis, while it is open):
+ * the view, whose it is, and which app and click it came from. Submissions
+ * are checked against it, never against what the browser sends back.
+ */
+export interface StoredView {
+  view: View;
+  webhookID: string;
+  userID: string;
+  clickID?: string;
+  iconEmoji?: string;
+  /**
+   * Depth is the form's place in its stack: 0 for the first, 1 for one
+   * pushed on it, and so on.
+   */
+  depth?: number /* int */;
+  openedAt: string /* RFC3339 */;
+}
+/**
+ * TriggerRecord is what a trigger_id stands for: one person's click (or
+ * form submission) on one app, allowing that app to open one form for them
+ * within seconds. ClickID names the browser tab that clicked.
+ */
+export interface TriggerRecord {
+  webhookID: string;
+  userID: string;
+  clickID?: string;
+  /**
+   * IconEmoji is the icon the clicked message showed, so the form wears
+   * the same face.
+   */
+  iconEmoji?: string;
+  /**
+   * ViewID is the form the interaction came from, when it did: only a
+   * trigger from a form can push another form on top of it.
+   */
+  viewID?: string;
+}
+
+//////////
 // source: webhook.go
 
 export interface IncomingWebhook {
@@ -2773,4 +3482,55 @@ export interface IncomingWebhook {
   createdBy: string;
   createdAt: string /* RFC3339 */;
   updatedAt: string /* RFC3339 */;
+  /**
+   * Kind is chosen when the webhook is created and never changes. A classic
+   * webhook ("") posts text and Slack-style cards exactly as webhooks always
+   * have: blocks and an Authorization header in its payloads are ignored. A
+   * rich webhook (WebhookKindRich) is an app's: blocks, buttons, forms, a
+   * bot token and interactivity. Keeping the two apart means no existing
+   * sender's posts change shape — or start being refused — because rich
+   * messages exist.
+   */
+  kind?: string;
+  /**
+   * Interactivity (rich webhooks only): an app that gets the clicks on its messages' buttons.
+   * InteractivityURL is where ex sends them; empty means the webhook only
+   * posts.
+   */
+  interactivityURL?: string;
+  /**
+   * EmailSharing adds the clicker's email to what the app receives. Only a
+   * workspace admin turns it on.
+   */
+  emailSharing?: boolean;
+  /**
+   * AdminPaused stops the app's buttons everywhere until an admin resumes
+   * them.
+   */
+  adminPaused?: boolean;
+  /**
+   * HasBotToken and HasSigningSecret tell the webhooks panel what has been
+   * issued, without the values.
+   */
+  hasBotToken?: boolean;
+  hasSigningSecret?: boolean;
+  /**
+   * Templates are message layouts saved on a rich webhook: the app posts
+   * {"template": key, "data": {...}} and ex fills the layout's
+   * {{placeholders}}, so a layout changes without the app changing.
+   */
+  templates?: MessageTemplate[];
 }
+/**
+ * MessageTemplate is one saved layout: a webhook payload whose string values
+ * may hold {{placeholders}}.
+ */
+export interface MessageTemplate {
+  key: string;
+  payload: any /* json.RawMessage */;
+  updatedAt: string /* RFC3339 */;
+}
+/**
+ * WebhookKindRich marks a rich webhook (see IncomingWebhook.Kind).
+ */
+export const WebhookKindRich = "rich";

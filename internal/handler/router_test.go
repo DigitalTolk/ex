@@ -199,6 +199,7 @@ func TestNewRouter_AllOptionalHandlersWired(t *testing.T) {
 		Sidebar:      &SidebarHandler{},
 		Search:       &SearchHandler{},
 		Webhook:      &WebhookHandler{},
+		Interaction:  &InteractionHandler{},
 		Command:      &CommandHandler{},
 		SharePoint:   &SharePointHandler{},
 		JWT:          jwtMgr,

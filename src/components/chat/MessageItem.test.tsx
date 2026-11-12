@@ -942,6 +942,26 @@ describe('MessageItem', () => {
     expect(emojiAvatar).toHaveTextContent('🎉');
   });
 
+  it("falls back to initials when ex can't draw the icon_emoji", () => {
+    renderWithProviders(
+      <MessageItem
+        message={makeMessage({
+          authorID: 'webhook',
+          body: 'Checkout errors above 5%',
+          webhookUsername: 'Incident bot',
+          // Slack's name; ex's catalog calls it police_car_light.
+          webhookIconEmoji: 'rotating_light',
+        })}
+        authorName="Unknown"
+        isOwn={false}
+        currentUserId="user-1"
+      />,
+    );
+    expect(screen.queryByTestId('webhook-emoji-avatar')).not.toBeInTheDocument();
+    expect(screen.queryByText(':rotating_light:')).not.toBeInTheDocument();
+    expect(screen.getAllByText('IB').length).toBeGreaterThan(0);
+  });
+
   it("shows a webhook root's identity for webhook replies in the thread bar", () => {
     renderWithProviders(
       <MessageItem

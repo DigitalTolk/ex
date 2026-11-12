@@ -377,4 +377,74 @@ describe('IncomingWebhooksPage', () => {
       vi.useRealTimers();
     }
   });
+
+  // A classic webhook (every existing one) posts as webhooks always have; a
+  // rich one is an app's. The type is chosen at creation only.
+  it('creates a rich webhook only when Rich is picked', async () => {
+    mockApiFetch.mockImplementation((path: string, init?: { method?: string; body?: string }) => {
+      if (path === '/api/v1/channels') {
+        return Promise.resolve([{ channelID: 'ch-1', channelName: 'general', channelType: 'public', role: 3 }]);
+      }
+      if (path === '/api/v1/admin/webhooks' && init?.method === 'POST') {
+        return Promise.resolve({ id: 'wh-1', ...JSON.parse(init.body ?? '{}') });
+      }
+      if (path === '/api/v1/admin/webhooks') return Promise.resolve([]);
+      return Promise.resolve({});
+    });
+    renderPage();
+    const posted = () =>
+      mockApiFetch.mock.calls
+        .filter((c) => c[0] === '/api/v1/admin/webhooks' && c[1]?.method === 'POST')
+        .map((c) => JSON.parse(c[1].body) as Record<string, unknown>);
+
+    // Default: classic — no kind is sent at all.
+    fireEvent.change(await screen.findByLabelText(/^Title$/i), { target: { value: 'Alerts' } });
+    await screen.findByRole('option', { name: 'general' });
+    fireEvent.click(screen.getByRole('button', { name: /Create webhook/i }));
+    await waitFor(() => expect(posted()).toHaveLength(1));
+    expect(posted()[0]).not.toHaveProperty('kind');
+
+    // Rich, picked explicitly.
+    await waitFor(() => expect((screen.getByLabelText(/^Title$/i) as HTMLInputElement).value).toBe(''));
+    fireEvent.change(screen.getByLabelText(/^Title$/i), { target: { value: 'Expenses app' } });
+    fireEvent.change(screen.getByLabelText(/^Type$/i), { target: { value: 'rich' } });
+    fireEvent.click(screen.getByRole('button', { name: /Create webhook/i }));
+    await waitFor(() => expect(posted()).toHaveLength(2));
+    expect(posted()[1]).toMatchObject({ title: 'Expenses app', kind: 'rich' });
+  });
+
+  it('shows interactivity and a Rich label only on rich webhooks, and fixes the type when editing', async () => {
+    mockApiFetch.mockImplementation((path: string) => {
+      if (path === '/api/v1/channels') {
+        return Promise.resolve([{ channelID: 'ch-1', channelName: 'general', channelType: 'public', role: 3 }]);
+      }
+      if (path === '/api/v1/admin/webhooks') {
+        return Promise.resolve([
+          { id: 'wh-classic', title: 'Alerts', channelID: 'ch-1', channelSlug: 'general', lockToChannel: true, url: 'https://chat.example/hooks/wh-classic' },
+          { id: 'wh-rich', title: 'Expenses', kind: 'rich', channelID: 'ch-1', channelSlug: 'general', lockToChannel: true, url: 'https://chat.example/hooks/wh-rich' },
+        ]);
+      }
+      return Promise.resolve({});
+    });
+    renderPage();
+
+    expect(await screen.findByTestId('interactivity-wh-rich')).toBeInTheDocument();
+    expect(screen.queryByTestId('interactivity-wh-classic')).not.toBeInTheDocument();
+    expect(screen.getAllByText('Rich', { selector: 'span' })).toHaveLength(1);
+
+    // A new webhook's type is open; an existing one's, edited in place, isn't.
+    expect(screen.getByLabelText(/^Type$/i)).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Expenses' }));
+    const type = within(await screen.findByTestId('webhook-wh-rich')).getByLabelText(/^Type$/i) as HTMLSelectElement;
+    expect(type.value).toBe('rich');
+    expect(type).toBeDisabled();
+
+    // Saving never sends the kind: it can't change.
+    fireEvent.click(screen.getByRole('button', { name: /Save changes/i }));
+    await waitFor(() => {
+      const patch = mockApiFetch.mock.calls.find((c) => c[0] === '/api/v1/admin/webhooks/wh-rich' && c[1]?.method === 'PATCH');
+      expect(patch).toBeDefined();
+      expect(JSON.parse(patch![1].body)).not.toHaveProperty('kind');
+    });
+  });
 });

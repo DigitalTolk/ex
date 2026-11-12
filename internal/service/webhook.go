@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -18,12 +19,20 @@ import (
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/pubsub"
 	"github.com/DigitalTolk/ex/internal/store"
+	classicshape "github.com/DigitalTolk/ex/internal/webhookcompat"
 )
 
 var (
-	slackLinkPattern       = regexp.MustCompile(`<([^<>|!]+)(?:\|([^<>]+))?>`)
-	mattermostUserPattern  = regexp.MustCompile(`(^|[^\w@])@([A-Za-z0-9._-]+)\b`)
-	mattermostChannelToken = regexp.MustCompile(`(^|[^\w~])~([A-Za-z0-9][A-Za-z0-9_-]*)\b`)
+	slackLinkPattern = regexp.MustCompile(`<([^<>|!]+)(?:\|([^<>]+))?>`)
+	// mattermostUserPattern is a mention by name ("@alice") or by email
+	// ("@alice@example.com"). An address is tried whole first, so one that
+	// names nobody here stays as typed — never a mention of whoever shares
+	// the name before its "@".
+	mattermostUserPattern = regexp.MustCompile(`(^|[^\w@])@([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|[A-Za-z0-9._-]+)\b`)
+	// classicMattermostUserPattern is the by-name-only mention a classic
+	// webhook has always had: its senders' text keeps reading as it did.
+	classicMattermostUserPattern = regexp.MustCompile(`(^|[^\w@])@([A-Za-z0-9._-]+)\b`)
+	mattermostChannelToken       = regexp.MustCompile(`(^|[^\w~])~([A-Za-z0-9][A-Za-z0-9_-]*)\b`)
 )
 
 type IncomingWebhookStore interface {
@@ -95,6 +104,103 @@ type IncomingWebhookPayload struct {
 	// RootID posts the message as a reply in the thread of an earlier post
 	// by this webhook (the id ExecuteMessage returned for it).
 	RootID string `json:"root_id"`
+	// Blocks lay the message out (Block Kit); Text stays its fallback.
+	Blocks model.Blocks `json:"blocks"`
+	// BotToken is the app's bearer token from the request's Authorization
+	// header (never from the body): without it, buttons that call the app
+	// are refused.
+	BotToken string `json:"-"`
+	// Template names a layout saved on the (rich) webhook, filled from Data:
+	// the message is the template with its {{placeholders}} replaced.
+	Template string         `json:"template"`
+	Data     map[string]any `json:"data"`
+
+	// rich holds, unread, what only a rich webhook reads (see UnmarshalJSON).
+	rich richPayloadJSON
+}
+
+// richPayloadJSON is a payload's rich-only parts as they arrived: kept raw,
+// so reading a classic webhook's post never touches them.
+type richPayloadJSON struct {
+	blocks           json.RawMessage
+	attachmentBlocks []json.RawMessage
+	template         json.RawMessage
+	data             json.RawMessage
+}
+
+// webhookAttachmentJSON reads an attachment's own fields; its blocks stay raw.
+type webhookAttachmentJSON struct {
+	model.MessageAttachment
+	Blocks json.RawMessage `json:"blocks"`
+}
+
+// UnmarshalJSON reads a payload exactly as classic webhooks always have —
+// text, channel, username, icons, attachments, root_id — and keeps the
+// rich-only fields (blocks, attachments' blocks, template, data) raw. A
+// classic webhook therefore accepts every payload it accepted before rich
+// webhooks existed, whatever those fields hold: a stray "template": 5, or a
+// Slack block ex doesn't model, used to be ignored and still is. Only a rich
+// webhook reads them (readRich), and only its post can fail on them.
+func (p *IncomingWebhookPayload) UnmarshalJSON(data []byte) error {
+	// Accepted or refused, and with which words, exactly as before rich
+	// webhooks: main's payload shape decides (a frozen copy of it). Its
+	// fields are a subset of the ones below with the same types, so whatever
+	// it accepts the decode below accepts too.
+	if err := json.Unmarshal(data, new(classicshape.IncomingWebhookPayload)); err != nil {
+		return err
+	}
+	type plain IncomingWebhookPayload // no methods: no recursion
+	var in struct {
+		plain
+		Attachments []webhookAttachmentJSON `json:"attachments"`
+		Blocks      json.RawMessage         `json:"blocks"`
+		Template    json.RawMessage         `json:"template"`
+		Data        json.RawMessage         `json:"data"`
+	}
+	// Can't fail once the classic shape decoded: the same fields with the
+	// same types, and everything else kept raw.
+	_ = json.Unmarshal(data, &in)
+	*p = IncomingWebhookPayload(in.plain)
+	p.rich = richPayloadJSON{blocks: in.Blocks, template: in.Template, data: in.Data}
+	if in.Attachments != nil {
+		p.Attachments = make([]model.MessageAttachment, len(in.Attachments))
+		p.rich.attachmentBlocks = make([]json.RawMessage, len(in.Attachments))
+		for i, a := range in.Attachments {
+			p.Attachments[i] = a.MessageAttachment
+			p.rich.attachmentBlocks[i] = a.Blocks
+		}
+	}
+	return nil
+}
+
+// readRich reads the rich-only fields UnmarshalJSON kept raw. A payload built
+// in code (not decoded) has none, and keeps the values it was given.
+func (p *IncomingWebhookPayload) readRich() error {
+	read := func(raw json.RawMessage, into any, field string) error {
+		if len(raw) == 0 {
+			return nil
+		}
+		if err := json.Unmarshal(raw, into); err != nil {
+			return apperr.Reject(ErrInvalidPayload, "webhook: %s: %s", field, err.Error())
+		}
+		return nil
+	}
+	if err := read(p.rich.blocks, &p.Blocks, "blocks"); err != nil {
+		return err
+	}
+	for i, raw := range p.rich.attachmentBlocks {
+		if err := read(raw, &p.Attachments[i].Blocks, fmt.Sprintf("attachments[%d].blocks", i)); err != nil {
+			return err
+		}
+	}
+	if err := read(p.rich.template, &p.Template, "template"); err != nil {
+		return err
+	}
+	if err := read(p.rich.data, &p.Data, "data"); err != nil {
+		return err
+	}
+	p.rich = richPayloadJSON{}
+	return nil
 }
 
 type IncomingWebhookService struct {
@@ -178,6 +284,9 @@ func (s *IncomingWebhookService) Create(ctx context.Context, actor WebhookActor,
 	if len([]rune(in.Description)) > 500 {
 		return nil, apperr.Invalid("webhook: description must be 500 characters or fewer")
 	}
+	if in.Kind != "" && in.Kind != model.WebhookKindRich {
+		return nil, apperr.Invalid(`webhook: kind must be "" (classic) or "rich"`)
+	}
 	ch, err := s.channels.GetByID(ctx, in.ChannelID)
 	if err != nil {
 		return nil, fmt.Errorf("webhook: channel: %w", err)
@@ -201,6 +310,7 @@ func (s *IncomingWebhookService) Create(ctx context.Context, actor WebhookActor,
 		LockToChannel:   in.LockToChannel,
 		Username:        strings.TrimSpace(in.Username),
 		ProfileImageURL: profileURL,
+		Kind:            in.Kind,
 		CreatedBy:       actor.ID,
 		CreatedAt:       now,
 		UpdatedAt:       now,
@@ -225,8 +335,14 @@ func (s *IncomingWebhookService) List(ctx context.Context, actor WebhookActor) (
 		return nil, err
 	}
 	all, err := s.store.List(ctx)
-	if err != nil || actor.Role == model.SystemRoleAdmin {
-		return all, err
+	if err != nil {
+		return nil, err
+	}
+	for _, wh := range all {
+		wh.Present()
+	}
+	if actor.Role == model.SystemRoleAdmin {
+		return all, nil
 	}
 	return slices.DeleteFunc(all, func(wh *model.IncomingWebhook) bool { return wh.CreatedBy != actor.ID }), nil
 }
@@ -277,7 +393,7 @@ func (s *IncomingWebhookService) Update(ctx context.Context, actor WebhookActor,
 		return nil, fmt.Errorf("webhook: update: %w", err)
 	}
 	s.publishChanged(ctx)
-	return existing, nil
+	return existing.Present(), nil
 }
 
 func (s *IncomingWebhookService) Delete(ctx context.Context, actor WebhookActor, id string) error {
@@ -312,6 +428,9 @@ func (s *IncomingWebhookService) URL(wh *model.IncomingWebhook) string {
 	if wh == nil || s.baseURL == "" {
 		return ""
 	}
+	if wh.IsRich() {
+		return s.baseURL + "/hooks/v2/" + wh.ID
+	}
 	return s.baseURL + "/hooks/" + wh.ID
 }
 
@@ -321,6 +440,10 @@ func (s *IncomingWebhookService) URL(wh *model.IncomingWebhook) string {
 // 400 with a FIXED user-facing message — the wrapped detail is for logs only,
 // never for the unauthenticated caller.
 var ErrWebhookDMRejected = errors.New("webhook: direct-message target rejected")
+
+// ErrInvalidPayload: a rich webhook's blocks, template or data don't have
+// the shape ex reads (a classic webhook never reads them).
+var ErrInvalidPayload = errors.New("invalid payload")
 
 // ErrWebhookUnavailable marks an infrastructure failure rather than a bad
 // request. The handler maps it to 503 so the caller retries.
@@ -338,6 +461,59 @@ func (s *IncomingWebhookService) ExecuteMessage(ctx context.Context, id string, 
 	if err != nil {
 		return nil, fmt.Errorf("webhook: get: %w", err)
 	}
+	return s.execute(ctx, wh, wh.IsRich(), payload)
+}
+
+// ErrWrongWebhookURL: each kind of webhook has its own URL — classic
+// /hooks/{id}, rich /hooks/v2/{id} — and a payload sent to the other one is
+// refused, so the classic URL only ever runs the classic path.
+var ErrWrongWebhookURL = errors.New("webhook: wrong URL for this webhook")
+
+// ExecuteClassic delivers a payload sent to the classic URL, /hooks/{id}.
+func (s *IncomingWebhookService) ExecuteClassic(ctx context.Context, id string, payload IncomingWebhookPayload) (*model.Message, error) {
+	return s.executeAt(ctx, id, false, payload)
+}
+
+// ExecuteRich delivers a payload sent to the rich URL, /hooks/v2/{id}.
+func (s *IncomingWebhookService) ExecuteRich(ctx context.Context, id string, payload IncomingWebhookPayload) (*model.Message, error) {
+	return s.executeAt(ctx, id, true, payload)
+}
+
+func (s *IncomingWebhookService) executeAt(ctx context.Context, id string, rich bool, payload IncomingWebhookPayload) (*model.Message, error) {
+	wh, err := s.store.Get(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("webhook: get: %w", err)
+	}
+	if wh.IsRich() != rich {
+		if rich {
+			return nil, apperr.Reject(ErrWrongWebhookURL, "this is a classic webhook: post to its /hooks/ URL")
+		}
+		return nil, apperr.Reject(ErrWrongWebhookURL, "this is a rich webhook: post to its /hooks/v2/ URL")
+	}
+	return s.execute(ctx, wh, rich, payload)
+}
+
+func (s *IncomingWebhookService) execute(ctx context.Context, wh *model.IncomingWebhook, rich bool, payload IncomingWebhookPayload) (*model.Message, error) {
+	var err error
+	if rich {
+		// Only a rich webhook reads the rich-only fields at all.
+		if err := payload.readRich(); err != nil {
+			return nil, err
+		}
+	} else {
+		// A classic webhook posts what it always posted: blocks (top-level or
+		// in cards) and an Authorization header are ignored, never refused —
+		// Slack-style senders often include blocks next to their text.
+		payload = classicPayload(payload)
+		if payload.Text == "" && len(payload.Attachments) == 0 {
+			return nil, errClassicWebhookEmptyPayload
+		}
+	}
+	if payload.Template != "" {
+		if payload, err = fillTemplate(wh, payload); err != nil {
+			return nil, err
+		}
+	}
 	// The payload limits come first: every later step — the DM target lookup,
 	// mention lookups, image fetches into S3 — costs work bounded only by them.
 	if err := validateWebhookPayload(payload); err != nil {
@@ -354,11 +530,23 @@ func (s *IncomingWebhookService) ExecuteMessage(ctx context.Context, id string, 
 	if username == "" {
 		username = "webhook"
 	}
-	refs := s.newRefs()
-	body := refs.translate(ctx, payload.Text)
-	attachments := make([]model.MessageAttachment, len(payload.Attachments))
-	for i, a := range payload.Attachments {
-		attachments[i] = refs.sanitizeAttachment(ctx, a)
+	// Elements that call the app need the app's bot token: the webhook URL
+	// alone, which can leak, must not be enough to post a button or picker
+	// that makes the real app act for whoever uses it. Checked on the raw
+	// payload, before any lookup or fetch the blocks would cost.
+	verified := false
+	if payload.BotToken != "" {
+		if !botTokenMatches(wh, payload.BotToken, time.Now()) {
+			return nil, apperr.Reject(ErrInvalidBotToken, "that bot token isn't this webhook's")
+		}
+		verified = true
+	}
+	if !verified && hasAppButtons(payload.Blocks, payload.Attachments) {
+		return nil, apperr.Reject(ErrBotTokenRequired, "buttons that call an app need the app's bot token (Authorization: Bearer)")
+	}
+	body, attachments, blocks, err := s.content(ctx, payload, rich)
+	if err != nil {
+		return nil, err
 	}
 	iconURL := payload.IconURL
 	iconEmoji := normalizeEmojiName(payload.IconEmoji)
@@ -368,6 +556,9 @@ func (s *IncomingWebhookService) ExecuteMessage(ctx context.Context, id string, 
 		iconURL = ""
 	}
 	avatarURL := s.proxyImages(ctx, iconURL, attachments)
+	if rich {
+		blocks = s.proxyBlockImages(ctx, blocks, attachments)
+	}
 	if iconEmoji == "" && avatarURL == "" {
 		avatarURL = wh.ProfileImageURL
 	}
@@ -394,18 +585,172 @@ func (s *IncomingWebhookService) ExecuteMessage(ctx context.Context, id string, 
 		Attachments:     attachments,
 		ParentMessageID: strings.TrimSpace(payload.RootID),
 		WebhookID:       wh.ID,
+		Blocks:          blocks,
+		AppButtons:      verified,
 		OwnerID:         wh.CreatedBy,
 	})
 }
 
-// errWebhookEmptyPayload rejects a payload with neither text nor attachments.
-var errWebhookEmptyPayload = apperr.Invalid("webhook: text or attachments required")
+// appContent is content for an app's answer to a click: checked like a post,
+// and its cards' images fetched into ex like a post's.
+func (s *IncomingWebhookService) appContent(ctx context.Context, payload IncomingWebhookPayload) (string, []model.MessageAttachment, model.Blocks, error) {
+	if err := validateWebhookPayload(payload); err != nil {
+		return "", nil, nil, err
+	}
+	body, attachments, blocks, err := s.content(ctx, payload, true)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	s.proxyImages(ctx, "", attachments)
+	blocks = s.proxyBlockImages(ctx, blocks, attachments)
+	return body, attachments, blocks, nil
+}
+
+// hasAppButtons reports whether blocks — a message's or its cards' — hold an
+// element that calls the app: a button that is neither a link nor a
+// built-in, or any element that picks a value (select, menu, picker).
+func hasAppButtons(blocks model.Blocks, attachments []model.MessageAttachment) bool {
+	callsApp := func(e model.BlockElement) bool {
+		return model.IsMessageInteractive(e.Type) || (e.Type == model.ElementButton && e.URL == "" && e.ExAction == "")
+	}
+	calls := func(bs model.Blocks) bool {
+		for _, b := range bs {
+			if b.Accessory != nil && callsApp(*b.Accessory) {
+				return true
+			}
+			for _, e := range b.Elements {
+				if callsApp(e) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	if calls(blocks) {
+		return true
+	}
+	for _, a := range attachments {
+		if calls(a.Blocks) {
+			return true
+		}
+	}
+	return false
+}
+
+// PreviewMessage shows the actor what a payload would post — its text,
+// blocks and cards, normalized and checked exactly as Execute does — without
+// posting it. Images stay the payload's own URLs: nothing is fetched or
+// stored for a preview.
+func (s *IncomingWebhookService) PreviewMessage(ctx context.Context, actor WebhookActor, payload IncomingWebhookPayload) (*model.Message, error) {
+	if err := actor.check(); err != nil {
+		return nil, err
+	}
+	if err := payload.readRich(); err != nil {
+		return nil, err
+	}
+	if err := validateWebhookPayload(payload); err != nil {
+		return nil, err
+	}
+	body, attachments, blocks, err := s.content(ctx, payload, true)
+	if err != nil {
+		return nil, err
+	}
+	username := strings.TrimSpace(payload.Username)
+	if username == "" {
+		username = "webhook"
+	}
+	return &model.Message{
+		ID:                 "preview",
+		AuthorID:           WebhookAuthorID,
+		Body:               body,
+		Blocks:             blocks,
+		MessageAttachments: attachments,
+		WebhookUsername:    username,
+		WebhookIconEmoji:   normalizeEmojiName(payload.IconEmoji),
+		CreatedAt:          time.Now(),
+	}, nil
+}
+
+// content turns a payload into what a message stores: its text with
+// mentions rewritten, its cards sanitized, and — for a rich webhook — its
+// blocks normalized and, when it has no text, a fallback text drawn from the
+// blocks. A classic webhook's content is its text and cards alone, rewritten
+// exactly as classic webhooks always were.
+func (s *IncomingWebhookService) content(ctx context.Context, payload IncomingWebhookPayload, rich bool) (string, []model.MessageAttachment, model.Blocks, error) {
+	refs := s.newRefs()
+	refs.classic = !rich
+	body := refs.translate(ctx, payload.Text)
+	attachments := make([]model.MessageAttachment, len(payload.Attachments))
+	for i, a := range payload.Attachments {
+		attachments[i] = refs.sanitizeAttachment(ctx, a)
+	}
+	if !rich {
+		return body, attachments, nil, nil
+	}
+	blocks, err := s.blockNormalizer(ctx, refs).normalizeMessage(ctx, payload.Blocks, attachments)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	if strings.TrimSpace(body) == "" {
+		body = blocksFallbackText(blocks, attachments)
+	}
+	return body, attachments, blocks, nil
+}
+
+// blockNormalizer normalizes one payload's blocks: their markdown is
+// rewritten like the payload's text, and allowed_users resolve by user ID
+// or exact email — never the search index, which a list of 50 names would
+// turn into 50 searches on an unauthenticated ingress.
+func (s *IncomingWebhookService) blockNormalizer(ctx context.Context, refs *webhookRefs) *blockNormalizer {
+	return newBlockNormalizer(
+		func(text string) string { return refs.translate(ctx, text) },
+		func(ctx context.Context, ref string) string {
+			if s.users == nil || ref == "" {
+				return ""
+			}
+			if u, err := s.users.GetByID(ctx, ref); err == nil && u != nil {
+				return u.ID
+			}
+			if strings.Contains(ref, "@") {
+				if u, err := s.users.GetByEmail(ctx, ref); err == nil && u != nil {
+					return u.ID
+				}
+			}
+			return ""
+		},
+	)
+}
+
+// errWebhookEmptyPayload rejects a payload with no text, attachments or
+// blocks.
+var errWebhookEmptyPayload = apperr.Invalid("webhook: text, attachments or blocks required")
+
+// errClassicWebhookEmptyPayload rejects a classic webhook's payload with no
+// text or attachments — its blocks don't count, as they are ignored.
+var errClassicWebhookEmptyPayload = apperr.Invalid("webhook: text or attachments required")
+
+// classicPayload is what a classic webhook reads of a payload: no blocks —
+// top-level or in cards — no card icons, and no bot token.
+func classicPayload(p IncomingWebhookPayload) IncomingWebhookPayload {
+	p.Blocks = nil
+	p.BotToken = ""
+	p.Template, p.Data = "", nil
+	if len(p.Attachments) > 0 {
+		atts := make([]model.MessageAttachment, len(p.Attachments))
+		for i, a := range p.Attachments {
+			a.Blocks, a.Icon = nil, ""
+			atts[i] = a
+		}
+		p.Attachments = atts
+	}
+	return p
+}
 
 // validateWebhookPayload applies SendWebhook's payload limits before anything
 // is looked up or fetched for the payload. SendWebhook checks them again on
 // the translated result.
 func validateWebhookPayload(p IncomingWebhookPayload) error {
-	if p.Text == "" && len(p.Attachments) == 0 {
+	if p.Text == "" && len(p.Attachments) == 0 && len(p.Blocks) == 0 {
 		return errWebhookEmptyPayload
 	}
 	if err := ValidateAttachmentCount(len(p.Attachments)); err != nil {
@@ -597,6 +942,9 @@ type webhookRefs struct {
 	s        *IncomingWebhookService
 	users    map[string]*model.User
 	channels map[string]*model.Channel
+	// classic: a classic webhook's text — mentions by name only, as before
+	// rich webhooks added mentions by email.
+	classic bool
 }
 
 func (s *IncomingWebhookService) newRefs() *webhookRefs {
@@ -676,11 +1024,98 @@ func (s *IncomingWebhookService) proxyImages(ctx context.Context, iconURL string
 	return icon
 }
 
+// proxyBlockImages routes every image in blocks — and in the cards' blocks
+// — through ex's image proxy, measuring each, so no client ever loads the
+// app's own server. Each distinct address is fetched once. An image the
+// proxy refuses is dropped — as is every image when no image store is
+// configured: passing the app's address through would let it watch who
+// reads the message. An image block goes, an accessory goes, a context row
+// loses it (and goes if empty).
+func (s *IncomingWebhookService) proxyBlockImages(ctx context.Context, blocks model.Blocks, atts []model.MessageAttachment) model.Blocks {
+	type proxied struct {
+		url  string
+		w, h int
+	}
+	got := map[string]*proxied{}
+	visit := func(bs model.Blocks, each func(raw string, set func(p *proxied))) {
+		for i := range bs {
+			b := &bs[i]
+			if b.Type == model.BlockImage {
+				each(b.ImageURL, func(p *proxied) { b.ImageURL, b.ImageWidth, b.ImageHeight = p.url, p.w, p.h })
+			}
+			if b.Accessory != nil && b.Accessory.Type == model.ElementImage {
+				a := b.Accessory
+				each(a.ImageURL, func(p *proxied) { a.ImageURL = p.url })
+			}
+			for j := range b.Elements {
+				if e := &b.Elements[j]; e.Type == model.ElementImage {
+					each(e.ImageURL, func(p *proxied) { e.ImageURL = p.url })
+				}
+			}
+		}
+	}
+	all := func(each func(raw string, set func(p *proxied))) {
+		visit(blocks, each)
+		for i := range atts {
+			visit(atts[i].Blocks, each)
+		}
+	}
+	all(func(raw string, _ func(*proxied)) { got[raw] = &proxied{} })
+	if s.images != nil {
+		var g errgroup.Group
+		g.SetLimit(webhookImageConcurrency)
+		for raw, p := range got {
+			g.Go(func() error { p.url, p.w, p.h = s.proxyImageWithSize(ctx, raw); return nil })
+		}
+		_ = g.Wait()
+	}
+	all(func(raw string, set func(*proxied)) { set(got[raw]) })
+	for i := range atts {
+		atts[i].Blocks = withoutLostImages(atts[i].Blocks)
+	}
+	return withoutLostImages(blocks)
+}
+
+// withoutLostImages drops the images the proxy couldn't take.
+func withoutLostImages(bs model.Blocks) model.Blocks {
+	if len(bs) == 0 {
+		return bs
+	}
+	out := bs[:0]
+	for _, b := range bs {
+		if b.Type == model.BlockImage && b.ImageURL == "" {
+			continue
+		}
+		if b.Accessory != nil && b.Accessory.Type == model.ElementImage && b.Accessory.ImageURL == "" {
+			b.Accessory = nil
+		}
+		if b.Type == model.BlockContext {
+			kept := b.Elements[:0]
+			for _, e := range b.Elements {
+				if e.Type != model.ElementImage || e.ImageURL != "" {
+					kept = append(kept, e)
+				}
+			}
+			if b.Elements = kept; len(kept) == 0 {
+				continue
+			}
+		}
+		out = append(out, b)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 // TranslateMarkup turns Mattermost (and Slack) message markup into ex's:
 // ~channel and @user references into mentions, @channel and <!channel> into
 // @all, <url|label> into a link. The Mattermost-compatible API posts with it.
+// Mentions stay by name only, as for a classic webhook.
 func (s *IncomingWebhookService) TranslateMarkup(ctx context.Context, text string) string {
-	return s.newRefs().translate(ctx, text)
+	refs := s.newRefs()
+	refs.classic = true
+	return refs.translate(ctx, text)
 }
 
 func (r *webhookRefs) translate(ctx context.Context, text string) string {
@@ -718,8 +1153,18 @@ func (r *webhookRefs) translate(ctx context.Context, text string) string {
 		}
 		return match
 	})
-	return mattermostUserPattern.ReplaceAllStringFunc(text, func(match string) string {
-		parts := mattermostUserPattern.FindStringSubmatch(match)
+	userPattern := mattermostUserPattern
+	if r.classic {
+		userPattern = classicMattermostUserPattern
+	}
+	return userPattern.ReplaceAllStringFunc(text, func(match string) string {
+		parts := userPattern.FindStringSubmatch(match)
+		if strings.Contains(parts[2], "@") {
+			if mention, ok := r.userMention(ctx, parts[2]); ok {
+				return parts[1] + mention
+			}
+			return match
+		}
 		name := strings.ToLower(parts[2])
 		switch name {
 		case "all":

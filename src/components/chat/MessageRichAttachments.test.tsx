@@ -51,7 +51,14 @@ describe('MessageRichAttachments', () => {
       />,
     );
 
-    expect(screen.getAllByTestId('message-rich-attachment')).toHaveLength(2);
+    // Notion-style: no side bar; a colour tints the whole card, and one ex
+    // can't read is the theme's plain card.
+    const cards = screen.getAllByTestId('message-rich-attachment');
+    expect(cards).toHaveLength(2);
+    expect(cards[0]).toHaveClass('border', 'bg-background');
+    expect(cards[1]).toHaveClass('bg-rt-green-bg');
+    expect(cards[1]).toHaveClass('border-rt-green/15');
+    expect(cards[1]).not.toHaveAttribute('style');
     expect(screen.getByText('Build Bot')).toBeInTheDocument();
     expect(screen.getByText('Plain title')).toBeInTheDocument();
     expect(screen.getByText('Short')).toBeInTheDocument();
@@ -142,5 +149,48 @@ describe('MessageRichAttachments', () => {
     expect(parse).toHaveBeenCalledTimes(1);
     expect(parse).toHaveBeenCalledWith('**Edited**');
     expect(screen.getByText('Edited').tagName).toBe('STRONG');
+  });
+});
+
+describe('MessageRichAttachments with blocks', () => {
+  it('draws a card’s blocks inside its coloured bar', () => {
+    render(
+      <MessageRichAttachments
+        attachments={[
+          {
+            color: '#D97706',
+            text: 'card',
+            blocks: [{ type: 'section', block_id: 'b1', text: { type: 'markdown', text: '**A3** due Fri' } }],
+          },
+        ]}
+      />,
+    );
+    const cardEl = screen.getByTestId('message-rich-attachment');
+    expect(cardEl).toContainElement(screen.getByTestId('message-blocks'));
+    expect(screen.getByText('A3').tagName).toBe('STRONG');
+  });
+
+  it('heads a card with its icon and title, keeps pretext above it and the footer under a rule', () => {
+    render(
+      <MessageRichAttachments
+        attachments={[
+          { icon: '🚀', title: 'api deployed', pretext: 'Release 2.14', text: 'All checks passed.', fields: [{ title: 'Version', value: 'v2.14.0', short: true }], footer: 'deploy-bot' },
+          { icon: 'not_a_known_emoji', text: 'No title' },
+          { icon: '🚨', text: 'Deploy failed' },
+        ]}
+      />,
+    );
+    const [card, bare, untitled] = screen.getAllByTestId('message-rich-attachment');
+    // Without a title, the icon leads the first line instead of a header.
+    expect(untitled).toHaveClass('flex');
+    expect(untitled.firstElementChild).toHaveTextContent('🚨');
+    expect(untitled.lastElementChild).toHaveTextContent('Deploy failed');
+    expect(card.firstElementChild!.firstElementChild).toHaveTextContent('🚀api deployed');
+    expect(card).not.toHaveTextContent('Release 2.14');
+    expect(screen.getByText('Release 2.14').closest('[data-testid="message-rich-attachment"]')).toBeNull();
+    expect(screen.getByText('Version').tagName).toBe('DT');
+    expect(screen.getByText('deploy-bot')).toHaveClass('border-t');
+    // An icon ex can't draw is left out, never ":name:".
+    expect(bare).not.toHaveTextContent(':not_a_known_emoji:');
   });
 });

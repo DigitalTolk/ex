@@ -146,6 +146,10 @@ type Config struct {
 	// an unusable entry is logged at boot and ignored (see
 	// netguard.ParseDomains).
 	ConnectorPrivateDomains string `env:"CONNECTOR_PRIVATE_DOMAINS"`
+	// InteractivitySigningKey is the server key apps' signing secrets are
+	// derived from (they are never stored). Optional: without it the key is
+	// derived from JWT_SECRET, so rotating that rotates every app's secret.
+	InteractivitySigningKey string `env:"INTERACTIVITY_SIGNING_KEY"`
 
 	// BedrockRegion enables server-side execution of bedrock-harness agents:
 	// the backend runs the Converse loop against AWS Bedrock in this region

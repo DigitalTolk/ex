@@ -29,7 +29,7 @@ import { UserHoverCard } from '@/components/UserHoverCard';
 import { UserAvatar } from '@/components/UserAvatar';
 import { useEditMessage, useToggleReaction } from '@/hooks/useMessages';
 import { renderMarkdown, type RenderOpts } from '@/lib/markdown';
-import { isEmojiOnlyMessage } from '@/lib/emoji-shortcodes';
+import { isEmojiOnlyMessage, isKnownEmoji } from '@/lib/emoji-shortcodes';
 import { recordEmojiUse } from '@/lib/emoji-frequency';
 import { padQuickReactions } from '@/lib/quick-reactions';
 import { triggerReactionHaptic } from '@/lib/haptics';
@@ -45,6 +45,8 @@ import { SharePointAnchor, SharePointCard } from '@/components/chat/SharePointCa
 import { useSharePointHosts } from '@/hooks/useSharePoint';
 import { isSharePointURL, sharePointURLs } from '@/lib/sharepoint';
 import { MessageRichAttachments } from '@/components/chat/MessageRichAttachments';
+import { BlockList, MessageBlockScope } from '@/components/chat/blocks/MessageBlocks';
+import { hasBlocks } from '@/lib/block-text';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { extractURLs, formatLongDateTime, formatRelative } from '@/lib/format';
 import { registerEditMessageHandler } from '@/lib/window-events';
@@ -890,7 +892,8 @@ function MessageItemImpl({
           // the name line's.
           triggerClassName="inline-flex w-9 shrink-0 cursor-pointer items-center justify-center"
         >
-          {message.webhookIconEmoji ? (
+          {/* An icon ex can't draw (e.g. a Slack-only name) falls back to initials. */}
+          {message.webhookIconEmoji && isKnownEmoji(message.webhookIconEmoji, emojiMap) ? (
             <div
               className="flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-full bg-muted"
               aria-label={`:${message.webhookIconEmoji}:`}
@@ -1087,95 +1090,125 @@ function MessageItemImpl({
                 Sending
               </span>
             )}
-            {/* Sending: the text is greyed until the server confirms it. */}
-            <div
-              className={`text-sm prose-message transition-colors duration-150 ${
-                pendingState === 'sending' ? 'text-muted-foreground' : ''
-              }`}
-            >
-              <MessageBody
-                message={message}
-                emojiMap={emojiMap}
-                pickTokens={pickTokens}
-                currentUserId={currentUserId}
-                onContentHeightChange={onContentHeightChange}
-                openTag={openTag}
-                renderLink={renderLink}
-                // Grouped rows have no header (that's where the header rows
-                // show "(edited)"), so the marker rides the end of the text's
-                // last line instead, Slack-style.
-                trailing={
-                  !firstInGroup && (message.editedAt || reminder) ? (
-                    <>
-                      {message.editedAt && (
-                        <span data-testid="grouped-edited-marker" className="ml-1 text-xs text-muted-foreground">
-                          (edited)
-                        </span>
-                      )}
-                      {reminder && (
-                        <span className="ml-1 inline-flex align-middle">
-                          <ReminderMark reminder={reminder} />
-                        </span>
-                      )}
-                    </>
-                  ) : undefined
-                }
-              />
-            </div>
-            {sharePointLinks.map((url) => (
-              <SharePointCard
-                key={url}
-                url={url}
-                parent={sharePointParent}
-                currentUserId={currentUserId}
-                nameOf={(id) => userMap?.get(id)?.displayName ?? 'Unknown'}
-                authorName={displayAuthorName}
-                authorAvatarURL={displayAuthorAvatarURL}
-                postedIn={postedIn}
-                postedAt={message.createdAt}
-                onContentHeightChange={onContentHeightChange}
-              />
-            ))}
             {(() => {
-              if (message.noUnfurl) return null;
-              // First URL in the body (skipping code) that isn't a SharePoint
-              // file gets a preview card. Capped at one to keep messages
-              // compact.
-              const url = bodyURLs.find((u) => !isSharePointURL(u, sharePointHosts));
-              return url ? (
-                <UnfurlCard
-                  url={url}
-                  messageId={message.id}
-                  channelId={channelId}
-                  conversationId={conversationId}
-                  isAuthor={isOwn}
-                  onContentHeightChange={onContentHeightChange}
-                />
-              ) : null;
+              // Drawn from `current`: a message with blocks shows a click's
+              // answer before its broadcast arrives (MessageBlockScope).
+              const content = (current: Message) => (
+                <>
+                  {current.blocks?.length ? (
+                    // An app's layout: its text is the fallback for notifications,
+                    // search and clients without blocks, so it isn't shown too.
+                    <BlockList blocks={current.blocks} className="mt-0.5" />
+                  ) : (
+                    <>
+                      {/* Sending: the text is greyed until the server confirms it. */}
+                      <div
+                        className={`text-sm prose-message transition-colors duration-150 ${
+                          pendingState === 'sending' ? 'text-muted-foreground' : ''
+                        }`}
+                      >
+                        <MessageBody
+                          message={message}
+                          emojiMap={emojiMap}
+                          pickTokens={pickTokens}
+                          currentUserId={currentUserId}
+                          onContentHeightChange={onContentHeightChange}
+                          openTag={openTag}
+                          renderLink={renderLink}
+                          // Grouped rows have no header (that's where the header rows
+                          // show "(edited)"), so the marker rides the end of the text's
+                          // last line instead, Slack-style.
+                          trailing={
+                            !firstInGroup && (message.editedAt || reminder) ? (
+                              <>
+                                {message.editedAt && (
+                                  <span data-testid="grouped-edited-marker" className="ml-1 text-xs text-muted-foreground">
+                                    (edited)
+                                  </span>
+                                )}
+                                {reminder && (
+                                  <span className="ml-1 inline-flex align-middle">
+                                    <ReminderMark reminder={reminder} />
+                                  </span>
+                                )}
+                              </>
+                            ) : undefined
+                          }
+                        />
+                      </div>
+                    </>
+                  )}
+                  {!current.blocks?.length &&
+                    sharePointLinks.map((url) => (
+                      <SharePointCard
+                        key={url}
+                        url={url}
+                        parent={sharePointParent}
+                        currentUserId={currentUserId}
+                        nameOf={(id) => userMap?.get(id)?.displayName ?? 'Unknown'}
+                        authorName={displayAuthorName}
+                        authorAvatarURL={displayAuthorAvatarURL}
+                        postedIn={postedIn}
+                        postedAt={message.createdAt}
+                        onContentHeightChange={onContentHeightChange}
+                      />
+                    ))}
+                  {(() => {
+                    if (message.noUnfurl || current.blocks?.length) return null;
+                    // First URL in the body (skipping code) that isn't a SharePoint
+                    // file gets a preview card. Capped at one to keep messages
+                    // compact.
+                    const url = bodyURLs.find((u) => !isSharePointURL(u, sharePointHosts));
+                    return url ? (
+                      <UnfurlCard
+                        url={url}
+                        messageId={message.id}
+                        channelId={channelId}
+                        conversationId={conversationId}
+                        isAuthor={isOwn}
+                        onContentHeightChange={onContentHeightChange}
+                      />
+                    ) : null;
+                  })()}
+                  {message.attachmentIDs && message.attachmentIDs.length > 0 && (
+      	              <MessageAttachments
+      	                ids={message.attachmentIDs}
+      	                parentID={channelId ?? conversationId}
+      	                parentType={channelId ? 'channel' : conversationId ? 'conversation' : undefined}
+      	                messageID={message.id}
+      	                authorName={displayAuthorName}
+                      authorAvatarURL={displayAuthorAvatarURL}
+                      postedIn={postedIn}
+                      postedAt={message.createdAt}
+                      onContentHeightChange={onContentHeightChange}
+                    />
+                  )}
+                  {hasDesignMarkers(message.body) && (
+                    <DesignMarkers
+                      body={message.body}
+                      attachmentIDs={message.attachmentIDs}
+                      channelId={channelId}
+                      conversationId={conversationId}
+                      messageID={message.id}
+                    />
+                  )}
+                  <MessageRichAttachments attachments={current.messageAttachments} onContentHeightChange={onContentHeightChange} />
+                </>
+              );
+              if (!hasBlocks(message)) return content(message);
+              return (
+                <MessageBlockScope
+                  message={message}
+                  parentType={channelId ? 'channel' : conversationId ? 'conversation' : undefined}
+                  parentID={channelId ?? conversationId}
+                  interactive={!readOnly && !pendingState}
+                  currentUserId={currentUserId}
+                  userMap={userMap}
+                >
+                  {content}
+                </MessageBlockScope>
+              );
             })()}
-            {message.attachmentIDs && message.attachmentIDs.length > 0 && (
-	              <MessageAttachments
-	                ids={message.attachmentIDs}
-	                parentID={channelId ?? conversationId}
-	                parentType={channelId ? 'channel' : conversationId ? 'conversation' : undefined}
-	                messageID={message.id}
-	                authorName={displayAuthorName}
-                authorAvatarURL={displayAuthorAvatarURL}
-                postedIn={postedIn}
-                postedAt={message.createdAt}
-                onContentHeightChange={onContentHeightChange}
-              />
-            )}
-            {hasDesignMarkers(message.body) && (
-              <DesignMarkers
-                body={message.body}
-                attachmentIDs={message.attachmentIDs}
-                channelId={channelId}
-                conversationId={conversationId}
-                messageID={message.id}
-              />
-            )}
-            <MessageRichAttachments attachments={message.messageAttachments} onContentHeightChange={onContentHeightChange} />
             {reactionEntries.length > 0 && (
               <div className="mt-1 flex flex-wrap items-center gap-1" role="list" aria-label="Reactions">
                 {reactionEntries.map(([emoji, users]) => {

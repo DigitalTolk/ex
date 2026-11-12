@@ -307,11 +307,13 @@ describe.skipIf(window.__EX_FORCE_DEVICE__ === 'desktop')('a phone thread with t
     await userEvent.click(reply('Reply number 24')!);
     fireKeyboard('keyboardWillHide');
     await keyboardSettled(() => panel().querySelector('[data-composer-focused="false"]') !== null);
-    await frames(3);
 
-    const view = scroller().getBoundingClientRect();
-    const sent = reply('A new reply')!.getBoundingClientRect();
-    expect(sent.bottom).toBeLessThanOrEqual(view.bottom + 1);
-    expect(scroller().scrollHeight - scroller().scrollTop - scroller().clientHeight).toBeLessThanOrEqual(2);
+    // The list grows back as the keyboard goes and the scroller re-pins to
+    // the end: poll for that state. A frame count lost the race on a loaded
+    // CI box, catching the reply still below the edge mid-resize.
+    await expect
+      .poll(() => reply('A new reply')!.getBoundingClientRect().bottom - scroller().getBoundingClientRect().bottom)
+      .toBeLessThanOrEqual(1);
+    await expect.poll(() => scroller().scrollHeight - scroller().scrollTop - scroller().clientHeight).toBeLessThanOrEqual(2);
   });
 });

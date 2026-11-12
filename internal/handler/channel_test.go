@@ -237,6 +237,14 @@ func (s *dataMessageStore) UpdateMessage(_ context.Context, msg *model.Message) 
 	s.messages[msg.ParentID+"#"+msg.ID] = msg
 	return nil
 }
+func (s *dataMessageStore) UpdateMessageIfVersion(_ context.Context, msg *model.Message, prevVersion int) error {
+	cur, ok := s.messages[msg.ParentID+"#"+msg.ID]
+	if !ok || cur.Version != prevVersion {
+		return store.ErrVersionConflict
+	}
+	s.messages[msg.ParentID+"#"+msg.ID] = msg
+	return nil
+}
 func (s *dataMessageStore) DeleteMessage(_ context.Context, parentID, msgID string) error {
 	delete(s.messages, parentID+"#"+msgID)
 	return nil

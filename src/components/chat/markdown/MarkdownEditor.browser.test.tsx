@@ -19,6 +19,22 @@ async function mount(props: Partial<React.ComponentProps<typeof MarkdownEditor>>
   return { ref, screen };
 }
 
+// CodeMirror acts on a scroll only once its IntersectionObserver has seen the
+// editor on screen, and that first sighting doesn't re-measure, so a scroll
+// made before it is never rendered (on a busy runner it came after the first
+// frame). Observers report in the order they were made: once one made after
+// the editor's sees it, the editor's has too.
+function seenOnScreen(el: Element) {
+  return new Promise<void>((resolve) => {
+    const io = new IntersectionObserver((entries) => {
+      if (!entries.some((e) => e.isIntersecting)) return;
+      io.disconnect();
+      resolve();
+    });
+    io.observe(el);
+  });
+}
+
 describe('MarkdownEditor (CM6) — Phase 1 core', () => {
   it('round-trips text losslessly through the imperative handle (no tree, no drift)', async () => {
     const { ref } = await mount();
@@ -47,6 +63,7 @@ describe('MarkdownEditor (CM6) — Phase 1 core', () => {
     // view.scrollDOM === .cm-scroller must be the element that actually scrolls.
     expect(scroller.scrollHeight).toBeGreaterThan(scroller.clientHeight);
 
+    await seenOnScreen(content);
     scroller.scrollTop = scroller.scrollHeight;
     // The last line must be reachable in the rendered DOM after scrolling —
     // waited for, not a fixed two frames: a busy machine re-renders later.

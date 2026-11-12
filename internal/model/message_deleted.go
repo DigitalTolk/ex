@@ -7,4 +7,5 @@ type DeletedContent struct {
 	Body               string              `json:"-" dynamodbav:"body,omitempty"`
 	AttachmentIDs      []string            `json:"-" dynamodbav:"attachmentIDs,omitempty"`
 	MessageAttachments []MessageAttachment `json:"-" dynamodbav:"messageAttachments,omitempty"`
+	Blocks             Blocks              `json:"-" dynamodbav:"blocks,omitempty"`
 }

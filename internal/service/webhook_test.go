@@ -15,6 +15,7 @@ import (
 
 type fakeWebhookStore struct {
 	items     map[string]*model.IncomingWebhook
+	listErr   error
 	createErr error
 	updateErr error
 	deleteErr error
@@ -37,6 +38,9 @@ func (f *fakeWebhookStore) Get(_ context.Context, id string) (*model.IncomingWeb
 	return nil, store.ErrNotFound
 }
 func (f *fakeWebhookStore) List(context.Context) ([]*model.IncomingWebhook, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
 	out := make([]*model.IncomingWebhook, 0, len(f.items))
 	for _, wh := range f.items {
 		out = append(out, wh)

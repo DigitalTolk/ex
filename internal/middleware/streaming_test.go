@@ -134,6 +134,7 @@ func TestLoggingRedactsSecretPaths(t *testing.T) {
 func TestRedactPath(t *testing.T) {
 	for in, want := range map[string]string{
 		"/hooks/abc":                              "/hooks/[redacted]",
+		"/hooks/v2/abc":                           "/hooks/[redacted]",
 		"/api/v1/media/tok123/clip.mp4":           "/api/v1/media/[redacted]/clip.mp4",
 		"/api/v1/media/tok123":                    "/api/v1/media/[redacted]",
 		"/api/v1/html-preview/tok123/mockup.html": "/api/v1/html-preview/[redacted]/mockup.html",

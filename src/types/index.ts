@@ -124,6 +124,239 @@ export interface Message {
   // Client-only: an optimistic row for a message still being sent, or one
   // that failed to send (shown "Not sent" with Retry / Delete).
   pendingState?: 'sending' | 'failed';
+  // An app's layout (Block Kit); body stays its plain-text fallback.
+  blocks?: Block[];
+  // State of the message's built-in actions: who acknowledged, who voted.
+  actionTallies?: ActionTally[];
+  // Changes made to an app's message so far.
+  version?: number;
+  // Posted by its app with the app's token: its app buttons reach the app.
+  appButtons?: boolean;
+}
+
+// ---- Blocks (an app's message layout; the server normalizes every one:
+// unknown kinds dropped, IDs assigned, "mrkdwn" stored as "markdown").
+
+export interface BlockText {
+  type: 'plain_text' | 'markdown';
+  text: string;
+}
+
+export interface ConfirmDialog {
+  title: BlockText;
+  text: BlockText;
+  confirm: BlockText;
+  deny: BlockText;
+}
+
+export interface ButtonElement {
+  type: 'button';
+  text: BlockText;
+  action_id: string;
+  value?: string;
+  style?: 'primary' | 'danger';
+  url?: string;
+  confirm?: ConfirmDialog;
+  // Who may see and click it; absent means everyone who sees the message.
+  allowed_users?: string[];
+  ex_action?: 'ack' | 'vote';
+}
+
+// A context row's text: on the wire its text is a plain string.
+export interface TextElement {
+  type: 'plain_text' | 'markdown';
+  text: string;
+}
+
+// A small picture: a section's accessory or a context row's. The server
+// proxies it; the size is set by where it sits.
+export interface ImageElement {
+  type: 'image';
+  image_url: string;
+  alt_text: string;
+}
+
+// The elements that pick a value. In a message (actions row or accessory)
+// and in a form, using one goes to the app; the server checks every value
+// against the stored element.
+export type PickerElement =
+  | { type: 'static_select'; action_id: string; placeholder?: BlockText; options: SelectOption[]; initial_option?: SelectOption; confirm?: ConfirmDialog }
+  | {
+      type: 'multi_static_select';
+      action_id: string;
+      placeholder?: BlockText;
+      options: SelectOption[];
+      initial_options?: SelectOption[];
+      max_selected_items?: number;
+      confirm?: ConfirmDialog;
+    }
+  | { type: 'overflow'; action_id: string; options: SelectOption[]; confirm?: ConfirmDialog }
+  | { type: 'datepicker'; action_id: string; placeholder?: BlockText; initial_date?: string; confirm?: ConfirmDialog }
+  | { type: 'timepicker'; action_id: string; placeholder?: BlockText; initial_time?: string; confirm?: ConfirmDialog }
+  | { type: 'checkboxes'; action_id: string; options: SelectOption[]; initial_options?: SelectOption[]; confirm?: ConfirmDialog }
+  | { type: 'radio_buttons'; action_id: string; options: SelectOption[]; initial_option?: SelectOption; confirm?: ConfirmDialog }
+  | { type: 'users_select'; action_id: string; placeholder?: BlockText; initial_user?: string; confirm?: ConfirmDialog };
+
+export type RowElement = ButtonElement | PickerElement;
+
+export type Block =
+  | { type: 'header'; block_id: string; text: BlockText }
+  | { type: 'section'; block_id: string; text?: BlockText; fields?: BlockText[]; accessory?: RowElement | ImageElement }
+  | { type: 'actions'; block_id: string; elements: RowElement[] }
+  | { type: 'context'; block_id: string; elements: (TextElement | ImageElement)[] }
+  | { type: 'divider'; block_id: string }
+  | { type: 'image'; block_id: string; image_url: string; alt_text: string; text?: BlockText; image_width?: number; image_height?: number }
+  | { type: 'rich_text'; block_id: string; content: RichNode[] }
+  | { type: 'callout'; block_id: string; icon?: string; color: RichColor; content: RichNode[] }
+  // A toggle's children are text-only kinds (rich_text, table, divider,
+  // section, context); the server refuses anything else.
+  | { type: 'toggle'; block_id: string; summary: RichSpan[]; blocks: Block[]; open?: boolean }
+  | { type: 'table'; block_id: string; columns: TableColumn[]; rows: TableCell[][] }
+  // 2 or 3 columns side by side; each holds text-only kinds, headers,
+  // callouts and charts (the server refuses anything else).
+  | { type: 'columns'; block_id: string; blocks: Block[] }
+  | { type: 'column'; block_id: string; width?: number; blocks?: Block[] }
+  | { type: 'chart'; block_id: string; kind: 'bar' | 'line' | 'donut'; text?: BlockText; labels: string[]; series: ChartSeries[]; unit?: string };
+
+export interface ChartSeries {
+  name?: string;
+  values: number[];
+}
+
+export interface TableColumn {
+  header?: string;
+  align: 'left' | 'center' | 'right';
+}
+
+export interface TableCell {
+  spans?: RichSpan[];
+}
+
+// ---- Rich text (an app's rich_text block): paragraph-level parts holding
+// inline pieces. The server has checked every piece; colours are palette
+// names (theme tokens), never CSS.
+
+export type RichColor = 'gray' | 'brown' | 'orange' | 'yellow' | 'green' | 'blue' | 'purple' | 'red';
+
+export type RichSpan =
+  | {
+      type: 'text';
+      text: string;
+      bold?: boolean;
+      italic?: boolean;
+      strike?: boolean;
+      underline?: boolean;
+      code?: boolean;
+      color?: RichColor;
+      highlight?: RichColor;
+      link?: string;
+    }
+  | { type: 'user'; user: string; name: string }
+  | { type: 'channel'; channel: string; name: string }
+  | { type: 'emoji'; name: string }
+  | { type: 'date'; timestamp: number; format: string; fallback?: string }
+  | { type: 'pill'; text: string; color: RichColor };
+
+export interface RichItem {
+  spans?: RichSpan[];
+  items?: RichItem[];
+}
+
+export type RichNode =
+  | { type: 'paragraph' | 'quote'; spans: RichSpan[] }
+  | { type: 'heading'; level: 1 | 2 | 3; spans: RichSpan[] }
+  | { type: 'list'; style: 'bullet' | 'ordered'; items: RichItem[] }
+  | { type: 'code'; text: string; language?: string };
+
+// ---- Forms (an app's view: a dialog the app opens for the person who
+// clicked). Its blocks are message blocks plus input fields.
+
+export interface SelectOption {
+  text: BlockText;
+  value: string;
+  // A second line (checkboxes, radio buttons).
+  description?: BlockText;
+  // An overflow option that opens a link instead.
+  url?: string;
+}
+
+export type InputElement =
+  | {
+      type: 'plain_text_input';
+      action_id: string;
+      placeholder?: BlockText;
+      multiline?: boolean;
+      initial_value?: string;
+      min_length?: number;
+      max_length?: number;
+    }
+  | {
+      type: 'number_input';
+      action_id: string;
+      placeholder?: BlockText;
+      initial_value?: string;
+      is_decimal_allowed?: boolean;
+      min_value?: string;
+      max_value?: string;
+    }
+  | { type: 'email_text_input' | 'url_text_input'; action_id: string; placeholder?: BlockText; initial_value?: string }
+  | { type: 'multi_users_select'; action_id: string; placeholder?: BlockText; initial_users?: string[]; max_selected_items?: number }
+  | Exclude<PickerElement, { type: 'overflow' }>;
+
+export interface InputBlock {
+  type: 'input';
+  block_id: string;
+  label: BlockText;
+  hint?: BlockText;
+  optional?: boolean;
+  // Changes go to the app as they happen, so it can reshape the form.
+  dispatch_action?: boolean;
+  element: InputElement;
+}
+
+export type ViewBlock = Block | InputBlock;
+
+export interface AppView {
+  id: string;
+  type: 'modal';
+  callback_id?: string;
+  title: BlockText;
+  submit?: BlockText;
+  close?: BlockText;
+  blocks: ViewBlock[];
+  private_metadata?: string;
+  external_id?: string;
+  notify_on_close?: boolean;
+  // A pushed form's place in its stack: the form under it, and the first.
+  previous_view_id?: string;
+  root_view_id?: string;
+  hash: string;
+}
+
+// view.opened / view.updated: a form for this person, from an app. Only the
+// tab whose click it answers (clickID) shows it.
+export interface AppViewEvent {
+  view: AppView;
+  app: { name: string; avatarURL?: string; iconEmoji?: string };
+  clickID?: string;
+}
+
+// What a submission came to (POST /api/v1/views/{id}/submit).
+export interface ViewSubmitResult {
+  action: 'close' | 'errors' | 'update' | 'push' | 'keep';
+  errors?: Record<string, string>;
+  view?: AppView;
+  // A close that closes the whole stack.
+  cleared?: boolean;
+  notice?: string;
+  failed?: boolean;
+}
+
+export interface ActionTally {
+  blockID: string;
+  actionID: string;
+  userIDs: string[];
+  at: string;
 }
 
 // HastNode mirrors the server-side hast tree shape. Three node
@@ -157,6 +390,10 @@ export interface MessageAttachment {
   thumb_url?: string;
   footer?: string;
   footer_icon?: string;
+  // Rich webhooks: an emoji name shown before the title, Notion-style.
+  icon?: string;
+  // Blocks inside the card sit on its tint.
+  blocks?: Block[];
 }
 
 export interface MessageAttachmentField {
@@ -257,6 +494,50 @@ export interface IncomingWebhook {
   createdAt: string;
   updatedAt: string;
   url?: string;
+  // 'rich': an app's webhook (blocks, buttons, forms, a bot token). Absent:
+  // a classic webhook, which posts text and cards as webhooks always have.
+  // Chosen at creation; never changes.
+  kind?: string;
+  // Interactivity (rich webhooks only): where the app receives clicks, and what has been issued
+  // (the values are shown once, when issued, and never again).
+  interactivityURL?: string;
+  emailSharing?: boolean;
+  adminPaused?: boolean;
+  hasBotToken?: boolean;
+  hasSigningSecret?: boolean;
+  // Saved layouts (rich webhooks): the app posts {"template": key, "data"}.
+  templates?: MessageTemplate[];
+}
+
+export interface MessageTemplate {
+  key: string;
+  payload: Record<string, unknown>;
+  updatedAt: string;
+}
+
+export interface InteractionEntry {
+  at: string;
+  kind: 'click' | 'response_url' | 'test' | 'view_submission' | 'view_closed' | 'api';
+  userID?: string;
+  actionID?: string;
+  result: 'ok' | 'failed' | 'timeout';
+  status?: number;
+  latencyMs: number;
+  error?: string;
+}
+
+export interface InteractionStatus {
+  webhook: IncomingWebhook;
+  pausedForSeconds?: number;
+  interactions: InteractionEntry[];
+}
+
+export interface InteractionTestResult {
+  ok: boolean;
+  status?: number;
+  latencyMs: number;
+  error?: string;
+  reply?: string;
 }
 
 export interface UserChannel {

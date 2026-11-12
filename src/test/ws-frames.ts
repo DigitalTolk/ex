@@ -113,6 +113,9 @@ export const CALLBACK_EVENTS = {
   onRunUpdated: 'run.updated',
   onRunProgress: 'run.progress',
   onRunApproval: 'run.approval',
+  onInteractionNotice: 'interaction.notice',
+  onViewOpened: 'view.opened',
+  onViewUpdated: 'view.updated',
   onSharePointChanged: 'sharepoint.changed',
 } as const satisfies Record<string, AppEventType>;
 

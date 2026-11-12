@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { showToast } from '@/lib/toast';
 import { Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
@@ -48,6 +49,8 @@ import {
 } from '@/stores/agent-runs';
 import { onRunApproval as onAgentRunApproval } from '@/stores/agent-approvals';
 import { RunActivityDrawer } from '@/components/chat/RunActivityDrawer';
+import { AppViewHost } from '@/components/apps/AppViewHost';
+import { openAppView, updateAppView } from '@/stores/app-view';
 import { DesktopRunnerAutostart } from '@/components/runners/DesktopRunnerAutostart';
 import { hasDesktopRunner } from '@/lib/desktop-runner';
 import { markParentRead } from '@/lib/mark-read';
@@ -435,6 +438,10 @@ export default function ChatPage() {
     // A reminder was set or cancelled (here or on another device), fired, or
     // went with its message or channel — refetch the pending list.
     [EventType.RemindersChanged]: () => applyRemindersChangedEvent(queryClient),
+    // An app answered this person's click with a note for them alone.
+    [EventType.InteractionNotice]: (n) => showToast(n.text, 'success'),
+    [EventType.ViewOpened]: openAppView,
+    [EventType.ViewUpdated]: updateAppView,
     // A posted SharePoint link was shared, failed, or a member was given or
     // denied access — its card and the Files panel refetch.
     [EventType.SharePointChanged]: (change) => applySharePointChangedEvent(queryClient, change),
@@ -707,6 +714,8 @@ export default function ChatPage() {
       {/* Run Activity Drawer: mounted once at the chat root; opened from the
           agent activity chip via the run-drawer store. */}
       <RunActivityDrawer />
+      {/* An app's form, opened in answer to a click in this tab. */}
+      <AppViewHost />
       {hasDesktopRunner() && <DesktopRunnerAutostart />}
     </AppLayout>
   );
