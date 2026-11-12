@@ -9,6 +9,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -235,5 +236,34 @@ func TestOIDCProvider_Exchange_RejectsForgedSignature(t *testing.T) {
 
 	if _, err := p.Exchange(context.Background(), "code", "the-nonce"); err == nil {
 		t.Fatal("an id_token signed with an unknown key must fail signature verification")
+	}
+}
+
+// With extra scopes, sign-in asks for them, and the login hands back the
+// token response so the app can act as the user later.
+func TestOIDCProvider_ExtraScopesAndToken(t *testing.T) {
+	iss := newOIDCIssuer(t)
+	p, err := auth.NewOIDCProvider(context.Background(), iss.issuer, testClientID, "test-secret", "http://localhost/callback",
+		"offline_access", "https://graph.microsoft.com/Files.ReadWrite.All")
+	if err != nil {
+		t.Fatalf("NewOIDCProvider: %v", err)
+	}
+	authURL, _ := url.Parse(p.AuthURL("state", "nonce"))
+	if got := authURL.Query().Get("scope"); got != "openid profile email offline_access https://graph.microsoft.com/Files.ReadWrite.All" {
+		t.Fatalf("scope = %q", got)
+	}
+	conf := p.OAuth2Config()
+	if conf.ClientID != testClientID || conf.Endpoint.TokenURL == "" {
+		t.Fatalf("oauth2 config = %+v", conf)
+	}
+	conf.ClientID = "changed"
+	if p.OAuth2Config().ClientID != testClientID {
+		t.Fatal("OAuth2Config must hand out a copy")
+	}
+
+	iss.idToken = iss.mint(t, nil, nil)
+	info, err := p.Exchange(context.Background(), "code", "the-nonce")
+	if err != nil || info.Token == nil || info.Token.AccessToken == "" {
+		t.Fatalf("Exchange = %+v, %v", info, err)
 	}
 }

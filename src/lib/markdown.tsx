@@ -43,6 +43,9 @@ export interface RenderOpts {
   // paragraph) — a Slack-style "(edited)" note. A body that doesn't end in a
   // paragraph (list, code block, table…) gets it after the tree instead.
   trailing?: ReactNode;
+  // renderLink renders a safe link its own way (a SharePoint link opens for
+  // editing); undefined keeps the plain link.
+  renderLink?: (href: string, children: ReactNode) => ReactNode | undefined;
 }
 
 // renderMarkdown is the public render entry point. ONE render pipeline:
