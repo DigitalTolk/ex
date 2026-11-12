@@ -4,6 +4,13 @@ import { render, screen, fireEvent, act, within } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import { SearchBar } from './SearchBar';
 import { usePresenceStore } from '@/stores/presence';
+import {
+  addRecentOpened,
+  addRecentSearch,
+  loadRecentSearches,
+  resetRecentSearchesSessionState,
+  useRecentSearchesStore,
+} from '@/stores/recent-searches';
 
 const useChannelBySlugMock = vi.hoisted(() => vi.fn(() => ({ data: undefined as unknown })));
 const useUserChannelsMock = vi.hoisted(() => vi.fn(() => ({ data: [] as { channelID: string }[] })));
@@ -178,81 +185,93 @@ describe('SearchBar', () => {
     expect(input.value).toBe('');
   });
 
-  describe('⌘1 to ⌘9 / Ctrl+1 to Ctrl+9', () => {
-    const hits = () => {
-      useSearchChannelsMock.mockReturnValue({
-        data: { hits: [{ id: 'c1', _source: { name: 'general', slug: 'general' } }] },
-        isLoading: false,
+  describe('recent list on an empty field', () => {
+    beforeEach(() => {
+      act(() => {
+        resetRecentSearchesSessionState();
+        loadRecentSearches('u-1');
+        addRecentSearch('standup');
+        addRecentOpened({ kind: 'user', id: 'u-bob', name: 'Bob' });
+        addRecentOpened({ kind: 'group', id: 'g-7', name: 'Bob, Carol' });
+        addRecentOpened({ kind: 'channel', id: 'c-1', slug: 'general', name: 'general', private: false });
       });
-      useSearchUsersMock.mockReturnValue({
-        data: { hits: [{ id: 'u1', _source: { displayName: 'Alice' } }] },
-        isLoading: false,
-      });
-      useUserConversationsMock.mockReturnValue({
-        data: [{ conversationID: 'g1', type: 'group', displayName: 'Alice, Bob' }],
-      });
-    };
+    });
 
-    it('labels the first rows Ctrl 1, Ctrl 2… in order and picks the one pressed', () => {
-      hits();
+    const rows = () => screen.getAllByRole('option').map((o) => o.textContent);
+
+    it('lists what was opened, then recent searches, when the empty field gets focus', () => {
       renderBar();
-      const input = screen.getByTestId('searchbar-input');
-      fireEvent.change(input, { target: { value: 'al' } });
-      expect(within(screen.getByTestId('searchbar-channel-c1')).getByText('Ctrl 1')).toBeInTheDocument();
-      expect(within(screen.getByTestId('searchbar-user-u1')).getByText('Ctrl 2')).toBeInTheDocument();
-      expect(within(screen.getByTestId('searchbar-group-g1')).getByText('Ctrl 3')).toBeInTheDocument();
-      expect(within(screen.getByTestId('searchbar-show-results')).getByText('Ctrl 4')).toBeInTheDocument();
-      fireEvent.keyDown(input, { key: '3', ctrlKey: true });
-      expect(lastLocation.pathname).toBe('/conversation/g1');
+      expect(screen.queryByTestId('recent-searches')).toBeNull();
+      fireEvent.focus(screen.getByTestId('searchbar-input'));
+      expect(screen.getByRole('listbox', { name: 'Recent' })).toBeInTheDocument();
+      expect(rows()).toEqual(['~general', 'Bob, Carol', 'Bob', 'standup']);
+      // The first row is the one Enter opens.
+      expect(screen.getAllByRole('option')[0]).toHaveAttribute('aria-selected', 'true');
+      // Typing swaps it for live results.
+      fireEvent.change(screen.getByTestId('searchbar-input'), { target: { value: 'gen' } });
+      expect(screen.queryByTestId('recent-searches')).toBeNull();
     });
 
-    it('Ctrl+2 opens the person in the second row', () => {
-      hits();
-      renderBar();
-      const input = screen.getByTestId('searchbar-input');
-      fireEvent.change(input, { target: { value: 'al' } });
-      fireEvent.keyDown(input, { key: '2', ctrlKey: true });
-      expect(openDMMock).toHaveBeenCalledWith('u1', expect.anything());
-    });
-
-    it('uses ⌘ on Apple platforms', () => {
-      const restore = stubUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)');
-      try {
-        hits();
-        renderBar();
-        const input = screen.getByTestId('searchbar-input');
-        fireEvent.change(input, { target: { value: 'al' } });
-        expect(within(screen.getByTestId('searchbar-channel-c1')).getByText('⌘1')).toBeInTheDocument();
-        fireEvent.keyDown(input, { key: '1', metaKey: true });
-        expect(lastLocation.pathname).toBe('/channel/general');
-      } finally {
-        restore();
-      }
-    });
-
-    it('past the last row the chord is swallowed; with no list it passes through', () => {
+    it('Enter opens the highlighted channel and moves it to the top', () => {
       renderBar();
       const input = screen.getByTestId('searchbar-input');
       fireEvent.focus(input);
-      // No list yet: the chord is not ours.
-      expect(fireEvent.keyDown(input, { key: '1', ctrlKey: true })).toBe(true);
-      fireEvent.change(input, { target: { value: 'hello' } });
-      // One row (search messages); Ctrl+5 does nothing, but is still taken.
-      expect(fireEvent.keyDown(input, { key: '5', ctrlKey: true })).toBe(false);
-      expect(lastLocation.pathname).toBe('/');
-      expect(screen.getByTestId('searchbar-dropdown')).toBeInTheDocument();
+      fireEvent.keyDown(input, { key: 'ArrowDown' });
+      fireEvent.keyDown(input, { key: 'Enter' });
+      expect(lastLocation.pathname).toBe('/conversation/g-7');
+      expect(useRecentSearchesStore.getState().opened[0]).toEqual({ kind: 'group', id: 'g-7', name: 'Bob, Carol' });
+      expect(screen.queryByTestId('recent-searches')).toBeNull();
     });
 
-    it('labels only the first nine rows', () => {
-      useSearchChannelsMock.mockReturnValue({
-        data: { hits: Array.from({ length: 10 }, (_, i) => ({ id: `c${i}`, _source: { name: `ch${i}`, slug: `ch${i}` } })) },
-        isLoading: false,
-      });
+    it('Enter on the person opens their DM, a click opens the channel, a recent search goes to the search page', () => {
       renderBar();
-      fireEvent.change(screen.getByTestId('searchbar-input'), { target: { value: 'ch' } });
-      expect(within(screen.getByTestId('searchbar-channel-c8')).getByText('Ctrl 9')).toBeInTheDocument();
-      expect(within(screen.getByTestId('searchbar-channel-c9')).queryByText(/Ctrl/)).toBeNull();
-      expect(within(screen.getByTestId('searchbar-show-results')).queryByText(/Ctrl/)).toBeNull();
+      const input = screen.getByTestId('searchbar-input');
+      fireEvent.focus(input);
+      fireEvent.keyDown(input, { key: 'ArrowDown' });
+      fireEvent.keyDown(input, { key: 'ArrowDown' });
+      fireEvent.keyDown(input, { key: 'Enter' });
+      expect(openDMMock).toHaveBeenCalledWith('u-bob', expect.anything());
+      fireEvent.focus(input);
+      fireEvent.click(screen.getAllByTestId('recent-opened').find((r) => r.textContent?.startsWith('~general'))!);
+      expect(lastLocation.pathname).toBe('/channel/general');
+      fireEvent.focus(input);
+      fireEvent.click(screen.getByTestId('recent-search'));
+      expect(lastLocation).toEqual({ pathname: '/search', search: '?q=standup' });
+    });
+
+    it('ArrowUp from the first row wraps to the recent search, and Enter runs it', () => {
+      renderBar();
+      const input = screen.getByTestId('searchbar-input');
+      fireEvent.focus(input);
+      fireEvent.keyDown(input, { key: 'ArrowUp' });
+      fireEvent.keyDown(input, { key: 'Enter' });
+      expect(lastLocation).toEqual({ pathname: '/search', search: '?q=standup' });
+    });
+
+    it('hovering moves the highlight; × forgets one and Clear empties a section, keeping the list open', () => {
+      renderBar();
+      fireEvent.focus(screen.getByTestId('searchbar-input'));
+      fireEvent.mouseEnter(screen.getAllByTestId('recent-opened')[2].parentElement!);
+      expect(screen.getAllByRole('option')[2]).toHaveAttribute('aria-selected', 'true');
+      fireEvent.mouseEnter(screen.getByTestId('recent-search').parentElement!);
+      expect(screen.getByTestId('recent-search')).toHaveAttribute('aria-selected', 'true');
+      const remove = screen.getByRole('button', { name: 'Remove ~general from recently opened' });
+      expect(fireEvent.mouseDown(remove)).toBe(false); // keeps the field focused
+      fireEvent.click(remove);
+      expect(rows()).toEqual(['Bob, Carol', 'Bob', 'standup']);
+      fireEvent.click(screen.getByRole('button', { name: 'Remove standup from recent searches' }));
+      expect(screen.queryByTestId('recent-searches-clear')).toBeNull();
+      const clear = screen.getByTestId('recent-opened-clear');
+      expect(fireEvent.mouseDown(clear)).toBe(false);
+      fireEvent.click(clear);
+      expect(screen.queryByTestId('recent-searches')).toBeNull();
+    });
+
+    it('shows nothing with no history', () => {
+      act(() => resetRecentSearchesSessionState());
+      renderBar();
+      fireEvent.focus(screen.getByTestId('searchbar-input'));
+      expect(screen.queryByTestId('recent-searches')).toBeNull();
     });
   });
 

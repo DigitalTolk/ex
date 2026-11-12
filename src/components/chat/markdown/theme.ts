@@ -186,16 +186,6 @@ export const composerTheme = EditorView.theme({
     textOverflow: 'ellipsis',
   },
   '.cm-option-status': { flex: '0 0 auto', fontSize: '0.875rem', lineHeight: '1' },
-  // ⌘1 to ⌘9 hint on the first nine rows (see renderOption in completions.ts),
-  // pushed to the row's right edge.
-  '.cm-option-key': {
-    marginLeft: 'auto',
-    flex: '0 0 auto',
-    paddingLeft: '0.5rem',
-    fontFamily: 'var(--font-sans)',
-    fontSize: '0.75rem',
-    color: 'var(--color-muted-foreground)',
-  },
   '.cm-option-sub': {
     fontSize: '0.75rem',
     color: 'var(--color-muted-foreground)',

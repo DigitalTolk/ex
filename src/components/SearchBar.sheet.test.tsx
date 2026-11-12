@@ -186,14 +186,14 @@ describe('SearchBar sheet variant', () => {
     expect(lastLocation).toBe('/search?q=deploy');
   });
 
-  // Only the sheet shows recent searches, so only the sheet records them.
-  it('does not record searches made from the desktop bar', () => {
+  // The desktop bar records too: its empty field lists them.
+  it('records searches made from the desktop bar', () => {
     renderSheet('/', vi.fn(), 'bar');
     const input = screen.getByTestId('searchbar-input');
     fireEvent.change(input, { target: { value: 'quarterly' } });
     fireEvent.keyDown(input, { key: 'Enter' });
     expect(lastLocation).toBe('/search?q=quarterly');
-    expect(useRecentSearchesStore.getState().queries).toEqual([]);
+    expect(useRecentSearchesStore.getState().queries).toEqual(['quarterly']);
   });
 
   it('does not take over ⌘K or close on outside clicks', () => {
@@ -292,12 +292,14 @@ describe('SearchBar sheet variant', () => {
     expect(screen.queryByTestId('recent-searches')).not.toBeInTheDocument();
   });
 
-  it('does not remember what the desktop bar opens', () => {
+  it('remembers what the desktop bar opens', () => {
     channelHitsMock.hits = [{ id: 'ch-9', _source: { name: 'design', slug: 'design' } }];
     renderSheet('/', vi.fn(), 'bar');
     fireEvent.change(screen.getByTestId('searchbar-input'), { target: { value: 'design' } });
     fireEvent.click(screen.getByTestId('searchbar-channel-ch-9'));
     expect(lastLocation).toBe('/channel/design');
-    expect(useRecentSearchesStore.getState().opened).toEqual([]);
+    expect(useRecentSearchesStore.getState().opened).toEqual([
+      { kind: 'channel', id: 'ch-9', slug: 'design', name: 'design', private: false },
+    ]);
   });
 });

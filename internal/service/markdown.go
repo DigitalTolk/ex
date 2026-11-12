@@ -30,7 +30,7 @@ type MarkdownRenderer struct {
 }
 
 // blockParsersWithoutSetext is goldmark's DefaultBlockParsers minus the
-// SetextHeading parser (priority 100). Removing it means `foobar\n---` is a
+// SetextHeading parser (priority 100), plus listEndParser. Removing it means `foobar\n---` is a
 // paragraph followed by a thematic break (<hr>) rather than an <h2> setext
 // heading — matching the composer (which also drops SetextHeading) and the
 // Slack-style model where a line of `---` is a divider.
@@ -44,6 +44,9 @@ func blockParsersWithoutSetext() []util.PrioritizedValue {
 		util.Prioritized(parser.NewFencedCodeBlockParser(), 700),
 		util.Prioritized(parser.NewBlockquoteParser(), 800),
 		util.Prioritized(parser.NewHTMLBlockParser(), 900),
+		// Ends a list at an unindented plain line instead of letting the
+		// line join the last item (see markdown_lazy.go).
+		util.Prioritized(newListEndParser(), 950),
 		util.Prioritized(parser.NewParagraphParser(), 1000),
 	}
 }

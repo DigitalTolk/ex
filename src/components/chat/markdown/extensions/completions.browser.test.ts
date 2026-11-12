@@ -2,8 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { startCompletion, currentCompletions, selectedCompletionIndex } from '@codemirror/autocomplete';
-import { composerAutocomplete, renderOption, type CompletionProviders } from './completions';
-import { isApplePlatform } from '@/lib/platform';
+import { composerAutocomplete, type CompletionProviders } from './completions';
 
 const providers: CompletionProviders = {
   users: () => [{ id: 'u1', displayName: 'Alice' }],
@@ -176,112 +175,6 @@ describe('composerAutocomplete', () => {
 
     view.destroy();
     host.remove();
-  });
-
-  describe('numbered shortcuts', () => {
-    const apple = isApplePlatform(navigator.userAgent);
-    const mod = apple ? '⌘' : 'Ctrl ';
-    const twoUsers: CompletionProviders = {
-      ...providers,
-      users: () => [
-        { id: 'u1', displayName: 'Alice' },
-        { id: 'u2', displayName: 'Alan' },
-      ],
-    };
-    function chord(view: EditorView, key: string, extra: KeyboardEventInit = {}) {
-      const ev = new KeyboardEvent('keydown', {
-        key,
-        bubbles: true,
-        cancelable: true,
-        ...(apple ? { metaKey: true } : { ctrlKey: true }),
-        ...extra,
-      });
-      view.contentDOM.dispatchEvent(ev);
-      return ev;
-    }
-    async function openOn(doc: string, p: CompletionProviders = twoUsers) {
-      const host = document.createElement('div');
-      document.body.appendChild(host);
-      const view = new EditorView({
-        parent: host,
-        state: EditorState.create({ doc, selection: { anchor: doc.length }, extensions: [composerAutocomplete(p)] }),
-      });
-      startCompletion(view);
-      await vi.waitFor(() => expect(currentCompletions(view.state).length).toBeGreaterThan(0));
-      // Outwait acceptCompletion's interactionDelay, like a person would.
-      await new Promise((r) => setTimeout(r, 120));
-      return { view, host };
-    }
-
-    it('the chord plus 2 picks the second option', async () => {
-      const { view, host } = await openOn('@Al');
-      const second = currentCompletions(view.state)[1];
-      expect(chord(view, '2').defaultPrevented).toBe(true);
-      await vi.waitFor(() => expect(currentCompletions(view.state).length).toBe(0));
-      expect(view.state.doc.toString()).toBe(second.label === 'Alan' ? '@[u2|Alan] ' : '@[u1|Alice] ');
-      // Nothing open: the chord passes through untouched.
-      expect(chord(view, '1').defaultPrevented).toBe(false);
-      view.destroy();
-      host.remove();
-    });
-
-    it('past the end of the list the chord is swallowed and nothing is picked; other keys pass', async () => {
-      const { view, host } = await openOn('@Al');
-      expect(chord(view, '9').defaultPrevented).toBe(true);
-      expect(view.state.doc.toString()).toBe('@Al');
-      expect(currentCompletions(view.state).length).toBeGreaterThan(0);
-      expect(chord(view, '1', { shiftKey: true }).defaultPrevented).toBe(false);
-      expect(view.state.doc.toString()).toBe('@Al');
-      view.destroy();
-      host.remove();
-    });
-
-    it('labels the first nine rows with their shortcut where there is a keyboard', async () => {
-      const prev = window.__EX_FORCE_DEVICE__;
-      window.__EX_FORCE_DEVICE__ = 'desktop';
-      try {
-        const many = Array.from({ length: 12 }, (_, i) => ({ name: `eyes_${i}`, imageURL: `https://x.test/${i}.png` }));
-        const { view, host } = await openOn(':eyes', { ...providers, customEmojis: () => many });
-        await vi.waitFor(() => {
-          const rows = Array.from(view.dom.querySelectorAll('.cm-tooltip-autocomplete li[id]'));
-          expect(rows.length).toBeGreaterThan(9);
-          expect(rows[0].querySelector('.cm-option-key')?.textContent).toBe(`${mod}1`);
-          expect(rows[8].querySelector('.cm-option-key')?.textContent).toBe(`${mod}9`);
-          expect(rows[9].querySelector('.cm-option-key')).toBeNull();
-        });
-        view.destroy();
-        host.remove();
-      } finally {
-        window.__EX_FORCE_DEVICE__ = prev;
-      }
-    });
-
-    it('draws no hint on a touch device', async () => {
-      const prev = window.__EX_FORCE_DEVICE__;
-      window.__EX_FORCE_DEVICE__ = 'touch';
-      try {
-        const { view, host } = await openOn('@Al');
-        await vi.waitFor(() => expect(view.dom.querySelectorAll('.cm-tooltip-autocomplete li[id]').length).toBe(2));
-        expect(view.dom.querySelector('.cm-option-key')).toBeNull();
-        view.destroy();
-        host.remove();
-      } finally {
-        window.__EX_FORCE_DEVICE__ = prev;
-      }
-    });
-
-    it('draws no hint for an option outside the open list, and no row without meta', () => {
-      const prev = window.__EX_FORCE_DEVICE__;
-      window.__EX_FORCE_DEVICE__ = 'desktop';
-      try {
-        const state = EditorState.create({ doc: '' });
-        const option = { label: 'Alice', meta: { kind: 'user', displayName: 'Alice', online: false } } as never;
-        expect((renderOption(option, state) as HTMLElement).querySelector('.cm-option-key')).toBeNull();
-        expect(renderOption({ label: 'plain' }, state)).toBeNull();
-      } finally {
-        window.__EX_FORCE_DEVICE__ = prev;
-      }
-    });
   });
 
   it('keeps natural placement: opens below the caret when there is visible room below', async () => {
