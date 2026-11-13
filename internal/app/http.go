@@ -70,6 +70,7 @@ func (a *App) buildHTTP(context.Context) error {
 	// Mail diagnostics: an admin can read the effective transport and send a
 	// real test message through it.
 	admin.SetMailer(c.mailer, cfg.EmailProvider, cfg.EmailFrom)
+	admin.SetWorkbenchEnabled(ag.runnerTokens.WorkbenchEnabled())
 	if s.client != nil {
 		admin.SetSearch(s.client, s.reindexer)
 		admin.SetMappingRebuilder(s.mappingRebuilder)

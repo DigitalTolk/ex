@@ -44,6 +44,7 @@ func (a *App) buildAgents(ctx context.Context) error {
 	ag.runnerTokens.SetPublisher(in.pubsub)
 	c.users.SetRunnerRevoker(ag.runnerTokens)
 	c.auth.SetRunnerRevoker(ag.runnerTokens)
+	ag.runnerTokens.UseWorkbenchURL(cfg.WorkbenchURL, cfg.WorkbenchToken, cfg.BaseURL)
 
 	// Agents-as-users + the run orchestrator. Additive: agents ride the
 	// existing user rows, runs/timelines are new RUN# items, fan-out uses the

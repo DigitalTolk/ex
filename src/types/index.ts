@@ -478,6 +478,9 @@ export interface WorkspaceSettings {
   // Hosts whose links are shared SharePoint files ("*.example.com" matches
   // every subdomain); absent when SharePoint sharing is off.
   sharePointHosts?: string[];
+  // Connect to Claude on the Agents page: ex sets up a runner for the
+  // person on the shared agent workbench. Off unless the server has one.
+  workbenchEnabled?: boolean;
 }
 
 export interface IncomingWebhook {
