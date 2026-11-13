@@ -46,7 +46,12 @@ type AdminHandler struct {
 	// sharePointHosts are the SharePoint hosts whose posted links are shared
 	// (SetSharePointHosts); empty when SharePoint sharing is off.
 	sharePointHosts []string
+	// workbench says Connect to Claude is on (SetWorkbenchEnabled).
+	workbench bool
 }
+
+// SetWorkbenchEnabled tells clients whether to offer Connect to Claude.
+func (h *AdminHandler) SetWorkbenchEnabled(on bool) { h.workbench = on }
 
 // SetSharePointHosts tells clients which links are SharePoint links: they
 // show those as file cards and open them for editing.
@@ -169,6 +174,8 @@ type settingsResponse struct {
 	// SharePointHosts are the hosts whose links are shared SharePoint
 	// files; "*.example.com" matches every subdomain.
 	SharePointHosts []string `json:"sharePointHosts,omitempty"`
+	// WorkbenchEnabled offers Connect to Claude on the Agents page.
+	WorkbenchEnabled bool `json:"workbenchEnabled"`
 }
 
 func (h *AdminHandler) newSettingsResponse(ws *model.WorkspaceSettings) settingsResponse {
@@ -179,6 +186,7 @@ func (h *AdminHandler) newSettingsResponse(ws *model.WorkspaceSettings) settings
 		GiphyEnabled:      ws.GiphyAPIKey != "",
 		RunnersInApp:      ws.RunnersInApp,
 		SharePointHosts:   h.sharePointHosts,
+		WorkbenchEnabled:  h.workbench,
 	}
 }
 

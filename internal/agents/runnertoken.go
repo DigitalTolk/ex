@@ -107,6 +107,8 @@ type RunnerTokenService struct {
 	pub   service.Publisher
 	now   func() time.Time
 	newID func() string
+	// workbench is set when Connect to Claude is on (workbench.go).
+	workbench WorkbenchOnboarder
 }
 
 // SetPublisher lets the service tell a user's clients that their runners
@@ -214,19 +216,26 @@ func (s *RunnerTokenService) Exchange(ctx context.Context, code, verifier string
 	if !usableRunnerOwner(user) {
 		return nil, ErrRunnerGrantInvalid
 	}
+	return s.issue(ctx, user, grant.Label, false)
+}
+
+// issue records a new install for user and mints its token.
+func (s *RunnerTokenService) issue(ctx context.Context, user *model.User, label string, workbench bool) (*IssuedRunnerToken, error) {
+	now := s.now()
 	rec := &model.RunnerToken{
 		ID:        s.newID(),
 		UserID:    user.ID,
-		Label:     grant.Label,
+		Label:     label,
 		CreatedAt: now,
 		ExpiresAt: now.Add(RunnerTokenTTL),
+		Workbench: workbench,
 	}
 	token, err := s.jwt.GenerateRunnerToken(user, rec.ID, rec.ExpiresAt)
 	if err != nil {
-		return nil, fmt.Errorf("runner exchange: mint: %w", err)
+		return nil, fmt.Errorf("runner token: mint: %w", err)
 	}
 	if err := s.store.PutRunnerToken(ctx, rec); err != nil {
-		return nil, fmt.Errorf("runner exchange: store token: %w", err)
+		return nil, fmt.Errorf("runner token: store: %w", err)
 	}
 	s.changed(ctx, user.ID)
 	return &IssuedRunnerToken{Token: token, ID: rec.ID, Label: rec.Label, ExpiresAt: rec.ExpiresAt, UserName: user.DisplayName}, nil

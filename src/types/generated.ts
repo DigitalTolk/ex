@@ -3008,6 +3008,11 @@ export interface RunnerToken {
   label: string;
   createdAt: string /* RFC3339 */;
   expiresAt: string /* RFC3339 */;
+  /**
+   * Workbench marks the install ex set up on the shared agent workbench
+   * for this person (Connect to Claude), not one they paired themselves.
+   */
+  workbench?: boolean;
 }
 /**
  * RunnerGrant is the short-lived, single-use approval a signed-in user gives

@@ -138,6 +138,11 @@ type Config struct {
 	// registry holds only directly-ingested connectors. Set per environment
 	// (stg-ex → stg provider, prd-ex → prod provider) — never hardcoded.
 	ConnectorProviderURL string `env:"CONNECTOR_PROVIDER_URL"`
+
+	// WorkbenchURL is the shared agent workbench (WORKBENCH_URL). When set,
+	// the Agents page offers Connect to Claude: ex issues the person a runner
+	// token and the workbench runs ex-runner for them. Empty → off.
+	WorkbenchURL         string `env:"WORKBENCH_URL"`
 	ConnectorProviderKey string `env:"CONNECTOR_PROVIDER_API_KEY"`
 	// ConnectorPrivateDomains lists the domains whose hosts connector calls
 	// may reach on a private 10.x address ("digitaltolk.net" covers the domain

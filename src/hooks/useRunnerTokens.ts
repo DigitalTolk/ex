@@ -21,6 +21,8 @@ export interface RunnerInstall {
   os?: string;
   version?: string;
   harnesses?: RunnerHarness[];
+  // The install ex set up on the agent workbench (Connect to Claude).
+  workbench?: boolean;
 }
 
 const RUNNER_TOKENS_KEY = queryKeys.runnerTokens();
@@ -58,5 +60,17 @@ export function useCreateRunnerGrant() {
         method: 'POST',
         body: JSON.stringify(input),
       }),
+  });
+}
+
+// useConnectWorkbench is Connect to Claude: the server issues a runner token
+// and hands it to the agent workbench, which runs ex-runner for the caller.
+// The token never comes to the browser. Either way the Runners list is
+// refetched: a 409 means another tab already connected.
+export function useConnectWorkbench() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async () => apiFetch('/api/v1/runner-tokens/workbench', { method: 'POST' }),
+    onSettled: () => void queryClient.invalidateQueries({ queryKey: RUNNER_TOKENS_KEY }),
   });
 }

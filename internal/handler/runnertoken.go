@@ -17,6 +17,7 @@ import (
 //	POST   /api/v1/runner-tokens/exchange  public    CLI redeems code + PKCE verifier → runner token
 //	GET    /api/v1/runner-tokens           session   the caller's connected runners
 //	DELETE /api/v1/runner-tokens/{id}      session   disconnect one of them
+//	POST   /api/v1/runner-tokens/workbench session   Connect to Claude (agent workbench)
 //	POST   /api/v1/agent/runner/renew      runner    fresh expiry, same install
 //	POST   /api/v1/agent/runner/revoke     runner    `ex-runner logout`
 type RunnerTokenHandler struct {
@@ -99,10 +100,11 @@ type runnerTokenView struct {
 	OS        string                `json:"os,omitempty"`
 	Version   string                `json:"version,omitempty"`
 	Harnesses []model.RunnerHarness `json:"harnesses,omitempty"`
+	Workbench bool                  `json:"workbench,omitempty"`
 }
 
 func viewRunnerToken(t *model.RunnerToken, live *model.RunnerRegistration) runnerTokenView {
-	v := runnerTokenView{ID: t.ID, Label: t.Label, CreatedAt: t.CreatedAt, ExpiresAt: t.ExpiresAt}
+	v := runnerTokenView{ID: t.ID, Label: t.Label, CreatedAt: t.CreatedAt, ExpiresAt: t.ExpiresAt, Workbench: t.Workbench}
 	if live != nil {
 		v.Online, v.OS, v.Version, v.Harnesses = true, live.OS, live.Version, live.Harnesses
 	}
@@ -147,6 +149,17 @@ func (h *RunnerTokenHandler) List(w http.ResponseWriter, r *http.Request) {
 		views = append(views, viewRunnerToken(t, live[t.ID]))
 	}
 	writeJSON(w, http.StatusOK, JSON{"runners": views})
+}
+
+// ConnectWorkbench POST /api/v1/runner-tokens/workbench: Connect to
+// Claude: ex issues the caller a runner token and hands it to the agent
+// workbench, which runs ex-runner for them. The token never comes back here.
+func (h *RunnerTokenHandler) ConnectWorkbench(w http.ResponseWriter, r *http.Request) {
+	if err := h.svc.ConnectWorkbench(r.Context(), middleware.UserIDFromContext(r.Context())); err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // Revoke DELETE /api/v1/runner-tokens/{id}

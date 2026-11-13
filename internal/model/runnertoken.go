@@ -15,6 +15,9 @@ type RunnerToken struct {
 	Label     string    `json:"label" dynamodbav:"label"`
 	CreatedAt time.Time `json:"createdAt" dynamodbav:"createdAt"`
 	ExpiresAt time.Time `json:"expiresAt" dynamodbav:"expiresAt"`
+	// Workbench marks the install ex set up on the shared agent workbench
+	// for this person (Connect to Claude), not one they paired themselves.
+	Workbench bool `json:"workbench,omitempty" dynamodbav:"workbench,omitempty"`
 }
 
 // RunnerGrant is the short-lived, single-use approval a signed-in user gives

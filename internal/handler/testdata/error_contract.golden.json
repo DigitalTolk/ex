@@ -812,6 +812,36 @@
     }
   },
   {
+    "case": "row: the agent workbench isn't set up here",
+    "status": 404,
+    "body": {
+      "error": {
+        "code": "workbench_off",
+        "message": "the agent workbench isn't set up here"
+      }
+    }
+  },
+  {
+    "case": "row: you're already connected to Claude",
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "workbench_connected",
+        "message": "you're already connected to Claude"
+      }
+    }
+  },
+  {
+    "case": "row: the agent workbench couldn't set you up",
+    "status": 424,
+    "body": {
+      "error": {
+        "code": "workbench_failed",
+        "message": "the agent workbench couldn't set you up"
+      }
+    }
+  },
+  {
     "case": "row: task: this project already has an active task",
     "status": 409,
     "body": {
