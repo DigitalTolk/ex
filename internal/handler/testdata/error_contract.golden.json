@@ -842,6 +842,26 @@
     }
   },
   {
+    "case": "row: you aren't connected to Claude",
+    "status": 404,
+    "body": {
+      "error": {
+        "code": "workbench_not_connected",
+        "message": "you aren't connected to Claude"
+      }
+    }
+  },
+  {
+    "case": "row: couldn't reach the agent workbench",
+    "status": 424,
+    "body": {
+      "error": {
+        "code": "workbench_unreachable",
+        "message": "couldn't reach the agent workbench"
+      }
+    }
+  },
+  {
     "case": "row: task: this project already has an active task",
     "status": 409,
     "body": {

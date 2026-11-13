@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-react';
+import { EditorView } from '@codemirror/view';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import ChatPage from '@/pages/ChatPage';
@@ -1010,6 +1011,12 @@ describe('mobile inline editing (conversation composer)', () => {
     const editor = screen.getByLabelText('Message input');
     await editor.click();
     await editor.fill('');
+    // Save once the editor itself holds the cleared text: on a busy WebKit
+    // the tap could beat CodeMirror reading the cleared DOM, and Save then
+    // saw an unchanged edit and closed without a PATCH.
+    await expect
+      .poll(() => EditorView.findFromDOM(editor.element() as HTMLElement)?.state.doc.toString())
+      .toBe('');
     await screen.getByRole('button', { name: 'Save' }).click();
     await vi.waitFor(() => {
       expect(fetchCalls().some((u) => u.startsWith('PATCH') && u.includes(`/conversations/${DM_ID}/messages/own-blank`))).toBe(true);

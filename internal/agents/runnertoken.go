@@ -108,7 +108,7 @@ type RunnerTokenService struct {
 	now   func() time.Time
 	newID func() string
 	// workbench is set when Connect to Claude is on (workbench.go).
-	workbench WorkbenchOnboarder
+	workbench Workbench
 }
 
 // SetPublisher lets the service tell a user's clients that their runners
@@ -216,29 +216,46 @@ func (s *RunnerTokenService) Exchange(ctx context.Context, code, verifier string
 	if !usableRunnerOwner(user) {
 		return nil, ErrRunnerGrantInvalid
 	}
-	return s.issue(ctx, user, grant.Label, false)
+	rec := s.newRecord(user, grant.Label)
+	token, err := s.mint(user, rec)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.save(ctx, rec); err != nil {
+		return nil, err
+	}
+	return &IssuedRunnerToken{Token: token, ID: rec.ID, Label: rec.Label, ExpiresAt: rec.ExpiresAt, UserName: user.DisplayName}, nil
 }
 
-// issue records a new install for user and mints its token.
-func (s *RunnerTokenService) issue(ctx context.Context, user *model.User, label string, workbench bool) (*IssuedRunnerToken, error) {
+// newRecord starts the record of a new install for user.
+func (s *RunnerTokenService) newRecord(user *model.User, label string) *model.RunnerToken {
 	now := s.now()
-	rec := &model.RunnerToken{
+	return &model.RunnerToken{
 		ID:        s.newID(),
 		UserID:    user.ID,
 		Label:     label,
 		CreatedAt: now,
 		ExpiresAt: now.Add(RunnerTokenTTL),
-		Workbench: workbench,
 	}
+}
+
+// mint signs the runner token for rec.
+func (s *RunnerTokenService) mint(user *model.User, rec *model.RunnerToken) (string, error) {
 	token, err := s.jwt.GenerateRunnerToken(user, rec.ID, rec.ExpiresAt)
 	if err != nil {
-		return nil, fmt.Errorf("runner token: mint: %w", err)
+		return "", fmt.Errorf("runner token: mint: %w", err)
 	}
+	return token, nil
+}
+
+// save stores rec, which makes its token valid, and tells the owner's
+// clients their runners changed.
+func (s *RunnerTokenService) save(ctx context.Context, rec *model.RunnerToken) error {
 	if err := s.store.PutRunnerToken(ctx, rec); err != nil {
-		return nil, fmt.Errorf("runner token: store: %w", err)
+		return fmt.Errorf("runner token: store: %w", err)
 	}
-	s.changed(ctx, user.ID)
-	return &IssuedRunnerToken{Token: token, ID: rec.ID, Label: rec.Label, ExpiresAt: rec.ExpiresAt, UserName: user.DisplayName}, nil
+	s.changed(ctx, rec.UserID)
+	return nil
 }
 
 // activeRecord loads the runner token a request's claims name, nil when the

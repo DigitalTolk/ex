@@ -18,6 +18,7 @@ import (
 //	GET    /api/v1/runner-tokens           session   the caller's connected runners
 //	DELETE /api/v1/runner-tokens/{id}      session   disconnect one of them
 //	POST   /api/v1/runner-tokens/workbench session   Connect to Claude (agent workbench)
+//	GET    /api/v1/runner-tokens/workbench session   how that setup is going
 //	POST   /api/v1/agent/runner/renew      runner    fresh expiry, same install
 //	POST   /api/v1/agent/runner/revoke     runner    `ex-runner logout`
 type RunnerTokenHandler struct {
@@ -152,14 +153,41 @@ func (h *RunnerTokenHandler) List(w http.ResponseWriter, r *http.Request) {
 }
 
 // ConnectWorkbench POST /api/v1/runner-tokens/workbench: Connect to
-// Claude: ex issues the caller a runner token and hands it to the agent
-// workbench, which runs ex-runner for them. The token never comes back here.
+// Claude. ex issues the caller a runner token and hands it to the agent
+// workbench, which queues setting up a runner for them; the answer is that
+// job. The token never comes back here.
 func (h *RunnerTokenHandler) ConnectWorkbench(w http.ResponseWriter, r *http.Request) {
-	if err := h.svc.ConnectWorkbench(r.Context(), middleware.UserIDFromContext(r.Context())); err != nil {
+	job, err := h.svc.ConnectWorkbench(r.Context(), middleware.UserIDFromContext(r.Context()))
+	if err != nil {
 		writeServiceError(w, r, err)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	writeJSON(w, http.StatusAccepted, viewWorkbenchJob(job))
+}
+
+// WorkbenchStatus GET /api/v1/runner-tokens/workbench: how the caller's
+// onboarding on the agent workbench is going.
+func (h *RunnerTokenHandler) WorkbenchStatus(w http.ResponseWriter, r *http.Request) {
+	job, err := h.svc.WorkbenchStatus(r.Context(), middleware.UserIDFromContext(r.Context()))
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, viewWorkbenchJob(job))
+}
+
+// viewWorkbenchJob is the SPA's shape of a workbench onboarding job; status
+// and result are the workbench's own, passed through (null when absent).
+func viewWorkbenchJob(j *agents.WorkbenchJob) JSON {
+	return JSON{
+		"id":         j.ID,
+		"state":      j.State,
+		"createdAt":  j.CreatedAt,
+		"startedAt":  j.StartedAt,
+		"finishedAt": j.FinishedAt,
+		"status":     j.Status,
+		"result":     j.Result,
+	}
 }
 
 // Revoke DELETE /api/v1/runner-tokens/{id}
