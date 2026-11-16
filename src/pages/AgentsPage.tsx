@@ -6,6 +6,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { useAuth } from '@/context/AuthContext';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useAgents, type AgentView } from '@/hooks/useAgents';
+import { useRunnerTokens } from '@/hooks/useRunnerTokens';
 import { useWorkspaceSettings } from '@/hooks/useSettings';
 import { AgentCard } from './agents/AgentCard';
 import { ConnectClaudeCard } from './agents/ConnectClaudeCard';
@@ -26,6 +27,9 @@ export default function AgentsPage() {
   const { data: settings } = useWorkspaceSettings();
   const runnersTab = settings?.runnersInApp === true;
   const workbench = settings?.workbenchEnabled === true;
+  // With the agent workbench on, a ready agent says which runner it is
+  // ready on: the caller's machine or the workbench.
+  const { data: runners } = useRunnerTokens(workbench);
 
   return (
     <PageContainer
@@ -75,6 +79,7 @@ export default function AgentsPage() {
             key={agentCardKey(agent)}
             agent={agent}
             runnersTab={runnersTab}
+            runners={runners}
           />
         ))}
       </div>

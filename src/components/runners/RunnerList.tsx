@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { CircleAlert, CircleCheck, Laptop } from 'lucide-react';
+import { CircleAlert, CircleCheck, Laptop, ServerCog } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
@@ -37,7 +37,11 @@ function RunnerRow({
   ].filter(Boolean);
   return (
     <li className="flex items-start gap-3 px-4 py-3" data-testid={`runner-row-${runner.id}`}>
-      <Laptop className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" aria-hidden="true" />
+      {runner.workbench ? (
+        <ServerCog className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" aria-hidden="true" />
+      ) : (
+        <Laptop className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" aria-hidden="true" />
+      )}
       <div className="min-w-0 flex-1 space-y-1.5">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <p className="truncate text-sm font-medium">{runner.label}</p>
