@@ -178,7 +178,7 @@ describe('MessageRichAttachments looks', () => {
   it('tints a rich webhook’s card instead of drawing a bar', () => {
     render(<MessageRichAttachments attachments={[{ rich: true, color: '#32cd32', pretext: 'Monitor', title: 'up', image_url: '/media/unsized.webp' }]} />);
     const card = screen.getByTestId('message-rich-attachment');
-    expect(card).toHaveClass('bg-rt-green-bg', 'border-rt-green/15');
+    expect(card).toHaveClass('bg-rt-green-bg/70', 'dark:bg-rt-green-bg/40', 'border-rt-green/15');
     expect(card).not.toHaveAttribute('style');
     expect(card).not.toHaveTextContent('Monitor');
     expect(card.querySelector('img')).not.toHaveAttribute('height');
