@@ -188,7 +188,7 @@ type hwsCovOrchMsgs struct {
 func (f *hwsCovOrchMsgs) SendAsAgentRun(context.Context, string, string, string, string, string, string, string, ...string) (*model.Message, error) {
 	return &model.Message{ID: "hws-orch-msg"}, nil
 }
-func (f *hwsCovOrchMsgs) SetMachineReaction(context.Context, string, string, string, string, string) error {
+func (f *hwsCovOrchMsgs) SetMachineReaction(context.Context, string, string, string, string, string, string) error {
 	return nil
 }
 

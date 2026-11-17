@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { TooltipProvider } from '@/components/ui/tooltip';
@@ -49,6 +49,7 @@ function renderItem(opts: {
   reactors: string[];
   emoji?: string;
   userMap?: Map<string, { displayName: string; avatarURL?: string }>;
+  agentWatchers?: Record<string, string>;
 }) {
   const msg: Message = {
     id: 'm-1',
@@ -57,6 +58,7 @@ function renderItem(opts: {
     body: 'hi',
     createdAt: '2026-04-26T10:00:00Z',
     reactions: { [opts.emoji ?? ':+1:']: opts.reactors },
+    agentWatchers: opts.agentWatchers,
   };
   const userMap =
     opts.userMap ??
@@ -125,5 +127,47 @@ describe('Reaction tooltip — list of reactors', () => {
     const glyph = tip.querySelector('.text-\\[64px\\]');
     expect(glyph).not.toBeNull();
     expect(glyph?.textContent).toBe('🎉');
+  });
+
+  // An agent a channel watcher brought in reacts with the same 👀 ⚙️ ✅ as a
+  // mentioned one; the tooltip names whose watcher it was.
+  it('names whose watcher brought an agent, and leaves mentioned agents as they are', () => {
+    renderItem({
+      reactors: ['agent-gib', 'agent-gg'],
+      emoji: '👀',
+      userMap: new Map([
+        ['agent-gib', { displayName: 'Gib' }],
+        ['agent-gg', { displayName: 'gg' }],
+        ['u-alice', { displayName: 'Alice' }],
+      ]),
+      agentWatchers: { 'agent-gib': 'u-alice' },
+    });
+    // Only the watcher-driven agent is highlighted; hovering it says whose
+    // watcher it is. The mentioned agent reads as a plain name.
+    const agents = screen.getAllByTestId('reaction-watcher-agent');
+    expect(agents.map((a) => a.firstChild?.textContent)).toEqual(['Gib']);
+    const owner = within(agents[0]).getByTestId('reaction-watcher-owner');
+    expect(owner.textContent).toBe('Alice’s watcher');
+    expect(owner.className).toContain('group-hover/agent:block');
+    expect(screen.getByTestId('reaction-tooltip').textContent).toContain(', gg reacted with');
+  });
+
+  it('highlights nobody when no watcher brought anyone', () => {
+    renderItem({ reactors: ['u-a'] });
+    expect(screen.queryByTestId('reaction-watcher-agent')).toBeNull();
+  });
+
+  it('says "you" for your own watcher and "someone" for an unknown creator', () => {
+    renderItem({
+      reactors: ['agent-gib', 'agent-gg'],
+      emoji: '✅',
+      userMap: new Map([
+        ['agent-gib', { displayName: 'Gib' }],
+        ['agent-gg', { displayName: 'gg' }],
+      ]),
+      agentWatchers: { 'agent-gib': 'u-me', 'agent-gg': 'u-gone' },
+    });
+    const owners = screen.getAllByTestId('reaction-watcher-owner');
+    expect(owners.map((o) => o.textContent)).toEqual(['Your watcher', 'Someone’s watcher']);
   });
 });

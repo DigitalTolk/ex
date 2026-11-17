@@ -170,7 +170,7 @@ func TestMsgagCovSetMachineReaction(t *testing.T) {
 
 	t.Run("rejects non machine emoji", func(t *testing.T) {
 		svc, _, _, _, _ := setupMessageService()
-		err := svc.SetMachineReaction(ctx, "agent-1", "ch1", ParentChannel, "m1", "🎉")
+		err := svc.SetMachineReaction(ctx, "agent-1", "", "ch1", ParentChannel, "m1", "🎉")
 		if err == nil || !strings.Contains(err.Error(), "not a machine state emoji") {
 			t.Fatalf("err = %v, want machine-emoji rejection", err)
 		}
@@ -179,7 +179,7 @@ func TestMsgagCovSetMachineReaction(t *testing.T) {
 	t.Run("get error is wrapped", func(t *testing.T) {
 		svc, messages, _, _, _ := setupMessageService()
 		messages.getErr = errors.New("boom")
-		err := svc.SetMachineReaction(ctx, "agent-1", "ch1", ParentChannel, "m1", StateEmojiRead)
+		err := svc.SetMachineReaction(ctx, "agent-1", "", "ch1", ParentChannel, "m1", StateEmojiRead)
 		if err == nil || !strings.Contains(err.Error(), "get for state reaction") {
 			t.Fatalf("err = %v, want wrapped get error", err)
 		}
@@ -188,7 +188,7 @@ func TestMsgagCovSetMachineReaction(t *testing.T) {
 	t.Run("set on nil reactions initialises the map", func(t *testing.T) {
 		svc, messages, _, _, _ := setupMessageService()
 		msg := msgagCovSeed(messages, &model.Message{ID: "m1", ParentID: "ch1", Body: "x"})
-		if err := svc.SetMachineReaction(ctx, "agent-1", "ch1", ParentChannel, "m1", StateEmojiRead); err != nil {
+		if err := svc.SetMachineReaction(ctx, "agent-1", "", "ch1", ParentChannel, "m1", StateEmojiRead); err != nil {
 			t.Fatalf("set: %v", err)
 		}
 		if got := msg.Reactions[StateEmojiRead]; len(got) != 1 || got[0] != "agent-1" {
@@ -202,7 +202,7 @@ func TestMsgagCovSetMachineReaction(t *testing.T) {
 			ID: "m1", ParentID: "ch1", Body: "x",
 			Reactions: map[string][]string{StateEmojiBlocked: {"agent-1"}},
 		})
-		if err := svc.SetMachineReaction(ctx, "agent-1", "ch1", ParentChannel, "m1", StateEmojiDone); err != nil {
+		if err := svc.SetMachineReaction(ctx, "agent-1", "", "ch1", ParentChannel, "m1", StateEmojiDone); err != nil {
 			t.Fatalf("set: %v", err)
 		}
 		if _, ok := msg.Reactions[StateEmojiBlocked]; ok {
@@ -219,7 +219,7 @@ func TestMsgagCovSetMachineReaction(t *testing.T) {
 			ID: "m1", ParentID: "ch1", Body: "x",
 			Reactions: map[string][]string{StateEmojiThinking: {"agent-1"}},
 		})
-		if err := svc.SetMachineReaction(ctx, "agent-1", "ch1", ParentChannel, "m1", StateEmojiBlocked); err != nil {
+		if err := svc.SetMachineReaction(ctx, "agent-1", "", "ch1", ParentChannel, "m1", StateEmojiBlocked); err != nil {
 			t.Fatalf("set: %v", err)
 		}
 		if _, ok := msg.Reactions[StateEmojiThinking]; ok {
@@ -236,7 +236,7 @@ func TestMsgagCovSetMachineReaction(t *testing.T) {
 			ID: "m1", ParentID: "ch1", Body: "x",
 			Reactions: map[string][]string{StateEmojiQueued: {"agent-other"}},
 		})
-		if err := svc.SetMachineReaction(ctx, "agent-1", "ch1", ParentChannel, "m1", StateEmojiWorking); err != nil {
+		if err := svc.SetMachineReaction(ctx, "agent-1", "", "ch1", ParentChannel, "m1", StateEmojiWorking); err != nil {
 			t.Fatalf("set: %v", err)
 		}
 		if got := msg.Reactions[StateEmojiQueued]; len(got) != 1 || got[0] != "agent-other" {
@@ -255,7 +255,7 @@ func TestMsgagCovSetMachineReaction(t *testing.T) {
 		})
 		// Any UpdateMessage would fail — the early return must dodge it.
 		messages.updateErr = errors.New("must not update")
-		if err := svc.SetMachineReaction(ctx, "agent-1", "ch1", ParentChannel, "m1", StateEmojiDone); err != nil {
+		if err := svc.SetMachineReaction(ctx, "agent-1", "", "ch1", ParentChannel, "m1", StateEmojiDone); err != nil {
 			t.Fatalf("idempotent set should be a no-op, got %v", err)
 		}
 	})
@@ -269,7 +269,7 @@ func TestMsgagCovSetMachineReaction(t *testing.T) {
 			ID: "m1", ParentID: "ch1", Body: "x",
 			Reactions: map[string][]string{StateEmojiRead: {"agent-1"}},
 		})
-		if err := svc.SetMachineReaction(ctx, "agent-1", "ch1", ParentChannel, "m1", ""); err == nil {
+		if err := svc.SetMachineReaction(ctx, "agent-1", "", "ch1", ParentChannel, "m1", ""); err == nil {
 			t.Fatal("empty state should be refused")
 		}
 	})
@@ -284,7 +284,7 @@ func TestMsgagCovSetMachineReaction(t *testing.T) {
 			},
 		})
 		// ⚙️ ends both transient markers for THIS actor only.
-		if err := svc.SetMachineReaction(ctx, "agent-1", "ch1", ParentChannel, "m1", StateEmojiWorking); err != nil {
+		if err := svc.SetMachineReaction(ctx, "agent-1", "", "ch1", ParentChannel, "m1", StateEmojiWorking); err != nil {
 			t.Fatalf("set: %v", err)
 		}
 		if _, ok := msg.Reactions[StateEmojiQueued]; ok {
@@ -298,11 +298,60 @@ func TestMsgagCovSetMachineReaction(t *testing.T) {
 		}
 	})
 
+	// A watcher-started run looks like any other on the reaction chips, so
+	// the message records whose watcher brought the agent — in the same
+	// write as the reaction, never one without the other.
+	t.Run("a watcher run records who set the watcher up", func(t *testing.T) {
+		svc, messages, _, _, _ := setupMessageService()
+		msg := msgagCovSeed(messages, &model.Message{ID: "m1", ParentID: "ch1", Body: "x"})
+		if err := svc.SetMachineReaction(ctx, "agent-1", "u-alice", "ch1", ParentChannel, "m1", StateEmojiRead); err != nil {
+			t.Fatalf("set: %v", err)
+		}
+		if got := msg.AgentWatchers["agent-1"]; got != "u-alice" {
+			t.Fatalf("agentWatchers[agent-1] = %q, want u-alice", got)
+		}
+		if got := msg.Reactions[StateEmojiRead]; len(got) != 1 || got[0] != "agent-1" {
+			t.Fatalf("reactions[👀] = %v, want [agent-1]", got)
+		}
+		// The next states of the same run keep the attribution as it is.
+		if err := svc.SetMachineReaction(ctx, "agent-1", "u-alice", "ch1", ParentChannel, "m1", StateEmojiWorking); err != nil {
+			t.Fatalf("set ⚙️: %v", err)
+		}
+		if len(msg.AgentWatchers) != 1 || msg.AgentWatchers["agent-1"] != "u-alice" {
+			t.Fatalf("agentWatchers = %v, want {agent-1: u-alice}", msg.AgentWatchers)
+		}
+	})
+
+	t.Run("an already-set state still persists a new attribution", func(t *testing.T) {
+		svc, messages, _, _, _ := setupMessageService()
+		msg := msgagCovSeed(messages, &model.Message{
+			ID: "m1", ParentID: "ch1", Body: "x",
+			Reactions: map[string][]string{StateEmojiRead: {"agent-1"}},
+		})
+		if err := svc.SetMachineReaction(ctx, "agent-1", "u-alice", "ch1", ParentChannel, "m1", StateEmojiRead); err != nil {
+			t.Fatalf("set: %v", err)
+		}
+		if got := msg.AgentWatchers["agent-1"]; got != "u-alice" {
+			t.Fatalf("agentWatchers[agent-1] = %q, want u-alice", got)
+		}
+	})
+
+	t.Run("a mentioned agent's run records no watcher", func(t *testing.T) {
+		svc, messages, _, _, _ := setupMessageService()
+		msg := msgagCovSeed(messages, &model.Message{ID: "m1", ParentID: "ch1", Body: "x"})
+		if err := svc.SetMachineReaction(ctx, "agent-1", "", "ch1", ParentChannel, "m1", StateEmojiRead); err != nil {
+			t.Fatalf("set: %v", err)
+		}
+		if msg.AgentWatchers != nil {
+			t.Fatalf("agentWatchers = %v, want none for a mention run", msg.AgentWatchers)
+		}
+	})
+
 	t.Run("update error is wrapped", func(t *testing.T) {
 		svc, messages, _, _, _ := setupMessageService()
 		msgagCovSeed(messages, &model.Message{ID: "m1", ParentID: "ch1", Body: "x"})
 		messages.updateErr = errors.New("dynamo down")
-		err := svc.SetMachineReaction(ctx, "agent-1", "ch1", ParentChannel, "m1", StateEmojiFailed)
+		err := svc.SetMachineReaction(ctx, "agent-1", "", "ch1", ParentChannel, "m1", StateEmojiFailed)
 		if err == nil || !strings.Contains(err.Error(), "update state reaction") {
 			t.Fatalf("err = %v, want wrapped update error", err)
 		}

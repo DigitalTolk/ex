@@ -110,10 +110,14 @@ func (s *MessageService) dispatchAgents(ctx context.Context, msg *model.Message,
 // to carry had no caller outside its own test, and a silent no-op is a worse
 // answer than saying the argument is wrong.
 //
+// watchedFor is the watcher's creator when a subscription (not a mention)
+// started the run, "" otherwise. It is recorded in the same write as the
+// reaction, so the trail never shows without its attribution.
+//
 // Backend-only: no access check on purpose — the orchestrator is the sole
 // caller and the agent actor is not a channel member. The human-facing path
 // (ToggleReaction) rejects these emojis instead.
-func (s *MessageService) SetMachineReaction(ctx context.Context, actorID, parentID, parentType, msgID, state string) error {
+func (s *MessageService) SetMachineReaction(ctx context.Context, actorID, watchedFor, parentID, parentType, msgID, state string) error {
 	if !IsMachineStateEmoji(state) {
 		return fmt.Errorf("message: %q is not a machine state emoji", state)
 	}
@@ -154,6 +158,13 @@ func (s *MessageService) SetMachineReaction(ctx context.Context, actorID, parent
 	}
 	if !already {
 		msg.Reactions[state] = append(msg.Reactions[state], actorID)
+		changed = true
+	}
+	if watchedFor != "" && msg.AgentWatchers[actorID] != watchedFor {
+		if msg.AgentWatchers == nil {
+			msg.AgentWatchers = map[string]string{}
+		}
+		msg.AgentWatchers[actorID] = watchedFor
 		changed = true
 	}
 	if !changed {
