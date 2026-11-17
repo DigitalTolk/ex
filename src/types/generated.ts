@@ -2851,6 +2851,12 @@ export interface MessageAttachment {
    * Blocks inside a card sit on the card's tint.
    */
   blocks?: Blocks;
+  /**
+   * Rich marks a card posted by a rich webhook, drawn tinted. Set by the
+   * server, never read from a payload: a classic card keeps the side bar
+   * it always had.
+   */
+  rich?: boolean;
 }
 export interface MessageAttachmentField {
   title?: string;
