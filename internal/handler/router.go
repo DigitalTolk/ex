@@ -416,6 +416,7 @@ func NewRouter(d *Deps) http.Handler {
 		mux.Handle("GET /api/v1/runs/{id}", middleware.WrapFunc(d.Agent.Timeline, authMW))
 		mux.Handle("GET /api/v1/runs/{id}/artifacts/{artifactID}", middleware.WrapFunc(d.Agent.GetArtifact, authMW))
 		mux.Handle("POST /api/v1/runs/{id}/approvals/{approvalID}", middleware.WrapFunc(d.Agent.DecideApproval, authMW, writeLimit))
+		mux.Handle("GET /api/v1/approvals/pending", middleware.WrapFunc(d.Agent.PendingApprovals, authMW))
 		mux.Handle("POST /api/v1/runs/{id}/stop", middleware.WrapFunc(d.Agent.StopRun, authMW, writeLimit))
 		mux.Handle("GET /api/v1/agents/{slug}/subscriptions", middleware.WrapFunc(d.Agent.ListSubscriptions, authMW))
 		mux.Handle("POST /api/v1/agents/{slug}/subscriptions", middleware.WrapFunc(d.Agent.CreateSubscription, authMW, writeLimit))

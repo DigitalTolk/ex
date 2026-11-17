@@ -40,6 +40,57 @@ func mkArtifactFixture(id, runID string) *model.Artifact {
 	}
 }
 
+// Pending approvals are listed per invoker until they are settled.
+func TestApprovalStore_PendingByInvoker(t *testing.T) {
+	db := setupDynamoDB(t)
+	ctx := context.Background()
+	s := NewRunStore(db)
+
+	for _, a := range []*model.Approval{mkApprovalFixture("ap-1", "run-1"), mkApprovalFixture("ap-2", "run-2")} {
+		if err := s.PutApproval(ctx, a); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bob := mkApprovalFixture("ap-3", "run-3")
+	bob.InvokerID = "u-bob"
+	settled := mkApprovalFixture("ap-4", "run-4")
+	settled.State = model.ApprovalApproved
+	for _, a := range []*model.Approval{bob, settled} {
+		if err := s.PutApproval(ctx, a); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ids := func(user string) []string {
+		t.Helper()
+		list, err := s.ListPendingApprovals(ctx, user)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, a := range list {
+			out = append(out, a.ID)
+		}
+		return out
+	}
+	if got := ids("u-alice"); len(got) != 2 || got[0] != "ap-1" || got[1] != "ap-2" {
+		t.Fatalf("alice pending = %v", got)
+	}
+	if got := ids("u-bob"); len(got) != 1 || got[0] != "ap-3" {
+		t.Fatalf("bob pending = %v", got)
+	}
+	if err := s.SettleApproval(ctx, "run-1", "ap-1", model.ApprovalDenied, "u-alice", "", "", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if got := ids("u-alice"); len(got) != 1 || got[0] != "ap-2" {
+		t.Fatalf("alice pending after a decision = %v", got)
+	}
+	a, err := s.GetApproval(ctx, "run-1", "ap-1")
+	if err != nil || a.State != model.ApprovalDenied {
+		t.Fatalf("settled approval = %+v, %v", a, err)
+	}
+}
+
 func TestApprovalStore_Lifecycle(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()

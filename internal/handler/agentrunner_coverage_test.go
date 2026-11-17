@@ -320,6 +320,10 @@ func (s *hrunnerCovRunStore) ConsumeApproval(_ context.Context, runID, approvalI
 	return nil
 }
 
+func (s *hrunnerCovRunStore) ListPendingApprovals(context.Context, string) ([]*model.Approval, error) {
+	return nil, nil
+}
+
 func (s *hrunnerCovRunStore) ListApprovals(_ context.Context, runID string) ([]*model.Approval, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

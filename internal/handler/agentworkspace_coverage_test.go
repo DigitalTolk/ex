@@ -165,6 +165,9 @@ func (f *hwsCovRunStore) ConsumeApproval(_ context.Context, runID, approvalID st
 	}
 	return store.ErrStaleApproval
 }
+func (f *hwsCovRunStore) ListPendingApprovals(context.Context, string) ([]*model.Approval, error) {
+	return nil, nil
+}
 func (f *hwsCovRunStore) ListApprovals(_ context.Context, runID string) ([]*model.Approval, error) {
 	if f.apprErr != nil {
 		return nil, f.apprErr

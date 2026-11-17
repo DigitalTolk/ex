@@ -176,6 +176,7 @@ type orchestratorRunStore interface {
 	SettleApproval(ctx context.Context, runID, approvalID, state, decidedBy, choice, note string, decidedAt time.Time) error
 	ConsumeApproval(ctx context.Context, runID, approvalID string, at time.Time) error
 	ListApprovals(ctx context.Context, runID string) ([]*model.Approval, error)
+	ListPendingApprovals(ctx context.Context, invokerID string) ([]*model.Approval, error)
 	PutArtifact(ctx context.Context, a *model.Artifact) error
 	ListArtifacts(ctx context.Context, runID string) ([]*model.Artifact, error)
 }

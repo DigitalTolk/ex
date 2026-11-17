@@ -462,6 +462,11 @@ func ctxSK(itemID string) string               { return "ITEM#" + itemID }
 // Approvals and artifacts live under their run's partition, next to the
 // EVT# timeline — one Query returns a run's whole story.
 func approvalSK(id string) string { return "APPROVAL#" + id }
+
+// pendingApprovalsGSI2PK lists a person's undecided approvals in GSI2, so a
+// page that loads (or reconnects) can show the cards the live event already
+// delivered.
+func pendingApprovalsGSI2PK(invokerID string) string { return "APPROVALS_PENDING#" + invokerID }
 func artifactSK(id string) string { return "ART#" + id }
 
 // Skills are workspace-wide instruction packs (plan.md §2c).

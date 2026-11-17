@@ -2641,14 +2641,14 @@ func TestMessageService_MachineReactionTransientStates(t *testing.T) {
 
 	set(StateEmojiRead)
 	set(StateEmojiWorking)
-	set(StateEmojiBlocked)
-	if !has(StateEmojiRead) || !has(StateEmojiWorking) || !has(StateEmojiBlocked) {
+	set(StateEmojiAwaiting)
+	if !has(StateEmojiRead) || !has(StateEmojiWorking) || !has(StateEmojiAwaiting) {
 		t.Fatal("expected 👀 ⚙️ ⛔ while blocked")
 	}
 
 	// Unblocking (back to ⚙️, which is ALREADY set) still clears ⛔.
 	set(StateEmojiWorking)
-	if has(StateEmojiBlocked) {
+	if has(StateEmojiAwaiting) {
 		t.Fatal("⛔ survived the return to ⚙️")
 	}
 	if !has(StateEmojiRead) || !has(StateEmojiWorking) {

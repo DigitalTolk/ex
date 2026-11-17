@@ -2,10 +2,13 @@ package agents
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -204,7 +207,9 @@ func (s *AgentService) SeedDefaults(ctx context.Context) error {
 		},
 	}
 	for _, tpl := range seeds {
-		if err := s.agents.CreateTemplateIfAbsent(ctx, tpl); err != nil && !errors.Is(err, store.ErrAlreadyExists) {
+		if err := s.agents.CreateTemplateIfAbsent(ctx, tpl); errors.Is(err, store.ErrAlreadyExists) {
+			s.upgradeUneditedPersona(ctx, tpl)
+		} else if err != nil {
 			return fmt.Errorf("agent: seed template %s: %w", tpl.Slug, err)
 		}
 		agentUser := &model.User{
@@ -229,6 +234,41 @@ func (s *AgentService) SeedDefaults(ctx context.Context) error {
 		s.indexAgentUser(ctx, agentUser.ID)
 	}
 	return nil
+}
+
+// retiredPersonas are the SHA-256s of earlier seeded prompts, per slug. A
+// template still carrying one word for word was never edited, so boot moves
+// it to the current default; a prompt an admin changed is left alone.
+var retiredPersonas = map[string][]string{
+	// Apelles when it looked for Chrome only at the macOS app path, so it
+	// could not render on a Linux runner.
+	AgentSlugDesign: {"c0d689108265d8be21537f81abcbcd432f64bd6ba453c0caed7cb8ef0e373efb"},
+}
+
+// upgradeUneditedPersona moves an existing template still on a retired
+// default prompt to the seed's. Best effort: a failure is logged, never a
+// reason to refuse the boot.
+func (s *AgentService) upgradeUneditedPersona(ctx context.Context, seed *model.AgentTemplate) {
+	retired := retiredPersonas[seed.Slug]
+	if len(retired) == 0 {
+		return
+	}
+	cur, err := s.agents.GetTemplate(ctx, seed.Slug)
+	if err != nil {
+		slog.WarnContext(ctx, "agent: default prompt check failed", "slug", seed.Slug, "error", err)
+		return
+	}
+	sum := sha256.Sum256([]byte(cur.Persona))
+	if !slices.Contains(retired, hex.EncodeToString(sum[:])) {
+		return
+	}
+	cur.Persona = seed.Persona
+	cur.UpdatedAt = seed.UpdatedAt
+	if err := s.agents.PutTemplate(ctx, cur); err != nil {
+		slog.WarnContext(ctx, "agent: default prompt update failed", "slug", seed.Slug, "error", err)
+		return
+	}
+	slog.InfoContext(ctx, "agent: default prompt updated", "slug", seed.Slug)
 }
 
 // devPersona is the seeded coding agent's prompt (plan-coding-agent.md). The
@@ -281,12 +321,14 @@ const designPersona = "You are Apelles, the team's design agent. People describe
 	"domain-correct placeholder content. (3) DRAW + RENDER in ONE shell command per version " +
 	"(each command is an approval the requester clicks — you have no Write/Edit tools here): a python3 heredoc that " +
 	"saves the draft in your current working directory as <page>-vN.html (it persists between replies in this " +
-	"thread), inlines the reference images it uses as data: URIs, then runs " +
-	"\"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome\" --headless=new --hide-scrollbars " +
-	"--window-size=1440,900 --screenshot=<abs>.png file://<abs draft> (390,844 for mobile; taller if the screen is " +
-	"longer). The draft is only your drawing board — never posted, attached or mentioned. Read the PNG once; only a " +
-	"real mistake earns another command. If Chrome is missing, say you can't render a mockup on this computer and " +
-	"stop. (4) POST ONE message with post_message, attachments = [the PNG only], named like " +
+	"thread), inlines the reference images it uses as data: URIs, then renders it with this computer's Chrome. " +
+	"Find it in the same script with shutil.which, the first of chrome-headless-shell, chromium, " +
+	"chromium-browser, google-chrome, google-chrome-stable; else \"/Applications/Google " +
+	"Chrome.app/Contents/MacOS/Google Chrome\" when that file exists. Run it as <chrome> --headless=new " +
+	"--hide-scrollbars --window-size=1440,900 --screenshot=<abs>.png file://<abs draft> (390,844 for mobile; " +
+	"taller if the screen is longer). The draft is only your drawing board — never posted, attached or mentioned. " +
+	"Read the PNG once; only a real mistake earns another command. If none of them exists, say you can't render " +
+	"a mockup on this computer and stop. (4) POST ONE message with post_message, attachments = [the PNG only], named like " +
 	"booking-detail-v1.png. Body, short: first line \"vN\" plus one sentence on what it shows; then " +
 	"**Changed** (bullets: what differs from the real page), **Copied from** (the reference pages used), " +
 	"**Flagged** (anything approximated or missing from the references; omit when empty). When you copied a " +

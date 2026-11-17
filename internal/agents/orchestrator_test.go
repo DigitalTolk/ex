@@ -3,6 +3,7 @@ package agents
 import (
 	"context"
 	"errors"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -393,6 +394,20 @@ func (f *fakeRunStore) ListApprovals(_ context.Context, runID string) ([]*model.
 			out = append(out, &cp)
 		}
 	}
+	return out, nil
+}
+
+func (f *fakeRunStore) ListPendingApprovals(_ context.Context, invokerID string) ([]*model.Approval, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []*model.Approval
+	for _, a := range f.approvals {
+		if a.InvokerID == invokerID && a.State == model.ApprovalPending {
+			cp := *a
+			out = append(out, &cp)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out, nil
 }
 

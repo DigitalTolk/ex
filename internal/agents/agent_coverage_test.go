@@ -7,8 +7,11 @@ package agents
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -263,6 +266,93 @@ func TestAgentCovSeedDefaults(t *testing.T) {
 	dir.errs["CreateAgentUser"] = errAgentCov
 	if err := svc.SeedDefaults(ctx); err == nil || !strings.Contains(err.Error(), "seed agent user") {
 		t.Fatalf("want seed agent user error, got %v", err)
+	}
+}
+
+// A design template still on the old default prompt (Chrome only at the
+// macOS app path) moves to the current one at boot; an edited prompt stays,
+// and a failure to check or save never stops the boot.
+func TestAgentCovSeedUpgradesUneditedPrompt(t *testing.T) {
+	ctx := context.Background()
+	svc, dir, _ := agentCovNewSvc()
+	if err := svc.SeedDefaults(ctx); err != nil {
+		t.Fatal(err)
+	}
+	setPersona := func(text string) {
+		t.Helper()
+		tpl, _ := dir.GetTemplate(ctx, AgentSlugDesign)
+		tpl.Persona = text
+		if err := dir.PutTemplate(ctx, tpl); err != nil {
+			t.Fatal(err)
+		}
+	}
+	persona := func() string {
+		t.Helper()
+		tpl, _ := dir.GetTemplate(ctx, AgentSlugDesign)
+		return tpl.Persona
+	}
+
+	setPersona(oldDesignPersona())
+	if err := svc.SeedDefaults(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if persona() != designPersona {
+		t.Fatal("unedited old prompt was not upgraded")
+	}
+
+	setPersona(oldDesignPersona() + " Our buttons are square.")
+	if err := svc.SeedDefaults(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if persona() == designPersona {
+		t.Fatal("an edited prompt was overwritten")
+	}
+
+	setPersona(oldDesignPersona())
+	dir.errs["PutTemplate"] = errAgentCov
+	if err := svc.SeedDefaults(ctx); err != nil {
+		t.Fatalf("a failed upgrade stopped the boot: %v", err)
+	}
+	delete(dir.errs, "PutTemplate")
+	dir.errs["GetTemplate"] = errAgentCov
+	if err := svc.SeedDefaults(ctx); err != nil {
+		t.Fatalf("a failed check stopped the boot: %v", err)
+	}
+	delete(dir.errs, "GetTemplate")
+	if persona() == designPersona {
+		t.Fatal("upgraded despite the failures")
+	}
+}
+
+// oldDesignPersona is the design prompt as it was seeded before Chrome was
+// looked up on the computer: the current one with the old render sentence.
+func oldDesignPersona() string {
+	return strings.Replace(designPersona, newRenderSentence, oldRenderSentence, 1)
+}
+
+const oldRenderSentence = "then runs " +
+	"\"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome\" --headless=new --hide-scrollbars " +
+	"--window-size=1440,900 --screenshot=<abs>.png file://<abs draft> (390,844 for mobile; taller if the screen is " +
+	"longer). The draft is only your drawing board — never posted, attached or mentioned. Read the PNG once; only a " +
+	"real mistake earns another command. If Chrome is missing, say you can't render a mockup on this computer and " +
+	"stop."
+
+const newRenderSentence = "then renders it with this computer's Chrome. " +
+	"Find it in the same script with shutil.which, the first of chrome-headless-shell, chromium, " +
+	"chromium-browser, google-chrome, google-chrome-stable; else \"/Applications/Google " +
+	"Chrome.app/Contents/MacOS/Google Chrome\" when that file exists. Run it as <chrome> --headless=new " +
+	"--hide-scrollbars --window-size=1440,900 --screenshot=<abs>.png file://<abs draft> (390,844 for mobile; " +
+	"taller if the screen is longer). The draft is only your drawing board — never posted, attached or mentioned. " +
+	"Read the PNG once; only a real mistake earns another command. If none of them exists, say you can't render " +
+	"a mockup on this computer and stop."
+
+func TestAgentCovRetiredDesignPromptIsTheOldDefault(t *testing.T) {
+	if !strings.Contains(designPersona, newRenderSentence) {
+		t.Fatal("the render sentence changed; update the test")
+	}
+	sum := sha256.Sum256([]byte(oldDesignPersona()))
+	if got := hex.EncodeToString(sum[:]); !slices.Contains(retiredPersonas[AgentSlugDesign], got) {
+		t.Fatalf("old design prompt hash %s is not retired", got)
 	}
 }
 

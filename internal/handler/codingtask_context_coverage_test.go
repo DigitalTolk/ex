@@ -478,6 +478,9 @@ func (f *htaskCovRunStore) SettleApproval(context.Context, string, string, strin
 func (f *htaskCovRunStore) ConsumeApproval(context.Context, string, string, time.Time) error {
 	return nil
 }
+func (f *htaskCovRunStore) ListPendingApprovals(context.Context, string) ([]*model.Approval, error) {
+	return nil, nil
+}
 func (f *htaskCovRunStore) ListApprovals(context.Context, string) ([]*model.Approval, error) {
 	return nil, nil
 }

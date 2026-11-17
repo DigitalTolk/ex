@@ -200,16 +200,33 @@ func TestMsgagCovSetMachineReaction(t *testing.T) {
 		svc, messages, _, _, _ := setupMessageService()
 		msg := msgagCovSeed(messages, &model.Message{
 			ID: "m1", ParentID: "ch1", Body: "x",
-			Reactions: map[string][]string{StateEmojiBlocked: {"agent-1"}},
+			Reactions: map[string][]string{StateEmojiAwaiting: {"agent-1"}},
 		})
 		if err := svc.SetMachineReaction(ctx, "agent-1", "ch1", ParentChannel, "m1", StateEmojiDone); err != nil {
 			t.Fatalf("set: %v", err)
 		}
-		if _, ok := msg.Reactions[StateEmojiBlocked]; ok {
-			t.Error("⛔ survived the transition to ✅")
+		if _, ok := msg.Reactions[StateEmojiAwaiting]; ok {
+			t.Error("✋ survived the transition to ✅")
 		}
 		if got := msg.Reactions[StateEmojiDone]; len(got) != 1 || got[0] != "agent-1" {
 			t.Fatalf("reactions[✅] = %v, want [agent-1]", got)
+		}
+	})
+
+	t.Run("the old ⛔ for waiting on the invoker still clears, and stays reserved", func(t *testing.T) {
+		svc, messages, _, _, _ := setupMessageService()
+		msg := msgagCovSeed(messages, &model.Message{
+			ID: "m1", ParentID: "ch1", Body: "x",
+			Reactions: map[string][]string{"⛔": {"agent-1"}},
+		})
+		if err := svc.SetMachineReaction(ctx, "agent-1", "ch1", ParentChannel, "m1", StateEmojiWorking); err != nil {
+			t.Fatalf("set: %v", err)
+		}
+		if _, ok := msg.Reactions["⛔"]; ok {
+			t.Error("the old ⛔ survived the next state")
+		}
+		if StateEmojiAwaiting != "✋" || !IsMachineStateEmoji("⛔") {
+			t.Fatalf("awaiting = %q, ⛔ reserved = %v", StateEmojiAwaiting, IsMachineStateEmoji("⛔"))
 		}
 	})
 
@@ -219,14 +236,14 @@ func TestMsgagCovSetMachineReaction(t *testing.T) {
 			ID: "m1", ParentID: "ch1", Body: "x",
 			Reactions: map[string][]string{StateEmojiThinking: {"agent-1"}},
 		})
-		if err := svc.SetMachineReaction(ctx, "agent-1", "ch1", ParentChannel, "m1", StateEmojiBlocked); err != nil {
+		if err := svc.SetMachineReaction(ctx, "agent-1", "ch1", ParentChannel, "m1", StateEmojiAwaiting); err != nil {
 			t.Fatalf("set: %v", err)
 		}
 		if _, ok := msg.Reactions[StateEmojiThinking]; ok {
-			t.Error("🧠 survived the transition to ⛔")
+			t.Error("🧠 survived the transition to ✋")
 		}
-		if got := msg.Reactions[StateEmojiBlocked]; len(got) != 1 || got[0] != "agent-1" {
-			t.Fatalf("reactions[⛔] = %v, want [agent-1]", got)
+		if got := msg.Reactions[StateEmojiAwaiting]; len(got) != 1 || got[0] != "agent-1" {
+			t.Fatalf("reactions[✋] = %v, want [agent-1]", got)
 		}
 	})
 
@@ -279,7 +296,7 @@ func TestMsgagCovSetMachineReaction(t *testing.T) {
 		msg := msgagCovSeed(messages, &model.Message{
 			ID: "m1", ParentID: "ch1", Body: "x",
 			Reactions: map[string][]string{
-				StateEmojiBlocked: {"agent-1", "agent-other"},
+				StateEmojiAwaiting: {"agent-1", "agent-other"},
 				StateEmojiQueued:  {"agent-1"},
 			},
 		})
@@ -290,7 +307,7 @@ func TestMsgagCovSetMachineReaction(t *testing.T) {
 		if _, ok := msg.Reactions[StateEmojiQueued]; ok {
 			t.Error("⏳ should be deleted once its only holder moved on")
 		}
-		if got := msg.Reactions[StateEmojiBlocked]; len(got) != 1 || got[0] != "agent-other" {
+		if got := msg.Reactions[StateEmojiAwaiting]; len(got) != 1 || got[0] != "agent-other" {
 			t.Fatalf("reactions[⛔] = %v, want [agent-other]", got)
 		}
 		if got := msg.Reactions[StateEmojiWorking]; len(got) != 1 || got[0] != "agent-1" {

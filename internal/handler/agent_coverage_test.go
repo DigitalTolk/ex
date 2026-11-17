@@ -522,6 +522,19 @@ func (s *hagentCovRunStore) ListApprovals(_ context.Context, _ string) ([]*model
 	return nil, s.trip("ListApprovals")
 }
 
+func (s *hagentCovRunStore) ListPendingApprovals(_ context.Context, invokerID string) ([]*model.Approval, error) {
+	if err := s.trip("ListPendingApprovals"); err != nil {
+		return nil, err
+	}
+	var out []*model.Approval
+	for _, a := range s.approvals {
+		if a.InvokerID == invokerID && a.State == model.ApprovalPending {
+			out = append(out, a)
+		}
+	}
+	return out, nil
+}
+
 func (s *hagentCovRunStore) PutArtifact(_ context.Context, a *model.Artifact) error {
 	if err := s.trip("PutArtifact"); err != nil {
 		return err
@@ -1076,6 +1089,42 @@ func TestHagentCovGetArtifact(t *testing.T) {
 	rec = hagentCovDo(env.h.GetArtifact, hagentCovReq(http.MethodGet, "/api/v1/runs/r1/artifacts/nope", "", "u1",
 		map[string]string{"id": "r1", "artifactID": "nope"}))
 	hagentCovWant(t, rec, http.StatusNotFound)
+}
+
+// The caller's undecided gates come back as run.approval frames, so a page
+// that loads shows the card it would otherwise have lost.
+func TestHagentCovPendingApprovals(t *testing.T) {
+	env := hagentCovNewEnv()
+	req := func() *httptest.ResponseRecorder {
+		return hagentCovDo(env.h.PendingApprovals, hagentCovReq(http.MethodGet, "/api/v1/approvals/pending", "", "u1", nil))
+	}
+
+	rec := req()
+	hagentCovWant(t, rec, http.StatusOK)
+	if got := strings.TrimSpace(rec.Body.String()); got != `{"approvals":[]}` {
+		t.Fatalf("none pending = %s", got)
+	}
+
+	env.runs.runs["r1"] = &model.Run{ID: "r1", AgentID: "a1", InvokerID: "u1", ParentID: "ch1", ParentType: "channel", MessageID: "m1"}
+	env.runs.approvals["r1|a1"] = &model.Approval{ID: "a1", RunID: "r1", InvokerID: "u1", Summary: "run ls",
+		State: model.ApprovalPending, Deadline: time.Now().Add(time.Minute)}
+	env.runs.approvals["r1|a2"] = &model.Approval{ID: "a2", RunID: "r1", InvokerID: "u2",
+		State: model.ApprovalPending, Deadline: time.Now().Add(time.Minute)}
+	rec = req()
+	hagentCovWant(t, rec, http.StatusOK)
+	var body struct {
+		Approvals []map[string]any `json:"approvals"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Approvals) != 1 || body.Approvals[0]["approvalID"] != "a1" || body.Approvals[0]["parentID"] != "ch1" ||
+		body.Approvals[0]["summary"] != "run ls" {
+		t.Fatalf("pending = %v", body.Approvals)
+	}
+
+	env.runs.failFrom["ListPendingApprovals"] = 1
+	hagentCovWant(t, req(), http.StatusInternalServerError)
 }
 
 func TestHagentCovDecideApproval(t *testing.T) {

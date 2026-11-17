@@ -47,7 +47,7 @@ import {
   onRunProgress as onAgentRunProgress,
   onRunUpdated as onAgentRunUpdated,
 } from '@/stores/agent-runs';
-import { onRunApproval as onAgentRunApproval } from '@/stores/agent-approvals';
+import { loadPendingApprovals, onRunApproval as onAgentRunApproval } from '@/stores/agent-approvals';
 import { RunActivityDrawer } from '@/components/chat/RunActivityDrawer';
 import { AppViewHost } from '@/components/apps/AppViewHost';
 import { openAppView, updateAppView } from '@/stores/app-view';
@@ -158,6 +158,13 @@ export default function ChatPage() {
   const isActiveThread = (threadRootID?: string) =>
     !!threadRootID && (activeThreadID === threadRootID || isActiveThreadScope(threadRootID));
 
+  // Approval cards arrive once, as events: on load, ask what is still
+  // waiting on this person so a refresh never strands a run on a card
+  // nobody can see.
+  useEffect(() => {
+    void loadPendingApprovals();
+  }, [user?.id]);
+
   useEffect(() => {
     setCurrentUserID(user?.id ?? null);
     setSelfUserID(user?.id ?? null);
@@ -193,6 +200,8 @@ export default function ChatPage() {
     // happened while disconnected is gone, so refetch the authoritative online
     // set or the dots drift stale until the next full re-auth.
     refreshPresence(queryClient);
+    // Approvals asked or settled while disconnected.
+    void loadPendingApprovals();
   };
 
   // A channel was archived or unarchived: refetch it (by ID and by slug, so
