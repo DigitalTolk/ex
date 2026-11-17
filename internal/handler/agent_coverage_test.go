@@ -565,7 +565,7 @@ func (m *hagentCovMessages) SendAsAgentRun(_ context.Context, _, _, _, _, _, _, 
 	return &model.Message{ID: "m-agent"}, nil
 }
 
-func (m *hagentCovMessages) SetMachineReaction(_ context.Context, _, _, _, _, _ string) error {
+func (m *hagentCovMessages) SetMachineReaction(_ context.Context, _, _, _, _, _, _ string) error {
 	return nil
 }
 

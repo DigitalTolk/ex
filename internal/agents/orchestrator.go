@@ -185,7 +185,7 @@ type orchestratorRunStore interface {
 // context bundle.
 type orchestratorMessages interface {
 	SendAsAgentRun(ctx context.Context, agentID, invokerID, parentID, parentType, body, parentMessageID, runID string, attachmentIDs ...string) (*model.Message, error)
-	SetMachineReaction(ctx context.Context, actorID, parentID, parentType, msgID, state string) error
+	SetMachineReaction(ctx context.Context, actorID, watchedFor, parentID, parentType, msgID, state string) error
 	ListThreadMessages(ctx context.Context, userID, parentID, parentType, threadRootID string) ([]*model.Message, error)
 	// ThreadWindowMessages is the BOUNDED thread read the context window uses.
 	ThreadWindowMessages(ctx context.Context, userID, parentID, parentType, threadRootID string, limit int) ([]*model.Message, error)
@@ -2147,11 +2147,7 @@ func (o *Orchestrator) finishLimit(ctx context.Context, run *model.Run, prevStat
 		return err
 	}
 	o.finishTerminal(ctx, run, "", "run.failed", map[string]any{"reason": which}, "")
-	threadRoot := o.replyThreadRoot(run)
-	if _, err := o.messages.SendAsAgentRun(ctx, run.AgentID, run.InvokerID, run.ParentID, run.ParentType,
-		limitNotice(run, which), threadRoot, run.ID); err != nil {
-		slog.WarnContext(ctx, "limit notice post failed", "runID", run.ID, "error", err)
-	}
+	o.postRunNotice(ctx, run, limitNotice(run, which))
 	o.afterTerminal(ctx, run)
 	return nil
 }
@@ -2283,25 +2279,25 @@ func (o *Orchestrator) failRun(ctx context.Context, run *model.Run, reason strin
 		return err
 	}
 	o.finishTerminal(ctx, run, "", "run.failed", map[string]any{"reason": reason}, "")
-	o.postFailNotice(ctx, run, reason)
+	o.postRunNotice(ctx, run, failNotice(reason))
 	o.afterTerminal(ctx, run)
 	return nil
 }
 
-// postFailNotice tells the invoker, in the conversation, that the run died —
-// never fail silently. finishLimit already does this for budget stops; this
-// covers every other way a run can end without an answer.
+// postRunNotice tells the invoker that the run stopped without an answer (a
+// failure or a hit limit) — never fail silently.
 //
-// Watcher modes that may not post publicly (notify/draft/reply) get the notice
-// in the creator's DM with the agent instead, mirroring deliverWatchResult: a
-// failure must never be the thing that leaks a watcher into a channel.
-func (o *Orchestrator) postFailNotice(ctx context.Context, run *model.Run, reason string) {
-	body := failNotice(reason)
-	gated := model.WatchModePostsPrivately(run.ActionMode) || run.ActionMode == model.WatchActionReply
-	if !gated {
+// A run somebody asked for answers where they asked. A WATCHER's run answers
+// to the watcher's creator alone, in their DM with the agent: nobody in the
+// watched conversation asked for it, so its failures must not clutter their
+// thread — and a private watcher must never be leaked into a channel by one.
+func (o *Orchestrator) postRunNotice(ctx context.Context, run *model.Run, body string) {
+	private := run.Mode == model.RunModeWatch ||
+		model.WatchModePostsPrivately(run.ActionMode) || run.ActionMode == model.WatchActionReply
+	if !private {
 		if _, err := o.messages.SendAsAgentRun(ctx, run.AgentID, run.InvokerID, run.ParentID, run.ParentType,
 			body, o.replyThreadRoot(run), run.ID); err != nil {
-			slog.WarnContext(ctx, "failure notice post failed", "runID", run.ID, "reason", reason, "error", err)
+			slog.WarnContext(ctx, "run notice post failed", "runID", run.ID, "error", err)
 		}
 		return
 	}
@@ -2310,13 +2306,25 @@ func (o *Orchestrator) postFailNotice(ctx context.Context, run *model.Run, reaso
 	}
 	conv, err := o.ownerDM.GetOrCreateDM(ctx, run.InvokerID, run.AgentID)
 	if err != nil {
-		slog.WarnContext(ctx, "failure notice DM open failed", "runID", run.ID, "error", err)
+		slog.WarnContext(ctx, "run notice DM open failed", "runID", run.ID, "error", err)
 		return
 	}
 	if _, err := o.messages.SendAsAgentRun(ctx, run.AgentID, run.InvokerID, conv.ID, service.ParentConversation,
-		body, "", run.ID); err != nil {
-		slog.WarnContext(ctx, "failure notice DM post failed", "runID", run.ID, "error", err)
+		watcherNoticePrefix(run)+body, "", run.ID); err != nil {
+		slog.WarnContext(ctx, "run notice DM post failed", "runID", run.ID, "error", err)
 	}
+}
+
+// watcherNoticePrefix says, in the DM, which watcher a notice is about — away
+// from the watched channel, a bare "❌ stopped" doesn't say what stopped.
+func watcherNoticePrefix(run *model.Run) string {
+	if run.Mode != model.RunModeWatch {
+		return ""
+	}
+	if run.ParentType == service.ParentChannel {
+		return "Your watcher in ~[" + run.ParentID + "|channel] couldn't finish: "
+	}
+	return "Your watcher couldn't finish: "
 }
 
 // RecordAgentPost bumps the run's post count (called by the run-tool API
@@ -3830,7 +3838,19 @@ func (o *Orchestrator) setState(ctx context.Context, run *model.Run, emoji strin
 	if run.MessageID == "" {
 		return // heartbeat runs have no invoking message to react on
 	}
-	if err := o.messages.SetMachineReaction(ctx, run.AgentID, run.ParentID, run.ParentType, run.MessageID, emoji); err != nil {
+	// Nobody in the conversation asked a watcher for anything, so its run
+	// leaves just 👀 ("seen") on the message — no ⚙️/✅/❌ trail on other
+	// people's posts. How it ended reaches the creator privately instead
+	// (postRunNotice). The 👀 also records whose watcher it was, since
+	// nobody mentioned the agent there.
+	watchedFor := ""
+	if run.Mode == model.RunModeWatch {
+		if emoji != service.StateEmojiRead {
+			return
+		}
+		watchedFor = run.InvokerID
+	}
+	if err := o.messages.SetMachineReaction(ctx, run.AgentID, watchedFor, run.ParentID, run.ParentType, run.MessageID, emoji); err != nil {
 		slog.WarnContext(ctx, "state reaction failed", "runID", run.ID, "state", emoji, "error", err)
 	}
 }

@@ -747,6 +747,8 @@ type fakeOrchMessages struct {
 	posts     []string
 	postDest  []string // parentType|parentID for the matching posts entry
 	reactions []string
+	// watchedFor parallels reactions: the watcher creator each state carried.
+	watchedFor []string
 	// thread backs ListThreadMessages/List for bundle-rendering tests.
 	thread         []*model.Message
 	checkAccessErr error
@@ -769,10 +771,11 @@ func (f *fakeOrchMessages) SendAsAgentRun(_ context.Context, _, _, parentID, par
 	return &model.Message{ID: "m-posted", Body: body}, nil
 }
 
-func (f *fakeOrchMessages) SetMachineReaction(_ context.Context, _, _, _, _, state string) error {
+func (f *fakeOrchMessages) SetMachineReaction(_ context.Context, _, watchedFor, _, _, _, state string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.reactions = append(f.reactions, state)
+	f.watchedFor = append(f.watchedFor, watchedFor)
 	return nil
 }
 
