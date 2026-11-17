@@ -32,7 +32,8 @@ describe('cardTint', () => {
   });
 
   it("edges a tinted card in its own hue, and the plain card in the theme's", () => {
-    expect(cardClass('danger')).toBe('bg-rt-red-bg border-rt-red/15');
+    // Thinner than a callout's tint, and thinner still in dark mode.
+    expect(cardClass('danger')).toBe('bg-rt-red-bg/70 dark:bg-rt-red-bg/40 border-rt-red/15');
     expect(cardClass()).toBe('border-border bg-background');
   });
 });

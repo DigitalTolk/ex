@@ -165,6 +165,10 @@ type MessageAttachment struct {
 	Icon string `json:"icon,omitempty" dynamodbav:"icon,omitempty"`
 	// Blocks inside a card sit on the card's tint.
 	Blocks Blocks `json:"blocks,omitempty" dynamodbav:"blocks,omitempty"`
+	// Rich marks a card posted by a rich webhook, drawn tinted. Set by the
+	// server, never read from a payload: a classic card keeps the side bar
+	// it always had.
+	Rich bool `json:"rich,omitempty" dynamodbav:"rich,omitempty"`
 }
 
 type MessageAttachmentField struct {

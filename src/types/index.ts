@@ -398,6 +398,9 @@ export interface MessageAttachment {
   icon?: string;
   // Blocks inside the card sit on its tint.
   blocks?: Block[];
+  // Set by the server on a rich webhook's cards, which are drawn tinted; a
+  // classic webhook's cards keep their side bar.
+  rich?: boolean;
 }
 
 export interface MessageAttachmentField {
