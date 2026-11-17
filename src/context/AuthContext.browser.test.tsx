@@ -198,7 +198,7 @@ describe('AuthContext', () => {
     addRecentSearch('layoffs');
     setSidebarMode('activity');
     (screen.getByTestId('logout').element() as HTMLButtonElement).click();
-    await vi.waitFor(() => expect(useRecentSearchesStore.getState()).toEqual({ userID: null, queries: [] }));
+    await vi.waitFor(() => expect(useRecentSearchesStore.getState()).toEqual({ userID: null, queries: [], opened: [] }));
     expect(localStorage.getItem('ex:recent-searches:u-1')).toBeNull();
     expect(useSidebarModeStore.getState().mode).toBe('home');
   });
