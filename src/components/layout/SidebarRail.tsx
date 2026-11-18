@@ -217,7 +217,9 @@ export const SidebarRail = memo(function SidebarRail({ onNavigate }: { onNavigat
       >
         <img src={serverIconURL()} alt="" width={32} height={32} className="h-8 w-8 rounded-lg" data-testid="sidebar-rail-logo" />
       </div>
-      <div className="mt-2 flex w-full min-h-0 flex-1 flex-col items-center gap-2 overflow-y-auto">
+      {/* Padding, not a margin, above the first stop: a scrolling box cuts
+          off what leaves it, and the first stop's badge rises past its tile. */}
+      <div className="flex w-full min-h-0 flex-1 flex-col items-center gap-2 overflow-y-auto pt-2">
         <RailLink
           to="/threads"
           label="Threads"

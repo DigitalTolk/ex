@@ -29,8 +29,8 @@ import type { Channel, UserStatus } from '@/types';
 
 // What the header shows of a description: its first line, with a markdown
 // link reading as its text.
-function descriptionTeaser(description: string): string {
-  const line = description.split('\n').find((part) => part.trim() !== '') ?? '';
+function descriptionTeaser(description: string | undefined): string {
+  const line = (description ?? '').split('\n').find((part) => part.trim() !== '') ?? '';
   return line.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
 }
 
@@ -350,7 +350,7 @@ export const Header = memo(function Header({
             </DropdownMenu>
             {/* The description's first line; the whole of it, with its
                 links, opens from here. */}
-            {!isMobile && channel.description ? (
+            {!isMobile && descriptionTeaser(channel.description) ? (
               <button
                 type="button"
                 onClick={() => setDescDialog('view')}

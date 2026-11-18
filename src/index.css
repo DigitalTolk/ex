@@ -44,7 +44,8 @@
 }
 
 /* Desktop app: the window is dragged by the top bar, behind the search field,
-   and by the box above Home in the sidebar. Whatever opens over them — a
+   by the workspace mark at the head of the icon rail, and by the channel
+   list's header. Whatever opens over them — a
    dialog, a menu, a notification banner, each rendered outside the app's
    root — is not part of the window's frame, and stays clickable. */
 body > :not(#root) {

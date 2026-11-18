@@ -1,4 +1,5 @@
 import { beforeEach, describe, it, expect, vi } from 'vitest';
+import type { ReactNode } from 'react';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -29,10 +30,18 @@ vi.mock('./MobileTabBar', () => ({
 vi.mock('@/components/activity/ActivityPanel', () => ({
   ActivityPanel: () => <div data-testid="activity-panel" />,
 }));
-vi.mock('@/components/activity/ActivityModeSwitch', () => ({
-  ActivityModeSwitch: () => <div data-testid="sidebar-mode-switch" />,
+// The icon rail and the column header have their own tests; here they are
+// markers, so the layout's structure can be read without their providers.
+vi.mock('./SidebarRail', () => ({
+  SidebarRail: ({ onNavigate }: { onNavigate?: () => void }) => (
+    <nav data-testid="sidebar-rail">
+      <button type="button" onClick={onNavigate}>Rail link</button>
+    </nav>
+  ),
 }));
-vi.mock('./AccountMenu', () => ({ AccountMenu: () => <div data-testid="sidebar-account" /> }));
+vi.mock('./SidebarColumnHeader', () => ({
+  SidebarColumnHeader: ({ children }: { children?: ReactNode }) => <div data-testid="sidebar-column-header">{children}</div>,
+}));
 vi.mock('./AppTopBar', () => ({
   AppTopBar: ({ onOpenChannels, channelsButtonHidden }: { onOpenChannels?: () => void; channelsButtonHidden?: boolean }) => (
     <header
@@ -130,21 +139,37 @@ describe('AppLayout', () => {
     expect(screen.getByTestId('sidebar')).toBeInTheDocument();
   });
 
-  it('puts the Home / Activity switch at the top of the sidebar', () => {
+  it('puts the icon rail first, the channel list beside it, and both beside the top bar column', () => {
     renderLayout();
     const aside = screen.getByTestId('app-sidebar');
-    expect(within(aside).getByTestId('sidebar-mode-switch')).toBeInTheDocument();
+    const rail = screen.getByTestId('sidebar-rail');
+    expect(rail.nextElementSibling).toBe(aside);
+    expect(aside.contains(rail)).toBe(false);
     // The sidebar runs the full height: it sits beside the top bar's column,
     // not under it.
     expect(aside.contains(screen.getByTestId('app-shell-header'))).toBe(false);
     expect(aside.parentElement?.contains(screen.getByTestId('app-shell-header'))).toBe(true);
   });
 
-  it('lists Activity instead of channels when the sidebar is on Activity', () => {
+  it('lists Activity instead of channels when the sidebar is on Activity, under its own header', () => {
     setSidebarMode('activity');
     renderLayout();
-    expect(within(screen.getByTestId('app-sidebar')).getByTestId('activity-panel')).toBeInTheDocument();
-    expect(within(screen.getByTestId('app-sidebar')).queryByTestId('sidebar')).toBeNull();
+    const aside = within(screen.getByTestId('app-sidebar'));
+    expect(aside.getByTestId('activity-panel')).toBeInTheDocument();
+    expect(aside.queryByTestId('sidebar')).toBeNull();
+    const header = within(aside.getByTestId('sidebar-column-header'));
+    expect(header.getByRole('heading', { name: 'Activity' })).toBeInTheDocument();
+    expect(header.getByRole('button', { name: 'Back to chats' })).toBeInTheDocument();
+  });
+
+  it('goes back from Activity to the chats with the header arrow', () => {
+    setSidebarMode('activity');
+    renderLayout();
+    fireEvent.click(screen.getByTestId('sidebar-activity-back'));
+    const aside = within(screen.getByTestId('app-sidebar'));
+    expect(aside.getByTestId('sidebar')).toBeInTheDocument();
+    expect(aside.queryByTestId('activity-panel')).toBeNull();
+    expect(aside.queryByTestId('sidebar-activity-back')).toBeNull();
   });
 
   // The channel list fades softly under the header once it scrolls off the

@@ -5,10 +5,9 @@ import { useCreateCategory, useDeleteCategory } from '@/hooks/useSidebar';
 import { useAddCategoryRequest } from '@/stores/sidebar-add-category';
 
 // SidebarAddCategory is the "+ Add category" button, which turns into the
-// name field in place: Enter creates the category, Escape cancels. On the
-// desktop the sidebar header's "+" menu asks for the field instead
-// (requestAddCategory), and the button is left out (`button={false}`).
-export function SidebarAddCategory({ button = true }: { button?: boolean }) {
+// name field in place: Enter creates the category, Escape cancels. The
+// desktop sidebar header's "+" menu opens the same field (requestAddCategory).
+export function SidebarAddCategory() {
   const createCategory = useCreateCategory();
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState('');
@@ -22,7 +21,6 @@ export function SidebarAddCategory({ button = true }: { button?: boolean }) {
   }
 
   if (!creating) {
-    if (!button) return null;
     return (
       <button
         onClick={() => {

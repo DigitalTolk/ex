@@ -9,11 +9,8 @@ import { SidePanel } from '@/components/chat/SidePanel';
 import { expectPaintedAtCenter } from '@/test/browser-assertions';
 import { swipe } from '@/test/gestures';
 
-// The sidebar header's Home / Activity switch reads the activity feed; these
-// layout tests don't mount a QueryClient, so stand it (and the panel) in.
-vi.mock('@/components/activity/ActivityModeSwitch', () => ({
-  ActivityModeSwitch: () => <div data-testid="sidebar-mode-switch" />,
-}));
+// The Activity panel reads the activity feed; these layout tests don't mount
+// a QueryClient, so stand it in.
 // The phone tab bar reads the activity feed too.
 vi.mock('./MobileTabBar', () => ({
   MobileTabBar: ({ hidden }: { hidden?: boolean }) => (
@@ -40,7 +37,20 @@ vi.mock('./Sidebar', () => ({
   ),
 }));
 
+// The phone tab bar still draws the account menu.
 vi.mock('./AccountMenu', () => ({ AccountMenu: () => <div data-testid="sidebar-account" /> }));
+// The icon rail and the column header have their own tests; here they are
+// markers, so the layout's structure can be read without their providers.
+vi.mock('./SidebarRail', () => ({
+  SidebarRail: ({ onNavigate }: { onNavigate?: () => void }) => (
+    <nav data-testid="sidebar-rail">
+      <button type="button" onClick={onNavigate}>Rail link</button>
+    </nav>
+  ),
+}));
+vi.mock('./SidebarColumnHeader', () => ({
+  SidebarColumnHeader: ({ children }: { children?: ReactNode }) => <div data-testid="sidebar-column-header">{children}</div>,
+}));
 vi.mock('./AppTopBar', () => ({
   AppTopBar: ({ onOpenChannels, channelsButtonHidden }: { onOpenChannels?: () => void; channelsButtonHidden?: boolean }) => (
     <header

@@ -99,18 +99,24 @@ describe('CreateChannelDialog - validation', () => {
     expect(counter.className).not.toMatch(/text-destructive/);
   });
 
-  it('flags description over 255 chars and disables submit', async () => {
+  it('flags description over 1000 chars and disables submit', async () => {
     const user = userEvent.setup();
     renderDialog(true);
 
     await user.type(screen.getByLabelText('Name'), 'general');
     const desc = screen.getByLabelText(/Description/);
-    // Bypass user.type's per-keystroke cost on a 256-char string by
-    // setting the value directly via fireEvent — the validation is
-    // computed off the React state populated by onChange.
+    // Pasted, not typed: user.type pays per keystroke on a string this long.
+    // The validation is computed off the React state populated by onChange.
     await user.click(desc);
-    await user.paste('a'.repeat(256));
-    expect(screen.getByTestId('channel-desc-help').textContent).toMatch(/255/);
+    // A description holds several lines and links now: 1000 fits.
+    await user.paste('a'.repeat(1000));
+    expect(screen.getByTestId('channel-desc-help').textContent).not.toMatch(/1000 characters or fewer/);
+    expect(
+      (screen.getByRole('button', { name: 'Create Channel' }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+
+    await user.paste('a');
+    expect(screen.getByTestId('channel-desc-help').textContent).toMatch(/1000 characters or fewer/);
     expect(
       (screen.getByRole('button', { name: 'Create Channel' }) as HTMLButtonElement).disabled,
     ).toBe(true);

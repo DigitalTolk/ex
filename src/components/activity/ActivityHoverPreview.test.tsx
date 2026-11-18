@@ -2,10 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { ActivityModeSwitch } from './ActivityModeSwitch';
 import { apiFetch } from '@/lib/api';
 import { resetSidebarModeSessionState, setActivityUnreadOnly, setSidebarMode, useSidebarModeStore } from '@/stores/sidebar-mode';
-import { PREVIEW_CLOSE_DELAY_MS } from './ActivityHoverPreview';
+import { ActivityHoverPreview, PREVIEW_CLOSE_DELAY_MS, PREVIEW_OPEN_DELAY_MS } from './ActivityHoverPreview';
 
 vi.mock('@/lib/api', () => ({ apiFetch: vi.fn() }));
 vi.mock('@/hooks/useEmoji', () => ({ useEmojiMap: () => ({ data: {} }) }));
@@ -31,18 +30,39 @@ function mockApi(overrides: Partial<Record<string, unknown>> = {}) {
   });
 }
 
-function renderSwitch() {
+// The preview's trigger, as the sidebar rail wires its Activity bell: the
+// render prop's ref and handlers on a plain button.
+function Bell() {
+  return (
+    <ActivityHoverPreview>
+      {(trigger) => (
+        <button
+          type="button"
+          ref={trigger.ref}
+          onPointerEnter={trigger.onPointerEnter}
+          onPointerLeave={trigger.onPointerLeave}
+          onClick={trigger.onClick}
+          data-testid="activity-bell"
+        >
+          Activity
+        </button>
+      )}
+    </ActivityHoverPreview>
+  );
+}
+
+function renderBell() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
       <MemoryRouter initialEntries={['/channel/general']}>
-        <ActivityModeSwitch />
+        <Bell />
       </MemoryRouter>
     </QueryClientProvider>,
   );
 }
 
-const bell = () => screen.getByTestId('sidebar-mode-activity');
+const bell = () => screen.getByTestId('activity-bell');
 const hover = (pointerType = 'mouse') => fireEvent.pointerEnter(bell(), { pointerType });
 const preview = () => screen.findByTestId('activity-preview');
 // Let timers and query settles land inside act, so React's warnings stay quiet.
@@ -63,7 +83,7 @@ describe('ActivityHoverPreview', () => {
   });
 
   it('opens on a resting mouse with the latest rows, and closes a beat after the pointer leaves', async () => {
-    renderSwitch();
+    renderBell();
     expect(screen.queryByTestId('activity-preview')).toBeNull();
     hover();
     const card = await preview();
@@ -80,8 +100,24 @@ describe('ActivityHoverPreview', () => {
     await waitFor(() => expect(screen.queryByTestId('activity-preview')).toBeNull());
   });
 
+  // Under the bell the card covered the chat list; it opens to the bell's
+  // right instead, over the page, with their tops level.
+  it('opens beside the bell, to its right with their tops level', async () => {
+    renderBell();
+    // jsdom lays nothing out, so the bell is given the box it has on the rail.
+    const rect = { top: 200, bottom: 232, left: 12, right: 44, width: 32, height: 32, x: 12, y: 200, toJSON: () => ({}) };
+    bell().getBoundingClientRect = () => rect;
+    hover();
+    await preview();
+    const portal = screen.getByRole('dialog', { name: 'Recent activity' });
+    await waitFor(() => expect(portal).toHaveAttribute('data-popover-measured', 'true'));
+    expect(portal.style.top).toBe('200px');
+    // The bell's right edge plus the popover's 8px margin.
+    expect(portal.style.left).toBe('52px');
+  });
+
   it('filters to unread rows on request', async () => {
-    renderSwitch();
+    renderBell();
     hover();
     const card = await preview();
     await waitFor(() => expect(within(card).getAllByTestId('activity-row')).toHaveLength(3));
@@ -94,7 +130,7 @@ describe('ActivityHoverPreview', () => {
   // the card's own, so the two disagreed as soon as either was switched.
   it('shares its Unreads setting with the Activity sidebar', async () => {
     act(() => setActivityUnreadOnly(true));
-    renderSwitch();
+    renderBell();
     hover();
     const card = await preview();
     const toggle = screen.getByTestId('activity-preview-unreads');
@@ -106,7 +142,7 @@ describe('ActivityHoverPreview', () => {
   });
 
   it('opening a row reads it and closes the card; Open Activity switches the sidebar', async () => {
-    renderSwitch();
+    renderBell();
     hover();
     const card = await preview();
     await waitFor(() => expect(within(card).getAllByTestId('activity-row')).toHaveLength(3));
@@ -122,7 +158,7 @@ describe('ActivityHoverPreview', () => {
   });
 
   it('stays open while a row menu is up, and the menu action lands', async () => {
-    renderSwitch();
+    renderBell();
     hover();
     const card = await preview();
     await waitFor(() => expect(within(card).getAllByTestId('activity-row')).toHaveLength(3));
@@ -142,7 +178,7 @@ describe('ActivityHoverPreview', () => {
   });
 
   it('"Remind me about this" from a row closes the card and opens the reminder dialog, which closes on cancel', async () => {
-    renderSwitch();
+    renderBell();
     hover();
     const card = await preview();
     await waitFor(() => expect(within(card).getAllByTestId('activity-row')).toHaveLength(3));
@@ -159,7 +195,7 @@ describe('ActivityHoverPreview', () => {
       if (url.startsWith('/api/v1/activity')) return new Promise(() => {}) as never;
       return [] as never;
     });
-    renderSwitch();
+    renderBell();
     hover();
     expect(await screen.findByTestId('activity-preview-loading')).toBeInTheDocument();
     expect(screen.queryByTestId('activity-preview-empty')).toBeNull();
@@ -167,7 +203,7 @@ describe('ActivityHoverPreview', () => {
 
   it('shows the empty state, plain and for unreads', async () => {
     mockApi({ activity: { items: [], unread: 0, unreadByType: {} } });
-    renderSwitch();
+    renderBell();
     hover();
     expect(await screen.findByTestId('activity-preview-empty')).toHaveTextContent('No activity yet');
     fireEvent.click(screen.getByTestId('activity-preview-unreads'));
@@ -175,7 +211,7 @@ describe('ActivityHoverPreview', () => {
   });
 
   it('stays closed for a finger, on a phone, and while the sidebar already shows Activity', async () => {
-    const { unmount } = renderSwitch();
+    const { unmount } = renderBell();
     hover('touch');
     await idle(450);
     expect(screen.queryByTestId('activity-preview')).toBeNull();
@@ -194,20 +230,32 @@ describe('ActivityHoverPreview', () => {
     unmount();
 
     setSidebarMode('activity');
-    renderSwitch();
+    renderBell();
     hover();
     await idle(450);
     expect(screen.queryByTestId('activity-preview')).toBeNull();
   });
 
-  it('clicking the bell closes the preview as the sidebar switches', async () => {
-    renderSwitch();
+  it('clicking the bell closes the preview', async () => {
+    renderBell();
     hover();
     await preview();
-    act(() => {
-      fireEvent.click(bell());
-    });
-    expect(useSidebarModeStore.getState().mode).toBe('activity');
+    fireEvent.click(bell());
     expect(screen.queryByTestId('activity-preview')).toBeNull();
+  });
+
+  it('a click before the delay elapses cancels the pending open', () => {
+    vi.useFakeTimers();
+    try {
+      renderBell();
+      hover();
+      fireEvent.click(bell());
+      act(() => {
+        vi.advanceTimersByTime(PREVIEW_OPEN_DELAY_MS * 2);
+      });
+      expect(screen.queryByTestId('activity-preview')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -335,13 +335,14 @@ export function ChannelView() {
   // set); the channel keeps the name. A workspace's own emojis can't be drawn
   // in the channel list yet.
   const onIconChange = useEventCallback((picked: string) => {
-    if (!channel) return;
     const name = /^:([a-z0-9_+-]+):/.exec(picked)?.[1] ?? '';
     if (picked !== '' && !isKnownEmoji(name)) {
       showToast("A custom emoji can't be a channel icon yet. Pick a standard one.");
       return;
     }
-    setIcon.run({ channelId: channel.id, icon: name });
+    // Only the header's icon button and its "Remove icon" item call this, and
+    // the header draws them only for a loaded channel.
+    setIcon.run({ channelId: channel!.id, icon: name });
   });
   const onMakePrivate = useEventCallback(handleMakePrivate);
   const onArchive = useEventCallback(handleArchive);

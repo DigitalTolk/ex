@@ -205,6 +205,7 @@ vi.mock('@/hooks/useSidebar', () => ({
   useCreateCategory: () => ({ mutate: vi.fn(), isPending: false }),
   useDeleteCategory: () => ({ mutate: vi.fn(), isPending: false }),
   useFavoriteChannel: () => ({ mutate: favoriteChannelMutate, isPending: false }),
+  useMuteConversation: () => ({ mutate: vi.fn(), isPending: false }),
   useFavoriteConversation: () => ({ mutate: favoriteConversationMutate, isPending: false }),
   useSetCategory: () => ({ mutate: setCategoryMutate, isPending: false }),
   useSetConversationCategory: () => ({ mutate: setConversationCategoryMutate, isPending: false }),

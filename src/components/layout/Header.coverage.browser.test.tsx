@@ -59,7 +59,7 @@ describe('Header residual coverage', () => {
     expect(files.className).toContain('bg-muted');
   });
 
-  it('opens the edit field for a description-less channel (the || "" draft fallback)', async () => {
+  it('opens an empty editor for a description-less channel (the || "" draft fallback)', async () => {
     if (window.innerWidth <= 767) return;
     const screen = await render(
       <Wrap>
@@ -72,9 +72,10 @@ describe('Header residual coverage', () => {
     await screen.getByText('Edit description').click();
     // editDescription() seeds the draft from channel.description (empty) →
     // the `channel?.description || ""` nullish-ish fallback arm.
-    const input = screen.getByPlaceholder('Add a description...');
+    const input = screen.getByPlaceholder('What is this channel for?');
     await expect.element(input).toBeVisible();
-    expect((input.element() as HTMLInputElement).value).toBe('');
+    expect((input.element() as HTMLTextAreaElement).value).toBe('');
+    await expect.element(screen.getByTestId('channel-description-count')).toHaveTextContent('0/1000');
   });
 
   it('renders a channel header with no description (the description-absent arm)', async () => {
@@ -86,11 +87,11 @@ describe('Header residual coverage', () => {
       </Wrap>,
     );
     await expect.element(screen.getByRole('heading', { name: 'general' })).toBeVisible();
-    // No description button/text rendered.
-    expect(document.querySelector('[title="Click to edit description"]')).toBeNull();
+    // No description shown in the header.
+    expect(document.querySelector('[data-testid="channel-description-teaser"]')).toBeNull();
   });
 
-  it('renders a read-only description (canEdit=false) as a span, not a button', async () => {
+  it('opens a read-only description (canEdit=false) in full, with no Edit', async () => {
     if (window.innerWidth <= 767) return;
     const screen = await render(
       <Wrap>
@@ -100,7 +101,11 @@ describe('Header residual coverage', () => {
       </Wrap>,
     );
     await expect.element(screen.getByText('General team chat')).toBeVisible();
-    expect(document.querySelector('[title="Click to edit description"]')).toBeNull();
+    await screen.getByTestId('channel-description-teaser').click();
+    await expect.element(screen.getByTestId('channel-description-view')).toBeVisible();
+    await expect.element(screen.getByRole('heading', { name: 'About ~general' })).toBeVisible();
+    expect(screen.getByTestId('channel-description-view').element().textContent).toContain('General team chat');
+    expect(document.querySelector('[data-testid="channel-description-edit"]')).toBeNull();
   });
 
   it('renders the hover-card DM path with no avatar URL and an empty title', async () => {

@@ -110,6 +110,7 @@ vi.mock('@/hooks/useChannels', async (orig) => ({
   useMakeChannelPrivate: () => ({ run: vi.fn(), isPending: false }),
   useLeaveChannel: () => ({ mutate: vi.fn(), isPending: false }),
   useUpdateChannelDescription: () => ({ mutate: vi.fn(), isPending: false }),
+  useSetChannelIcon: () => ({ run: vi.fn(), isPending: false }),
 }));
 
 // Counts renders of the chat view's header, memoized like the real one: it

@@ -21,8 +21,8 @@ export function useDesktopRunner(): { available: boolean; state: DesktopRunnerSt
         if (live) setState(s);
       },
       () => {
-        // An app that can't answer reads as "no desktop control" — the card
-        // falls back to the command-line steps.
+        // An app that can't answer reads as "no desktop control": the page
+        // points at the Runners dialog in the account menu instead.
       },
     );
     return () => {

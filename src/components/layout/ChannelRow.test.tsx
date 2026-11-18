@@ -41,6 +41,31 @@ describe('ChannelRow', () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
+  it("draws the channel's own emoji in place of the globe, with a small lock kept for a private one", () => {
+    const { unmount } = renderRow({ channel: { ...channel, icon: 'tada' } });
+    const row = screen.getByTestId('channel-row-ch-1');
+    expect(row.querySelector('[data-testid="channel-emoji"]')).not.toBeNull();
+    expect(row.querySelector('svg.lucide-globe')).toBeNull();
+    // A public channel needs no mark.
+    expect(screen.queryByTestId('channel-private-mark')).toBeNull();
+    unmount();
+
+    renderRow({ channel: { ...channel, channelType: 'private', icon: 'tada' } });
+    expect(screen.getByTestId('channel-private-mark')).toHaveAccessibleName('Private');
+  });
+
+  it('keeps the globe or the lock for a channel with no emoji', () => {
+    const { unmount } = renderRow();
+    expect(screen.getByTestId('channel-row-ch-1').querySelector('svg.lucide-globe')).not.toBeNull();
+    expect(screen.queryByTestId('channel-emoji')).toBeNull();
+    unmount();
+
+    renderRow({ channel: { ...channel, channelType: 'private' } });
+    expect(screen.getByTestId('channel-row-ch-1').querySelector('svg.lucide-lock')).not.toBeNull();
+    // The lock is the icon itself: no second mark after the name.
+    expect(screen.queryByTestId('channel-private-mark')).toBeNull();
+  });
+
   it('navigates normally (calling onClose) when navigation is not suppressed', () => {
     const onClose = vi.fn();
     renderRow({ onClose });

@@ -307,56 +307,38 @@ export function Sidebar({ onClose }: SidebarProps) {
       >
         {/* Bottom padding clears the home indicator on notched phones (the
             drawer is a full-height mobile surface with no bottom chrome). */}
-        {/* The extra top padding is the gap under the Home / Activity switch,
-            kept inside the scroller so rows scroll right up to the switch. */}
+        {/* The top padding is the gap under the list's header, kept inside
+            the scroller so rows scroll right up to it. */}
         <div className="w-full min-w-0 space-y-1 p-2 pt-1 mobile:pt-2 mobile:pb-[calc(var(--bottom-safe-inset,env(safe-area-inset-bottom))+0.5rem)]">
-          {isMobile ? (
+          {/* Phone: the pages lead the list (its tab bar holds Home and
+              Activity), then a break before the channels and DMs. On desktop
+              every page lives on the rail, so the list holds only chats,
+              channels and their categories. */}
+          {isMobile && (
             <>
-              {/* Phone: the pages lead the list (its tab bar holds Home and
-                  Activity). */}
               <SidebarPageLinks onClose={onClose} />
-
-              {/* Visual break between top-level pages and the channel/DM list. */}
               <div
                 data-testid="sidebar-top-divider"
                 role="separator"
                 className="my-2 h-px bg-white/10"
               />
-
-              {/* "Add category" sits above the sections so the affordance is
-                  obvious before users scroll into the list; the unread view
-                  options icon shares its row. */}
-              <div className="flex items-center gap-1">
-                <div className="min-w-0 flex-1">
-                  <SidebarAddCategory />
-                </div>
-                <SidebarUnreadControls
-                  unreadOnly={unreadOnly}
-                  onUnreadOnlyChange={view.setUnreadOnly}
-                  unreadSection={unreadSection}
-                  onUnreadSectionChange={view.setUnreadSection}
-                />
-              </div>
-            </>
-          ) : (
-            <>
-              {/* Desktop: every page lives on the rail, so the list holds
-                  only chats, channels and their categories. It leads with
-                  "+ Add category" (the header's "+" opens the same field),
-                  and the unread view options share its row. */}
-              <div className="flex items-center gap-1">
-                <div className="min-w-0 flex-1">
-                  <SidebarAddCategory />
-                </div>
-                <SidebarUnreadControls
-                  unreadOnly={unreadOnly}
-                  onUnreadOnlyChange={view.setUnreadOnly}
-                  unreadSection={unreadSection}
-                  onUnreadSectionChange={view.setUnreadSection}
-                />
-              </div>
             </>
           )}
+
+          {/* "Add category" leads the sections (on desktop the header's "+"
+              opens the same field), and the unread view options share its
+              row. */}
+          <div className="flex items-center gap-1">
+            <div className="min-w-0 flex-1">
+              <SidebarAddCategory />
+            </div>
+            <SidebarUnreadControls
+              unreadOnly={unreadOnly}
+              onUnreadOnlyChange={view.setUnreadOnly}
+              unreadSection={unreadSection}
+              onUnreadSectionChange={view.setUnreadSection}
+            />
+          </div>
 
           {/* Unified sidebar list: Favorites (mixed) → user categories
               (mixed) → Channels (uncategorised) → Direct Messages

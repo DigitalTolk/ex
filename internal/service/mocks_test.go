@@ -697,6 +697,9 @@ func (m *mockChannelStore) PatchChannel(_ context.Context, id string, p store.Ch
 	if p.Description != nil {
 		ch.Description = *p.Description
 	}
+	if p.Icon != nil {
+		ch.Icon = *p.Icon
+	}
 	if p.Archived != nil {
 		ch.Archived = *p.Archived
 	}

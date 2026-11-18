@@ -99,14 +99,6 @@ export function useSidebarSections({
     [channels, visibleConversations, categories, conversationSort, unreadSection, unreadOnly, activeItemID, stickyUnread],
   );
 
-  // How many chats have something new: what "Catch up" counts.
-  const unreadChats = useMemo(
-    () =>
-      (channels ?? []).filter((channel) => isSidebarItemUnread({ kind: 'channel', channel })).length +
-      visibleConversations.filter((conversation) => isSidebarItemUnread({ kind: 'conversation', conversation })).length,
-    [channels, visibleConversations],
-  );
-
   return {
     // The sections render once the DMs are in (or failed to load); until then
     // the sidebar shows a skeleton.
@@ -115,7 +107,6 @@ export function useSidebarSections({
     activeItemID,
     visibleConversations,
     categories,
-    unreadChats,
   };
 }
 

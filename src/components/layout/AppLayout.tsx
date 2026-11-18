@@ -36,8 +36,8 @@ interface AppLayoutProps {
   children: ReactNode;
 }
 
-// On a phone the Home / Activity switch moves to the bottom tab bar; the
-// drawer just names the screen it shows. Home's list starts at the top of the
+// On a phone Home and Activity are tabs on the bottom bar; the drawer just
+// names the screen it shows. Home's list starts at the top of the
 // screen instead, its name only read out.
 function MobileSidebarTitle() {
   const mode = useSidebarModeStore((s) => s.mode);
@@ -380,7 +380,7 @@ export function AppLayout({ children }: AppLayoutProps) {
     <TagSearchProvider>
       <div className="flex h-full overflow-hidden bg-sidebar">
         {/* Persistent sidebar (full tier): runs the full window height, with
-            the Home / Activity switch level with the top bar. Mounted only on
+            the list's header level with the top bar. Mounted only on
             that tier, so narrower layouts don't keep a hidden copy of the list
             (and its queries) alive. */}
         {tier === 'full' && (
