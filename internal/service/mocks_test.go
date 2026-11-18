@@ -912,6 +912,10 @@ func (m *mockPublisher) Publish(_ context.Context, channel string, event *events
 // --- Mock ConversationStore ---
 
 type mockConversationStore struct {
+	// muted is convID#userID → muted; setMutedErr / mutedErr fail the write / the read.
+	muted         map[string]bool
+	setMutedErr   error
+	mutedErr      error
 	conversations map[string]*model.Conversation
 	userConvs     map[string][]*model.UserConversation // userID -> conversations
 	createErr     error
@@ -1013,6 +1017,24 @@ func (m *mockConversationStore) SetConversationLastRead(_ context.Context, convI
 		}
 	}
 	return store.ErrNotFound
+}
+
+func (m *mockConversationStore) SetMuted(_ context.Context, convID, userID string, muted bool) error {
+	if m.setMutedErr != nil {
+		return m.setMutedErr
+	}
+	if m.muted == nil {
+		m.muted = map[string]bool{}
+	}
+	m.muted[convID+"#"+userID] = muted
+	return nil
+}
+
+func (m *mockConversationStore) ConversationMuted(_ context.Context, convID, userID string) (bool, error) {
+	if m.mutedErr != nil {
+		return false, m.mutedErr
+	}
+	return m.muted[convID+"#"+userID], nil
 }
 
 func (m *mockConversationStore) SetFavorite(_ context.Context, convID, userID string, favorite bool) error {

@@ -1364,3 +1364,63 @@ func TestListUsers_DirectoryGetsTheWholeRoster(t *testing.T) {
 		t.Errorf("admin row = %v, want the full record", rows[0])
 	}
 }
+
+// Do Not Disturb: minutes turn it on, 0 turns it off; anything out of range
+// is refused before it becomes a duration.
+func TestSnoozeMyNotifications(t *testing.T) {
+	h, userStore, jwtMgr := setupUserHandler(t)
+	user := &model.User{ID: "dnd-1", Email: "dnd@x.com", DisplayName: "DND", SystemRole: model.SystemRoleMember, Status: "active"}
+	userStore.users[user.ID] = user
+	userStore.emailIndex[user.Email] = user
+	token := makeTokenForUser(jwtMgr, user)
+	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.SnoozeMyNotifications))
+	put := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPut, "/api/v1/users/me/notification-snooze", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	rec := put(`{"minutes":30}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d (body: %s)", rec.Code, rec.Body.String())
+	}
+	var got model.User
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.NotificationSettings == nil || !got.NotificationSettings.Snoozed(time.Now()) {
+		t.Fatalf("settings = %+v, want Do Not Disturb on", got.NotificationSettings)
+	}
+
+	rec = put(`{"minutes":0}`)
+	var resumed model.User
+	if err := json.Unmarshal(rec.Body.Bytes(), &resumed); err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("resume: status %d, %v", rec.Code, err)
+	}
+	if resumed.NotificationSettings.SnoozeUntil != nil {
+		t.Fatalf("settings = %+v, want Do Not Disturb off", resumed.NotificationSettings)
+	}
+
+	for _, body := range []string{`{"minutes":-1}`, `{"minutes":9223372036854775807}`, `{bad`} {
+		if rec := put(body); rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: status = %d, want 400", body, rec.Code)
+		}
+	}
+
+	// Signed out: refused.
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/users/me/notification-snooze", strings.NewReader(`{"minutes":30}`))
+	out := httptest.NewRecorder()
+	h.SnoozeMyNotifications(out, req)
+	if out.Code != http.StatusUnauthorized {
+		t.Errorf("signed out: status = %d, want 401", out.Code)
+	}
+
+	// The account is gone: the service's refusal comes back.
+	delete(userStore.users, user.ID)
+	if rec := put(`{"minutes":30}`); rec.Code == http.StatusOK {
+		t.Errorf("missing account: status = %d, want a refusal", rec.Code)
+	}
+}

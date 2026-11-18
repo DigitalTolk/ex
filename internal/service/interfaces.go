@@ -76,6 +76,10 @@ type ConversationStore interface {
 	SetConversationLastRead(ctx context.Context, convID, userID string, seq int64) error
 	SetFavorite(ctx context.Context, convID, userID string, favorite bool) error
 	SetCategory(ctx context.Context, convID, userID, categoryID string, sidebarPosition *int) error
+	// SetMuted / ConversationMuted: a user's mute of a chat with a bot, on
+	// their own row.
+	SetMuted(ctx context.Context, convID, userID string, muted bool) error
+	ConversationMuted(ctx context.Context, convID, userID string) (bool, error)
 }
 
 // MessageStore defines persistence operations for messages.

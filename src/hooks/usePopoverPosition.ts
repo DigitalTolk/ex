@@ -25,6 +25,10 @@ interface Options {
   // Default placement before adjusting.
   preferredSide?: 'top' | 'bottom';
   preferredAlign?: 'start' | 'end';
+  // Open beside the trigger, to its right with their tops level, where a
+  // popover under it would cover what it sits above (a rail's stop: the list
+  // under it). Falls back to the usual placement when there is no room.
+  beside?: boolean;
   // Margin from viewport edges before flipping or clamping.
   margin?: number;
   // Optional element ref measured for accurate width/height; if not yet
@@ -53,6 +57,7 @@ export function usePopoverPosition(
     estimatedWidth = 288,
     preferredSide = 'bottom',
     preferredAlign = 'start',
+    beside = false,
     margin = 8,
     contentRef,
   } = opts;
@@ -106,6 +111,10 @@ export function usePopoverPosition(
       // area so the popover never renders off-screen even on tiny viewports.
       let top = side === 'bottom' ? rect.bottom + 4 : rect.top - height - 4;
       let left = align === 'start' ? rect.left : rect.right - width;
+      if (beside && rect.right + margin + width + margin <= vw) {
+        top = rect.top;
+        left = rect.right + margin;
+      }
       if (top + height + margin > vh) top = Math.max(margin, vh - height - margin);
       // Defensive lower clamp: the side-flip logic never keeps a popover on a
       // side with too little room, and the overflow clamp above already floors
@@ -153,7 +162,7 @@ export function usePopoverPosition(
       window.visualViewport?.removeEventListener('resize', schedule);
       window.removeEventListener('scroll', schedule, true);
     };
-  }, [open, triggerRef, estimatedHeight, estimatedWidth, preferredSide, preferredAlign, margin, contentRef]);
+  }, [open, triggerRef, estimatedHeight, estimatedWidth, preferredSide, preferredAlign, beside, margin, contentRef]);
 
   return pos;
 }

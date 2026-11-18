@@ -1738,6 +1738,11 @@ export interface Channel {
   name: string;
   slug: string;
   description?: string;
+  /**
+   * Icon is an emoji (the glyph, or its name) shown in place of the
+   * channel's globe or lock; empty keeps those.
+   */
+  icon?: string;
   type: ChannelType;
   createdBy: string;
   archived: boolean;
@@ -2584,6 +2589,11 @@ export interface UserChannel {
    */
   archived?: boolean;
   /**
+   * Icon mirrors the channel's emoji icon, stamped at read time like
+   * Archived, so changing it writes one row, not one per member.
+   */
+  icon?: string;
+  /**
    * UnreadNotifyCount counts unread messages that actually ALERTED this
    * user per their notification rules (mentions, keywords, "all messages"
    * level; mute suppresses) — the sidebar's numeric badge. Plain unread
@@ -2674,6 +2684,12 @@ export interface UserConversation {
    */
   unreadNotifyCount?: number /* int64 */;
   /**
+   * Muted: this user muted the chat. Only a chat with a bot or a webhook
+   * can be muted (never one with a person); its messages then alert them
+   * for nothing but a direct @-mention.
+   */
+  muted?: boolean;
+  /**
    * AvatarURL and UserStatus are read-time enrichments for DM sidebar rows.
    * They are intentionally not persisted so profile changes stay single
    * sourced from the User record.
@@ -2681,6 +2697,12 @@ export interface UserConversation {
   avatarURL?: string;
   userStatus?: UserStatus;
   profileResolved?: boolean;
+  /**
+   * Bot: the other side of this DM is a bot or a webhook, read from its
+   * profile like the avatar. Such a chat can be muted; one with a person
+   * can't.
+   */
+  bot?: boolean;
   /**
    * Favorite pins this DM/group to the user's "Favorites" sidebar
    * section. Same per-user semantics as on UserChannel.
@@ -2952,6 +2974,12 @@ export interface Notification {
    * duplicated events can't drift the count.
    */
   parentUnreadNotifyCount?: number /* int64 */;
+  /**
+   * Silent: the recipient has Do Not Disturb on. The client takes the
+   * notification in (badges, Activity) but shows no popup and plays no
+   * sound; the server sends no phone push for it either.
+   */
+  silent?: boolean;
 }
 
 //////////
@@ -2988,6 +3016,13 @@ export interface NotificationSettings {
   ignoreGroupMentions: boolean;
   followAllThreads: boolean;
   keywords?: string[];
+  /**
+   * SnoozeUntil is Do Not Disturb: until then nothing alerts this user (no
+   * popup, sound or phone push), though everything is still listed in
+   * Activity and counted on badges. Set through its own endpoint, never
+   * with the rest of the settings.
+   */
+  snoozeUntil?: string /* RFC3339 */;
 }
 /**
  * ChannelNotificationOverride carries the per-channel override values a user

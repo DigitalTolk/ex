@@ -1,6 +1,7 @@
 import { memo, useLayoutEffect, useRef, useState } from 'react';
-import { Users, ChevronDown, ChevronLeft, LogOut, Archive, ArchiveRestore, Pencil, TextCursorInput, Bell, BellOff, Pin, Paperclip, SlidersHorizontal, Lock } from 'lucide-react';
-import { ChannelIcon } from '@/components/ChannelIcon';
+import { Users, ChevronDown, ChevronLeft, LogOut, Archive, ArchiveRestore, Pencil, TextCursorInput, Bell, BellOff, Pin, Paperclip, SlidersHorizontal, Lock, Eraser } from 'lucide-react';
+import { ChannelIcon, PrivateChannelMark } from '@/components/ChannelIcon';
+import { EmojiPicker } from '@/components/EmojiPicker';
 import { UserAvatar } from '@/components/UserAvatar';
 import { UserStatusIndicator } from '@/components/UserStatusIndicator';
 import { UserHoverCard } from '@/components/UserHoverCard';
@@ -19,9 +20,19 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { Button } from '@/components/ui/button';
 import { useIsMobile } from '@/hooks/useIsMobile';
+import { MAX_CHANNEL_DESCRIPTION_LEN } from '@/lib/limits';
+import { renderMarkdown } from '@/lib/markdown';
 import { requestOpenChannels } from '@/lib/mobile-nav';
 import type { Channel, UserStatus } from '@/types';
+
+// What the header shows of a description: its first line, with a markdown
+// link reading as its text.
+function descriptionTeaser(description: string): string {
+  const line = description.split('\n').find((part) => part.trim() !== '') ?? '';
+  return line.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
+}
 
 interface HeaderProps {
   channel?: Channel;
@@ -50,6 +61,9 @@ interface HeaderProps {
   onDescriptionSave?: (desc: string) => void;
   // Opens the rename dialog; absent where the channel can't be renamed.
   onRename?: () => void;
+  // Sets the channel's emoji (a picker `:shortcode:`), or clears it ("");
+  // absent where the channel's icon can't be changed.
+  onIconChange?: (icon: string) => void;
   // Makes a public channel private (after a confirm); absent where that
   // isn't offered.
   onMakePrivate?: () => void;
@@ -90,6 +104,7 @@ export const Header = memo(function Header({
   canEdit,
   onDescriptionSave,
   onRename,
+  onIconChange,
   onMakePrivate,
   canArchive,
   onArchive,
@@ -108,7 +123,8 @@ export const Header = memo(function Header({
 }: HeaderProps) {
   const displayTitle = channel?.name ?? title ?? '';
 
-  const [isEditingDesc, setIsEditingDesc] = useState(false);
+  // The description's dialog: closed, showing it in full, or editing it.
+  const [descDialog, setDescDialog] = useState<'closed' | 'view' | 'edit'>('closed');
   const [descDraft, setDescDraft] = useState('');
   const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false);
   const [privateConfirmOpen, setPrivateConfirmOpen] = useState(false);
@@ -161,13 +177,13 @@ export const Header = memo(function Header({
 
   function editDescription() {
     setDescDraft(channel?.description || '');
-    setIsEditingDesc(true);
+    setDescDialog('edit');
     setMobileChannelMenuOpen(false);
   }
 
   function saveDescription() {
-    onDescriptionSave?.(descDraft);
-    setIsEditingDesc(false);
+    onDescriptionSave?.(descDraft.trim());
+    setDescDialog('closed');
   }
 
   function renameChannel() {
@@ -181,7 +197,7 @@ export const Header = memo(function Header({
   }
 
   function cancelDescriptionEdit() {
-    setIsEditingDesc(false);
+    setDescDialog('closed');
   }
 
   function toggleMute() {
@@ -232,6 +248,25 @@ export const Header = memo(function Header({
       <div className="flex min-w-0 flex-1 items-center gap-2">
         {channel ? (
           <div className="flex min-w-0 flex-1 items-center gap-2" data-testid="channel-title-stack">
+            {/* Who can edit the channel changes its icon by clicking it. */}
+            {onIconChange && !isMobile && (
+              <EmojiPicker
+                onSelect={onIconChange}
+                ariaLabel="Channel icon"
+                triggerClassName="-mr-1 inline-flex shrink-0"
+                trigger={
+                  <button
+                    type="button"
+                    aria-label="Change channel icon"
+                    title="Change icon"
+                    data-testid="channel-icon-button"
+                    className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted/50"
+                  >
+                    <ChannelIcon type={channel.type} icon={channel.icon} className="h-5 w-5" ariaLabel="" />
+                  </button>
+                }
+              />
+            )}
             <DropdownMenu modal={false}>
               {/* shrink-0: the description beside it takes what the name
                   leaves. Both shrinking, flexbox squeezed them in proportion
@@ -245,8 +280,11 @@ export const Header = memo(function Header({
                 aria-expanded={isMobile ? mobileChannelMenuOpen : undefined}
                 aria-controls={isMobile ? 'mobile-channel-menu' : undefined}
               >
-                <ChannelIcon type={channel.type} className="h-5 w-5 shrink-0 text-muted-foreground" />
+                {!(onIconChange && !isMobile) && (
+                  <ChannelIcon type={channel.type} icon={channel.icon} className="h-5 w-5 shrink-0 text-muted-foreground" />
+                )}
                 <h1 className="min-w-0 truncate text-lg font-semibold">{displayTitle}</h1>
+                <PrivateChannelMark type={channel.type} icon={channel.icon} className="text-muted-foreground" />
                 <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" className="w-56 mobile:hidden">
@@ -260,6 +298,11 @@ export const Header = memo(function Header({
                 {onRename && (
                   <DropdownMenuItem onClick={renameChannel}>
                     <TextCursorInput className="mr-2 h-4 w-4" /> Rename channel
+                  </DropdownMenuItem>
+                )}
+                {onIconChange && channel.icon && (
+                  <DropdownMenuItem onClick={() => onIconChange('')} data-testid="channel-icon-remove">
+                    <Eraser className="mr-2 h-4 w-4" /> Remove icon
                   </DropdownMenuItem>
                 )}
                 {onMakePrivate && (
@@ -305,33 +348,19 @@ export const Header = memo(function Header({
                 )}
               </DropdownMenuContent>
             </DropdownMenu>
-            {!isMobile && (
-              isEditingDesc ? (
-                <input
-                  className="hidden min-w-0 max-w-xl flex-1 border-b border-input bg-transparent text-left text-sm outline-none md:block"
-                  value={descDraft}
-                  onChange={e => setDescDraft(e.target.value)}
-                  onBlur={saveDescription}
-                  onKeyDown={e => { if (e.key === 'Enter') saveDescription(); if (e.key === 'Escape') { e.preventDefault(); cancelDescriptionEdit(); } }}
-                  placeholder="Add a description..."
-                  autoFocus
-                />
-              ) : channel.description ? (
-                canEdit ? (
-                  <button
-                    onClick={editDescription}
-                    className="hidden min-w-0 max-w-full truncate text-left text-sm text-muted-foreground hover:text-foreground md:block"
-                    title="Click to edit description"
-                  >
-                    {channel.description}
-                  </button>
-                ) : (
-                  <span className="hidden min-w-0 max-w-full truncate text-left text-sm text-muted-foreground md:block">
-                    {channel.description}
-                  </span>
-                )
-              ) : null
-            )}
+            {/* The description's first line; the whole of it, with its
+                links, opens from here. */}
+            {!isMobile && channel.description ? (
+              <button
+                type="button"
+                onClick={() => setDescDialog('view')}
+                className="hidden min-w-0 max-w-full truncate text-left text-sm text-muted-foreground hover:text-foreground md:block"
+                title="Show the description"
+                data-testid="channel-description-teaser"
+              >
+                {descriptionTeaser(channel.description)}
+              </button>
+            ) : null}
           </div>
         ) : loadingChannel ? (
           <div className="-ml-1 flex h-7 min-w-0 items-center gap-1 px-1" data-testid="channel-title-loading" aria-busy="true">
@@ -438,37 +467,77 @@ export const Header = memo(function Header({
         )}
       </div>
 
-      {channel && isMobile && (
-        <Dialog open={isEditingDesc} onOpenChange={(open) => {
-          /* istanbul ignore next -- the dialog is controlled (open={isEditingDesc}); radix only calls onOpenChange(false) on user dismiss, never with open=true, so the open=true arm is unreachable */
+      {channel && (
+        <Dialog open={descDialog !== 'closed'} onOpenChange={(open) => {
+          /* istanbul ignore next -- the dialog is controlled; it only calls onOpenChange(false), on a user dismiss */
           if (!open) cancelDescriptionEdit();
         }}>
-          {/* Cancel/Save live in the top-right header (the standard mobile
-              dialog pattern): the textarea autofocuses, so bottom-row buttons
-              sat hidden behind the keyboard. */}
-          <DialogContent
-            className="max-w-none mobile:grid-rows-[auto_1fr]"
-            data-testid="mobile-description-editor"
-            mobileCloseLabel="Cancel"
-            mobileAction={{ label: 'Save', onClick: saveDescription }}
-          >
-            <DialogHeader>
-              <DialogTitle>Edit channel description</DialogTitle>
-            </DialogHeader>
-            <div className="flex min-h-0 flex-1 flex-col gap-3">
-              <label className="text-sm font-medium" htmlFor="mobile-channel-description">
-                Description
-              </label>
-              <textarea
-                id="mobile-channel-description"
-                className="min-h-40 w-full resize-none rounded-md border border-input bg-background px-3 py-3 text-base outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-                value={descDraft}
-                onChange={(e) => setDescDraft(e.target.value)}
-                placeholder="Add a description..."
-                autoFocus
-              />
-            </div>
-          </DialogContent>
+          {descDialog === 'view' ? (
+            <DialogContent size="2xl" data-testid="channel-description-view">
+              <DialogHeader>
+                <DialogTitle>About ~{channel.name}</DialogTitle>
+              </DialogHeader>
+              <div className="prose-message max-h-[60vh] overflow-y-auto text-sm break-words">
+                {renderMarkdown(channel.description ?? '')}
+              </div>
+              {canEdit && (
+                <div className="flex justify-end">
+                  <Button type="button" variant="outline" size="sm" onClick={editDescription} data-testid="channel-description-edit">
+                    <Pencil className="h-4 w-4" /> Edit
+                  </Button>
+                </div>
+              )}
+            </DialogContent>
+          ) : (
+            // On a phone Cancel/Save live in the top-right header (the standard
+            // mobile dialog pattern): the textarea autofocuses, so bottom-row
+            // buttons sat hidden behind the keyboard.
+            <DialogContent
+              size="2xl"
+              className="mobile:grid-rows-[auto_1fr]"
+              data-testid="channel-description-editor"
+              mobileCloseLabel="Cancel"
+              mobileAction={{ label: 'Save', onClick: saveDescription }}
+            >
+              <DialogHeader>
+                <DialogTitle>Edit channel description</DialogTitle>
+              </DialogHeader>
+              <div className="flex min-h-0 flex-1 flex-col gap-2">
+                <label className="sr-only" htmlFor="channel-description">
+                  Description
+                </label>
+                <textarea
+                  id="channel-description"
+                  className="min-h-40 w-full resize-none rounded-md border border-input bg-background px-3 py-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50 mobile:text-base"
+                  value={descDraft}
+                  maxLength={MAX_CHANNEL_DESCRIPTION_LEN}
+                  onChange={(e) => setDescDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                      e.preventDefault();
+                      saveDescription();
+                    }
+                  }}
+                  placeholder="What is this channel for?"
+                  autoFocus
+                />
+                <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                  <span>Line breaks are kept, and links can be clicked.</span>
+                  <span data-testid="channel-description-count">
+                    {descDraft.length}/{MAX_CHANNEL_DESCRIPTION_LEN}
+                  </span>
+                </div>
+                <div className="flex justify-end gap-2 mobile:hidden">
+                  <Button type="button" variant="outline" size="sm" onClick={cancelDescriptionEdit}>
+                    Cancel
+                  </Button>
+                  <Button type="button" size="sm" onClick={saveDescription} data-testid="channel-description-save">
+                    Save
+                  </Button>
+                </div>
+              </div>
+            </DialogContent>
+          )}
         </Dialog>
       )}
 

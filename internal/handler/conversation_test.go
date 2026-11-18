@@ -19,6 +19,7 @@ import (
 
 // dataConversationStore stores conversations. Used for handler integration tests.
 type dataConversationStore struct {
+	muted         map[string]bool
 	conversations map[string]*model.Conversation
 	userConvs     map[string][]*model.UserConversation
 	getErr        error
@@ -110,6 +111,18 @@ func (s *dataConversationStore) SetConversationLastRead(_ context.Context, convI
 		}
 	}
 	return store.ErrNotFound
+}
+
+func (s *dataConversationStore) SetMuted(_ context.Context, convID, userID string, muted bool) error {
+	if s.muted == nil {
+		s.muted = map[string]bool{}
+	}
+	s.muted[convID+"#"+userID] = muted
+	return nil
+}
+
+func (s *dataConversationStore) ConversationMuted(_ context.Context, convID, userID string) (bool, error) {
+	return s.muted[convID+"#"+userID], nil
 }
 
 func (s *dataConversationStore) SetFavorite(_ context.Context, convID, userID string, favorite bool) error {
@@ -1395,5 +1408,56 @@ func TestConvHandlerFull_SetNoUnfurl_MissingIDs(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", rec.Code)
+	}
+}
+
+// Muting a chat: a bot's chat is muted and unmuted on the caller's row; a
+// chat with a person, a bad body, a missing id and a signed-out caller are
+// refused.
+func TestConversationHandler_SetMute(t *testing.T) {
+	env := setupConversationHandlerFull(t)
+	user := &model.User{ID: "u-mute", Email: "mute@example.com", SystemRole: model.SystemRoleMember}
+	env.users.users["u-mute"] = user
+	env.users.users["bot-1"] = &model.User{ID: "bot-1", DisplayName: "Deploys", IsBot: true}
+	env.users.users["u-other"] = &model.User{ID: "u-other", DisplayName: "Other"}
+	env.convs.conversations["conv-bot"] = &model.Conversation{ID: "conv-bot", Type: model.ConversationTypeDM, ParticipantIDs: []string{"u-mute", "bot-1"}}
+	env.convs.conversations["conv-person"] = &model.Conversation{ID: "conv-person", Type: model.ConversationTypeDM, ParticipantIDs: []string{"u-mute", "u-other"}}
+	token, _ := env.jwtMgr.GenerateAccessToken(user)
+	handler := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.SetMute))
+	put := func(id, body string) int {
+		req := httptest.NewRequest(http.MethodPut, "/api/v1/conversations/"+id+"/mute", strings.NewReader(body))
+		req.SetPathValue("id", id)
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	if code := put("conv-bot", `{"muted":true}`); code != http.StatusNoContent {
+		t.Fatalf("mute a bot chat: status = %d", code)
+	}
+	if !env.convs.muted["conv-bot#u-mute"] {
+		t.Fatal("the mute was not stored")
+	}
+	if code := put("conv-bot", `{"muted":false}`); code != http.StatusNoContent || env.convs.muted["conv-bot#u-mute"] {
+		t.Fatalf("unmute: status = %d, muted = %v", code, env.convs.muted["conv-bot#u-mute"])
+	}
+	if code := put("conv-person", `{"muted":true}`); code != http.StatusBadRequest {
+		t.Errorf("a chat with a person: status = %d, want 400", code)
+	}
+	if code := put("conv-bot", `{bad`); code != http.StatusBadRequest {
+		t.Errorf("bad body: status = %d, want 400", code)
+	}
+	if code := put("", `{"muted":true}`); code != http.StatusBadRequest {
+		t.Errorf("missing id: status = %d, want 400", code)
+	}
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/conversations/conv-bot/mute", strings.NewReader(`{"muted":true}`))
+	req.SetPathValue("id", "conv-bot")
+	rec := httptest.NewRecorder()
+	env.handler.SetMute(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("signed out: status = %d, want 401", rec.Code)
 	}
 }

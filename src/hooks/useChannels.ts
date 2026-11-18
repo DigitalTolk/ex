@@ -239,6 +239,25 @@ export function useUpdateChannelDescription() {
   );
 }
 
+// Sets the emoji shown for a channel in place of its globe or lock; "" takes
+// it away. Other members get it through channel.updated.
+export function useSetChannelIcon() {
+  const queryClient = useQueryClient();
+  return useChannelAction(
+    'icon',
+    (vars: { channelId: string; icon: string }) =>
+      apiFetch<Channel>(`/api/v1/channels/${vars.channelId}/icon`, {
+        method: 'PUT',
+        body: JSON.stringify({ icon: vars.icon }),
+      }),
+    () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.channelBySlug() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
+    },
+    "Couldn't change the icon. Try again.",
+  );
+}
+
 // Renames a channel. Its slug — the URL key — follows the name; the server
 // answers 409 when another channel holds it.
 export function useRenameChannel() {

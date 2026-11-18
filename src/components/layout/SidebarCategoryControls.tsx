@@ -2,16 +2,27 @@ import { useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { useCreateCategory, useDeleteCategory } from '@/hooks/useSidebar';
+import { useAddCategoryRequest } from '@/stores/sidebar-add-category';
 
 // SidebarAddCategory is the "+ Add category" button, which turns into the
-// name field in place: Enter creates the category, Escape cancels.
-export function SidebarAddCategory() {
+// name field in place: Enter creates the category, Escape cancels. On the
+// desktop the sidebar header's "+" menu asks for the field instead
+// (requestAddCategory), and the button is left out (`button={false}`).
+export function SidebarAddCategory({ button = true }: { button?: boolean }) {
   const createCategory = useCreateCategory();
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState('');
   const [error, setError] = useState('');
+  const asked = useAddCategoryRequest((s) => s.asked);
+  const [served, setServed] = useState(asked);
+  if (served !== asked) {
+    setServed(asked);
+    setError('');
+    setCreating(true);
+  }
 
   if (!creating) {
+    if (!button) return null;
     return (
       <button
         onClick={() => {

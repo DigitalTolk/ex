@@ -34,6 +34,9 @@ type UserChannel struct {
 	// Archived mirrors the channel's archived (read-only) flag, stamped at
 	// read time by ListUserChannels; the sidebar groups archived channels.
 	Archived bool `json:"archived,omitempty" dynamodbav:"-"`
+	// Icon mirrors the channel's emoji icon, stamped at read time like
+	// Archived, so changing it writes one row, not one per member.
+	Icon string `json:"icon,omitempty" dynamodbav:"-"`
 	// UnreadNotifyCount counts unread messages that actually ALERTED this
 	// user per their notification rules (mentions, keywords, "all messages"
 	// level; mute suppresses) — the sidebar's numeric badge. Plain unread
@@ -104,12 +107,20 @@ type UserConversation struct {
 	// messages that actually alerted this user (DM messages always do unless
 	// muted), maintained by the notifier and reset alongside LastReadSeq.
 	UnreadNotifyCount int64 `json:"unreadNotifyCount,omitempty" dynamodbav:"unreadNotifyCount,omitempty"`
+	// Muted: this user muted the chat. Only a chat with a bot or a webhook
+	// can be muted (never one with a person); its messages then alert them
+	// for nothing but a direct @-mention.
+	Muted bool `json:"muted,omitempty" dynamodbav:"muted,omitempty"`
 	// AvatarURL and UserStatus are read-time enrichments for DM sidebar rows.
 	// They are intentionally not persisted so profile changes stay single
 	// sourced from the User record.
 	AvatarURL       string      `json:"avatarURL,omitempty" dynamodbav:"-"`
 	UserStatus      *UserStatus `json:"userStatus,omitempty" dynamodbav:"-"`
 	ProfileResolved bool        `json:"profileResolved,omitempty" dynamodbav:"-"`
+	// Bot: the other side of this DM is a bot or a webhook, read from its
+	// profile like the avatar. Such a chat can be muted; one with a person
+	// can't.
+	Bot bool `json:"bot,omitempty" dynamodbav:"-"`
 	// Favorite pins this DM/group to the user's "Favorites" sidebar
 	// section. Same per-user semantics as on UserChannel.
 	Favorite bool `json:"favorite,omitempty" dynamodbav:"favorite,omitempty"`

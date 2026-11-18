@@ -18,6 +18,8 @@ import { AgentActivityIndicator } from './AgentActivityIndicator';
 import { AgentApprovalCard } from './AgentApprovalCard';
 import { WatcherCatchUpCard } from './WatcherCatchUpCard';
 import { useEventCallback } from '@/hooks/useEventCallback';
+import { isKnownEmoji } from '@/lib/emoji-shortcodes';
+import { showToast } from '@/lib/toast';
 import { useEqualValue } from '@/hooks/useEqualValue';
 import { sameUserMap } from '@/lib/user-map-equal';
 import {
@@ -28,6 +30,7 @@ import {
   useMuteChannel,
   useUnarchiveChannel,
   useUpdateChannelDescription,
+  useSetChannelIcon,
   useMakeChannelPrivate,
   useUserChannels,
 } from '@/hooks/useChannels';
@@ -83,7 +86,7 @@ export function ChannelView() {
   const panels = useSidePanels<'members' | 'pinned' | 'files'>();
   // Tag panel takes the same right-rail slot as thread/pinned/files.
   // Opening any of those closes a tag, and opening a tag closes them.
-  const { activeTag, closeTag } = useTagState();
+  const { activeTag, tagNonce, closeTag } = useTagState();
   const { data: channel, error: channelError, isLoading: channelLoading } = useChannelBySlug(slug);
   // The sidebar already knows the channels you're in by name, so while the
   // channel itself is looked up its messages start loading too, and its name
@@ -123,6 +126,21 @@ export function ChannelView() {
     panels.close();
   }, [closeTag, panels]);
   const closeThread = dismissThread;
+  // A tag opened from a message (one in the open thread included) takes the
+  // right-hand slot, so the thread and the other panels make way for it. The
+  // tag itself opens through context, where this view has no say: its nonce
+  // moving is the signal. (Not on mount: a tag left open from the last chat
+  // must not close a thread a link opened here.)
+  const onTagOpened = useEventCallback(() => {
+    dismissThread();
+    panels.close();
+  });
+  const servedTagNonce = useRef(tagNonce);
+  useEffect(() => {
+    if (servedTagNonce.current === tagNonce) return;
+    servedTagNonce.current = tagNonce;
+    onTagOpened();
+  }, [tagNonce, onTagOpened]);
   const togglePinned = () => { dismissThread(); closeTag(); panels.toggle('pinned'); };
   const toggleFiles = () => { dismissThread(); closeTag(); panels.toggle('files'); };
   const showMembers = panels.isActive('members');
@@ -275,6 +293,7 @@ export function ChannelView() {
   const unarchiveChannel = useUnarchiveChannel();
   const leaveChannel = useLeaveChannel();
   const updateDescription = useUpdateChannelDescription();
+  const setIcon = useSetChannelIcon();
   const makePrivate = useMakeChannelPrivate();
 
   function handleArchive() {
@@ -312,6 +331,18 @@ export function ChannelView() {
   // what it shows changes.
   const toggleMembers = useEventCallback(() => (showMembers ? closeMembers() : openMembers()));
   const onDescriptionSave = useEventCallback(handleDescriptionSave);
+  // The picker hands back `:name:` (with a skin tone after it, when one is
+  // set); the channel keeps the name. A workspace's own emojis can't be drawn
+  // in the channel list yet.
+  const onIconChange = useEventCallback((picked: string) => {
+    if (!channel) return;
+    const name = /^:([a-z0-9_+-]+):/.exec(picked)?.[1] ?? '';
+    if (picked !== '' && !isKnownEmoji(name)) {
+      showToast("A custom emoji can't be a channel icon yet. Pick a standard one.");
+      return;
+    }
+    setIcon.run({ channelId: channel.id, icon: name });
+  });
   const onMakePrivate = useEventCallback(handleMakePrivate);
   const onArchive = useEventCallback(handleArchive);
   const onUnarchive = useEventCallback(handleUnarchive);
@@ -379,6 +410,7 @@ export function ChannelView() {
           canEdit={canEdit}
           onDescriptionSave={onDescriptionSave}
           onRename={canRename ? openRename : undefined}
+          onIconChange={canEdit && !channel?.archived ? onIconChange : undefined}
           onMakePrivate={canMakePrivate ? onMakePrivate : undefined}
           canArchive={canArchive}
           onArchive={onArchive}

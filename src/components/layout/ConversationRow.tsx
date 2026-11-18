@@ -1,4 +1,4 @@
-import { Star } from 'lucide-react';
+import { BellOff, Star } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { UserAvatar } from '@/components/UserAvatar';
 import { UserStatusIndicator } from '@/components/UserStatusIndicator';
@@ -7,6 +7,7 @@ import { shortNamesOnly } from '@/lib/format';
 import {
   useCategories,
   useFavoriteConversation,
+  useMuteConversation,
   useSetConversationCategory,
 } from '@/hooks/useSidebar';
 import { useRowLongPressMenu } from '@/hooks/useRowLongPressMenu';
@@ -70,6 +71,7 @@ export const ConversationRow = memo(function ConversationRow({
   // availability notch on the group avatar.
   const dmOnline = dmUserID ? partnerOnline : undefined;
   const favorite = useFavoriteConversation();
+  const mute = useMuteConversation();
   const setCategory = useSetConversationCategory();
   const { data: categories } = useCategories();
   // Mobile long-press opens the (otherwise hidden) row menu; shared with
@@ -145,8 +147,12 @@ export const ConversationRow = memo(function ConversationRow({
               dotSize={6}
               maxInitials={1}
             />
-            <span className="truncate">{conversation.displayName}</span>
+            <span className={`truncate ${conversation.muted ? 'text-gray-500' : ''}`}>{conversation.displayName}</span>
             <UserStatusIndicator status={dmUserStatus} className="h-4 w-4" />
+            {/* A muted bot's chat says so, like a muted channel. */}
+            {conversation.muted && (
+              <BellOff className="h-3 w-3 shrink-0 text-gray-500" aria-label="Muted" data-testid={`conv-muted-${conversation.conversationID}`} />
+            )}
           </>
         )}
         {/* Three tiers, mirroring ChannelRow: the brand-pink NUMBER counts
@@ -201,6 +207,15 @@ export const ConversationRow = memo(function ConversationRow({
             Move to {c.name}
           </DropdownMenuItem>
         ))}
+        {/* Only a bot's or a webhook's chat can be muted, never a person's. */}
+        {conversation.bot && (
+          <DropdownMenuItem
+            onClick={() => mute.mutate({ conversationID: conversation.conversationID, muted: !conversation.muted })}
+            data-testid={`conv-mute-${conversation.conversationID}`}
+          >
+            {conversation.muted ? 'Unmute' : 'Mute'} {conversation.displayName}
+          </DropdownMenuItem>
+        )}
         <DropdownMenuItem
           onClick={() => onHide(conversation.conversationID)}
           data-testid={`conv-close-${conversation.conversationID}`}
