@@ -721,7 +721,10 @@ describe('conversation route (full route, real browser)', () => {
     teardown = installFetchStub({
       messagesByConv: { [DM_ID]: [aliceMessage(DM_ID, { body: 'ship it #urgent' })] },
     });
-    const screen = await renderBare(`/conversation/${DM_ID}`);
+    // The full chat page: the tag sits in the message list, which takes its
+    // height from the app shell. Mounted bare at phone width the list has
+    // none of its own, and could measure 0 tall and draw no messages at all.
+    const screen = await renderRoute(`/conversation/${DM_ID}`);
     await expect.element(screen.getByRole('button', { name: '#urgent' })).toBeVisible();
     await screen.getByTestId('pinned-toggle').click();
     await expect.element(screen.getByTestId('pinned-toggle')).toHaveAttribute('aria-pressed', 'true');

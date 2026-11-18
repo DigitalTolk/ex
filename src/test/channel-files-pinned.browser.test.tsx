@@ -679,7 +679,10 @@ describe('channel → header toggles → files + pinned panels (full route)', ()
         },
       ],
     });
-    const screen = await renderWithActiveTag('/channel/general', null);
+    // The full chat page: the tag sits in the message list, which takes its
+    // height from the app shell. Mounted bare at phone width the list has
+    // none of its own, and could measure 0 tall and draw no messages at all.
+    const screen = await renderRoute('/channel/general');
     await expect.element(screen.getByRole('button', { name: '#urgent' })).toBeVisible();
     await screen.getByTestId('pinned-toggle').click();
     await expect.element(screen.getByTestId('pinned-toggle')).toHaveAttribute('aria-pressed', 'true');
