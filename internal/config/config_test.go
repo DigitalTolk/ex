@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -638,4 +639,52 @@ func TestLoadEmailProviderAndFrom(t *testing.T) {
 			t.Errorf("SESConfigurationSet = %q", c.SESConfigurationSet)
 		}
 	})
+}
+
+func TestLoadBedrockInferenceProfiles(t *testing.T) {
+	const arn = "arn:aws:bedrock:eu-north-1:111122223333:application-inference-profile/abc123"
+
+	t.Run("unset leaves model ids going to Bedrock as given", func(t *testing.T) {
+		clearEnv(t)
+		t.Setenv("ENV", "development")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if len(cfg.BedrockInferenceProfiles) != 0 {
+			t.Fatalf("BedrockInferenceProfiles = %v, want none", cfg.BedrockInferenceProfiles)
+		}
+	})
+
+	t.Run("a JSON object maps model ids to profile ARNs", func(t *testing.T) {
+		clearEnv(t)
+		t.Setenv("ENV", "development")
+		// Model ids and ARNs both carry colons, which is why this is JSON and
+		// not a key:value list.
+		t.Setenv("BEDROCK_INFERENCE_PROFILES", `{"eu.example.model-v1:0":"`+arn+`"}`)
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if got := cfg.BedrockInferenceProfiles["eu.example.model-v1:0"]; got != arn {
+			t.Fatalf("profile for the model = %q, want %q", got, arn)
+		}
+	})
+
+	for name, value := range map[string]string{
+		"not JSON":       "eu.example.model=" + arn,
+		"not an object":  `["` + arn + `"]`,
+		"empty model id": `{"":"` + arn + `"}`,
+		"empty ARN":      `{"eu.example.model":""}`,
+	} {
+		t.Run("rejects "+name, func(t *testing.T) {
+			clearEnv(t)
+			t.Setenv("ENV", "development")
+			t.Setenv("BEDROCK_INFERENCE_PROFILES", value)
+			_, err := Load()
+			if err == nil || !strings.Contains(err.Error(), "invalid BEDROCK_INFERENCE_PROFILES") {
+				t.Fatalf("Load() error = %v, want it to name BEDROCK_INFERENCE_PROFILES", err)
+			}
+		})
+	}
 }

@@ -46,8 +46,13 @@ type Usage struct {
 // Config is one loop invocation.
 type Config struct {
 	ModelID string
-	System  string
-	Prompt  string
+	// InferenceProfileARN, when set, is what Converse is called with in place
+	// of ModelID: the application inference profile that attributes the call's
+	// cost. ModelID stays the model's own id, because the loop reads the model
+	// family from it (prompt caching) and an ARN names no model.
+	InferenceProfileARN string
+	System              string
+	Prompt              string
 	// Attachments ride the first user message as image/document blocks.
 	Attachments []Attachment
 	MaxIters    int   // ≤0 → itersCeiling
@@ -161,6 +166,10 @@ func Run(ctx context.Context, client Client, cfg Config) (string, Usage, error) 
 	// each request's history is a strict prefix of the next and prior
 	// checkpoints become cache hits.
 	cache := strings.Contains(cfg.ModelID, "anthropic.claude")
+	target := cfg.ModelID
+	if cfg.InferenceProfileARN != "" {
+		target = cfg.InferenceProfileARN
+	}
 	system := []types.SystemContentBlock{&types.SystemContentBlockMemberText{Value: cfg.System}}
 	if cache {
 		system = append(system, &types.SystemContentBlockMemberCachePoint{Value: types.CachePointBlock{Type: types.CachePointTypeDefault}})
@@ -170,7 +179,7 @@ func Run(ctx context.Context, client Client, cfg Config) (string, Usage, error) 
 	// (iter == maxIters-1) always returns — on an answer or on ErrTurnBudget.
 	for iter := 0; ; iter++ {
 		out, err := client.Converse(ctx, &bedrockruntime.ConverseInput{
-			ModelId:         aws.String(cfg.ModelID),
+			ModelId:         aws.String(target),
 			System:          system,
 			Messages:        cachedMessages(msgs, cache),
 			ToolConfig:      toolCfg,
