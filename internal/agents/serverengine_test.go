@@ -205,6 +205,82 @@ func TestServerEngine_LoopFailureFailsRun(t *testing.T) {
 	}
 }
 
+// With inference profiles configured, Bedrock is called with the profile of
+// the run's model, which is what tags the call for cost allocation.
+func TestServerEngine_CallsThroughInferenceProfile(t *testing.T) {
+	fx := newOrchFixture(t)
+	run := fx.startRun(t)
+	const arn = "arn:aws:bedrock:eu-north-1:111122223333:application-inference-profile/abc123"
+
+	fb := &fakeBedrock{outs: []*bedrockruntime.ConverseOutput{bedrockText("done")}}
+	e := NewServerEngine(fx.orch, nil, fb)
+	if e.InferenceProfileCount() != 0 {
+		t.Fatalf("a new engine routes %d models through a profile, want none", e.InferenceProfileCount())
+	}
+	e.SetInferenceProfiles(map[string]string{run.Model: arn})
+	if e.InferenceProfileCount() != 1 {
+		t.Fatalf("profile count = %d, want 1", e.InferenceProfileCount())
+	}
+	dispatchAndWait(t, e, run.ID)
+
+	got, _ := fx.runs.GetRun(context.Background(), run.ID)
+	if got.State != model.RunStateCompleted {
+		t.Fatalf("state: %s (fail=%q)", got.State, got.FailReason)
+	}
+	if id := aws.ToString(fb.calls[0].ModelId); id != arn {
+		t.Fatalf("Converse model id = %q, want the profile ARN", id)
+	}
+}
+
+// A model with no profile is refused before any call. Letting it through
+// would send an untagged call, and Bedrock would answer with an access error
+// that reads like an outage.
+func TestServerEngine_ModelWithoutInferenceProfileFailsRun(t *testing.T) {
+	fx := newOrchFixture(t)
+	run := fx.startRun(t)
+
+	fb := &fakeBedrock{outs: []*bedrockruntime.ConverseOutput{bedrockText("never sent")}}
+	e := NewServerEngine(fx.orch, nil, fb)
+	e.SetInferenceProfiles(map[string]string{"eu.example.other-model": "arn:aws:bedrock:eu-north-1:111122223333:application-inference-profile/abc123"})
+	dispatchAndWait(t, e, run.ID)
+
+	got, _ := fx.runs.GetRun(context.Background(), run.ID)
+	if got.State != model.RunStateFailed || got.FailReason != "model_not_enabled:"+run.Model {
+		t.Fatalf("expected model_not_enabled failure, got %s/%q", got.State, got.FailReason)
+	}
+	if len(fb.calls) != 0 {
+		t.Fatalf("Bedrock was called %d times for a model with no profile", len(fb.calls))
+	}
+	if post := fx.msgs.lastPost(); !strings.Contains(post, "isn't enabled") || !strings.Contains(post, run.Model) {
+		t.Fatalf("the thread must say which model is not enabled: %q", post)
+	}
+}
+
+func TestServerEngine_ModelWithoutInferenceProfileAndFailRunFailure(t *testing.T) {
+	// The model has no profile AND the fail-run write fails (row dropped after
+	// the state report) — the engine survives both and still calls nothing.
+	fx := newOrchFixture(t)
+	run := fx.startRun(t)
+	var gets int
+	fx.runs.onGetRun = func(id string) {
+		if id == run.ID {
+			gets++
+			if gets == 3 { // 1 claim, 2 state report, 3 FailRun
+				fx.runs.dropRun(run.ID)
+			}
+		}
+	}
+
+	fb := &fakeBedrock{}
+	e := NewServerEngine(fx.orch, nil, fb)
+	e.SetInferenceProfiles(map[string]string{"eu.example.other-model": "arn:aws:bedrock:eu-north-1:111122223333:application-inference-profile/abc123"})
+	dispatchAndWait(t, e, run.ID)
+
+	if len(fb.calls) != 0 {
+		t.Fatalf("Bedrock was called %d times for a model with no profile", len(fb.calls))
+	}
+}
+
 // A model that keeps calling tools through its final turn ran out of steps;
 // Bedrock itself was fine, so the run must not be reported as bedrock_error.
 // The model is told its real budget up front.

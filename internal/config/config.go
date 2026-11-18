@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -185,6 +186,13 @@ type Config struct {
 	BedrockAccessKeyID     string `env:"BEDROCK_AWS_ACCESS_KEY_ID"`
 	BedrockSecretAccessKey string `env:"BEDROCK_AWS_SECRET_ACCESS_KEY"`
 	BedrockSessionToken    string `env:"BEDROCK_AWS_SESSION_TOKEN"`
+	// BedrockInferenceProfiles names the application inference profile each
+	// model is called through, as a JSON object of model id → profile ARN.
+	// The profile carries the deployment's cost-allocation tags, so a call
+	// through it is attributed to this deployment; with the map set, a model
+	// that has no entry is refused instead of being called untagged. Empty →
+	// model ids go to Bedrock as given.
+	BedrockInferenceProfiles InferenceProfiles `env:"BEDROCK_INFERENCE_PROFILES"`
 
 	// SentryFrontendDSN, when non-empty, enables Sentry error reporting in the
 	// SPA: the server stamps it into the served index.html, so browsers and
@@ -226,6 +234,27 @@ type Config struct {
 	// OpenSearch / Elasticsearch reachable without AWS auth.
 	OpenSearchAWSRegion  string `env:"OPENSEARCH_AWS_REGION"`
 	OpenSearchAWSService string `env:"OPENSEARCH_AWS_SERVICE" envDefault:"es"` // "es" (default) or "aoss" for Serverless
+}
+
+// InferenceProfiles maps a Bedrock model id to the application inference
+// profile ARN to call it through. It is read from a JSON object: model ids and
+// ARNs both carry the colons a key:value list would split on.
+type InferenceProfiles map[string]string
+
+// UnmarshalText parses the JSON object. An empty model id or ARN is refused:
+// either would route a call somewhere nobody chose.
+func (p *InferenceProfiles) UnmarshalText(text []byte) error {
+	profiles := map[string]string{}
+	if err := json.Unmarshal(text, &profiles); err != nil {
+		return fmt.Errorf("must be a JSON object of model id to inference profile ARN: %w", err)
+	}
+	for modelID, arn := range profiles {
+		if modelID == "" || arn == "" {
+			return errors.New("must not contain an empty model id or inference profile ARN")
+		}
+	}
+	*p = profiles
+	return nil
 }
 
 func Load() (*Config, error) {
