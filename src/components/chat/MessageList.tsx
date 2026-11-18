@@ -244,6 +244,7 @@ function VirtuosoMessageList({
     anchorRevision,
     rows: virtuosoData.rows,
     virtuosoRef,
+    scrollerRef,
   });
   // Set once the person scrolls themselves (wheel/touch/key); ends the
   // initial bottom settle below.
