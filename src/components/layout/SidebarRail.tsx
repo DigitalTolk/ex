@@ -1,6 +1,6 @@
 import { memo, type ComponentType, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Bell, BookUser, FilePenLine, MessagesSquare } from 'lucide-react';
+import { Bell, BookUser, FilePenLine, MessagesSquare, Workflow } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { useActivityUnread } from '@/hooks/useActivity';
 import { useDrafts } from '@/hooks/useDrafts';
@@ -56,27 +56,6 @@ const ICON_MOTION = {
   twinkle: 'group-hover/rail:animate-[rail-twinkle_0.7s_ease-in-out] motion-reduce:animate-none',
   pop: 'group-hover/rail:animate-[rail-pop_0.5s_ease-in-out] motion-reduce:animate-none',
 } as const;
-
-// Agents & tools: three shapes and a spark, the AI hub's mark on the rail.
-function AgentsToolsIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={2}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-      aria-hidden="true"
-    >
-      <circle cx="7" cy="7" r="3" />
-      <circle cx="7" cy="17" r="3" />
-      <circle cx="17" cy="17" r="3" />
-      <path d="M17 3.5c.4 2.2 1.3 3.1 3.5 3.5-2.2.4-3.1 1.3-3.5 3.5-.4-2.2-1.3-3.1-3.5-3.5 2.2-.4 3.1-1.3 3.5-3.5Z" />
-    </svg>
-  );
-}
 
 function RailBadge({ value, testID }: { value: number; testID?: string }) {
   if (value <= 0) return null;
@@ -280,7 +259,7 @@ export const SidebarRail = memo(function SidebarRail({ onNavigate }: { onNavigat
               &amp; tools
             </>
           }
-          icon={AgentsToolsIcon}
+          icon={Workflow}
           motion="twinkle"
           active={page === 'agents'}
           testID="sidebar-rail-agents"

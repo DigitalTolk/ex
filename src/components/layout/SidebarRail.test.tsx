@@ -122,6 +122,11 @@ describe('SidebarRail', () => {
     expect(within(nav).getByRole('link', { name: 'Drafts' })).toHaveAttribute('href', '/drafts');
     expect(within(nav).getByRole('link', { name: 'Directory' })).toHaveAttribute('href', '/directory/channels');
     expect(within(nav).getByRole('link', { name: 'Agents and tools' })).toHaveAttribute('href', '/agents');
+    // Each stop wears its own icon; Agents & tools is the workflow mark.
+    const icon = (testID: string) => within(nav).getByTestId(testID).querySelector('svg')!.getAttribute('class');
+    expect(icon('sidebar-rail-agents')).toContain('lucide-workflow');
+    expect(icon('sidebar-rail-threads')).toContain('lucide-messages-square');
+    expect(icon('sidebar-rail-directory')).toContain('lucide-book-user');
     expect(within(nav).getByRole('button', { name: 'Activity' })).toHaveAttribute('aria-pressed', 'false');
     expect(within(nav).getByRole('button', { name: 'Pause notifications' })).toBeInTheDocument();
     expect(within(nav).getByRole('button', { name: 'Account menu' })).toBeInTheDocument();
