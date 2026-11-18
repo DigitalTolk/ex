@@ -877,11 +877,25 @@ body > :not(#root) {
     padding-left: 1.5rem;
     margin: 0.25rem 0;
   }
+  /* A quote in the composer looks as it will once sent: a quote mark and
+     muted text, no bar (the mark is the same glyph the message renders). */
   .wysiwyg-editor blockquote {
-    border-left: 3px solid var(--color-border);
-    padding-left: 0.75rem;
+    position: relative;
+    padding-left: 1.75rem;
     margin: 0.25rem 0;
     color: var(--color-muted-foreground);
+  }
+  .wysiwyg-editor blockquote::before {
+    content: '';
+    position: absolute;
+    top: 3px;
+    left: 2px;
+    width: 1rem;
+    height: 1rem;
+    background-color: var(--color-border-strong);
+    -webkit-mask: var(--quote-mark) center / contain no-repeat;
+    mask: var(--quote-mark) center / contain no-repeat;
+    --quote-mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M16 3a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2 1 1 0 0 1 1 1v1a2 2 0 0 1-2 2 1 1 0 0 0-1 1v2a1 1 0 0 0 1 1 6 6 0 0 0 6-6V5a2 2 0 0 0-2-2z'/%3E%3Cpath d='M5 3a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2 1 1 0 0 1 1 1v1a2 2 0 0 1-2 2 1 1 0 0 0-1 1v2a1 1 0 0 0 1 1 6 6 0 0 0 6-6V5a2 2 0 0 0-2-2z'/%3E%3C/svg%3E");
   }
   /* Inline code styling that matches the rendered-message look so what
      the user types in the composer is what they see in the feed. */
@@ -892,4 +906,32 @@ body > :not(#root) {
     font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
     font-size: 0.875rem;
   }
+}
+
+/* A webhook card's outline (lib/card-tint): one hairline that starts in the
+   card's hue (--card-hue) at the top-left corner and fades into the ordinary
+   border. The first background paints the card's surface inside the border;
+   the second is the border itself. */
+.card-outline {
+  border: 1px solid transparent;
+  background:
+    linear-gradient(var(--color-background), var(--color-background)) padding-box,
+    linear-gradient(135deg, var(--card-hue) 0%, var(--color-border) 45%) border-box;
+}
+
+/* A pinned message wears the card's fading outline in the pin's amber, in
+   place of a bar down its side. Only the hairline is painted, over the row
+   (the mask cuts the middle out), so the row keeps its own background, its
+   hover tint and every pixel of its layout. */
+.pinned-outline::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  padding: 1px;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(135deg, var(--color-pinned) 0%, var(--color-border) 45%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
 }

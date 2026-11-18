@@ -6,6 +6,7 @@ import { useEmojiMap } from '@/hooks/useEmoji';
 import { renderMarkdown } from '@/lib/markdown';
 import { formatRelative, getInitials } from '@/lib/format';
 import { iconForAttachment, scaleToThumbnail } from '@/lib/file-helpers';
+import { QUOTE_CARD } from '@/lib/card-tint';
 import { externalHref, isSafeUrl } from '@/lib/url-safety';
 
 // Defense-in-depth for server-supplied preview URLs. The card href (through
@@ -84,7 +85,8 @@ export function UnfurlCard({
     return (
       <div
         data-testid="unfurl-card"
-        className="relative mt-1.5 flex max-w-xl flex-col gap-1.5 overflow-hidden rounded-md border border-l-4 border-l-primary bg-background p-3 dark:border-l-border-strong"
+        // The webhook card in grey: no side bar, no status icon.
+        className={`relative mt-1.5 flex max-w-xl flex-col gap-1.5 overflow-hidden rounded-lg px-4 py-3 ${QUOTE_CARD}`}
       >
         {/* Stretched link covering the whole card → navigates to the message. */}
         <a
@@ -174,10 +176,8 @@ export function UnfurlCard({
         href={externalHref(preview.url)}
         target="_blank"
         rel="noopener noreferrer"
-        // Per the design spec the web (OpenGraph) card is bg/base with a
-        // uniform subtle border (no coloured left accent) — matches the
-        // GitHub card in the reference screenshots.
-        className="flex gap-3 overflow-hidden rounded-md border border-border bg-background p-2 dark:border-border-strong"
+        // The same grey card a quoted message takes.
+        className={`flex gap-3 overflow-hidden rounded-lg p-3 ${QUOTE_CARD}`}
       >
         {safeImg(preview.image) && !imageBroken && (
           <img

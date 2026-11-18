@@ -142,6 +142,19 @@ describe('renderMarkdown (legacy regex pipeline)', () => {
     expect(p?.textContent).toBe('first\nsecond');
   });
 
+  it('marks a blockquote with a quote mark, with no bar and no box', async () => {
+    await render(wrap(<>{renderMarkdown('> Do we need a maintenance window?')}</>));
+    const quote = document.querySelector('blockquote') as HTMLElement;
+    const mark = quote.querySelector('[data-testid="quote-mark"]') as Element;
+    expect(mark).not.toBeNull();
+    const style = getComputedStyle(quote);
+    expect(style.borderLeftWidth).toBe('0px');
+    expect(style.backgroundColor).toBe('rgba(0, 0, 0, 0)');
+    // The mark sits in the indent, left of the words.
+    const words = (quote.querySelector('p') as Element).getBoundingClientRect();
+    expect(mark.getBoundingClientRect().right).toBeLessThanOrEqual(words.left);
+  });
+
   it('renders unordered lists for "- " and "* "', async () => {
     await render(wrap(<>{renderMarkdown('- one\n- two')}</>));
     const ul = document.querySelector('ul');

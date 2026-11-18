@@ -150,38 +150,103 @@ describe('MessageRichAttachments', () => {
   });
 });
 
+// Every webhook card is one card, whoever posted it: the page's surface, a
+// hairline outline that starts in the card's hue, and a status icon so the
+// meaning never rests on the hue alone. No side bar and no tinted fill.
 describe('MessageRichAttachments looks', () => {
-  // A classic webhook's card keeps the side bar it always had: alert and
-  // monitor feeds look the same as before rich webhooks.
-  it('draws a classic card with a bar in its colour and the pretext inside', () => {
+  it.each([false, true])('draws the same outlined card for a classic and a rich webhook (rich: %s)', (rich) => {
     render(
       <MessageRichAttachments
         attachments={[
-          { color: '#32cd32', pretext: 'Monitor', title: 'bastion service went up!', fields: [{ title: 'Ping', value: '90ms', short: false }] },
-          { color: 'green', text: 'named colour', image_url: '/media/unsized.webp' },
+          { rich, color: '#32cd32', pretext: 'Monitor', title: 'bastion service went up!', fields: [{ title: 'Ping', value: '90ms', short: false }] },
+          { rich, color: 'good', text: 'Slack colour name', image_url: '/media/unsized.webp' },
         ]}
       />,
     );
     const [card, named] = screen.getAllByTestId('message-rich-attachment');
-    expect(card.style.borderLeftWidth).toBe('4px');
-    expect(card.style.borderLeftColor).toMatch(/^(#32cd32|rgb\(50, 205, 50\))$/);
-    expect(card).toHaveClass('bg-background');
-    expect(card.className).not.toMatch(/bg-rt-/);
-    expect(card).toHaveTextContent('Monitor');
-    expect(screen.getByText('Ping').tagName).toBe('DIV');
-    // Only a hex colours the bar, as before.
-    expect(named.style.borderLeftColor).toBe('var(--border)');
+    for (const each of [card, named]) {
+      expect(each).toHaveClass('card-outline', '[--card-hue:var(--color-rt-green)]', 'rounded-lg');
+      // The hue is in the outline alone: no bar, no fill, no inline colour.
+      expect(each).not.toHaveAttribute('style');
+      expect(each.className).not.toMatch(/bg-rt-|border-l-/);
+    }
+    // Pretext is the line above the card, not part of it.
+    expect(card).not.toHaveTextContent('Monitor');
+    expect(screen.getByText('Monitor').closest('[data-testid="message-rich-attachment"]')).toBeNull();
+    expect(screen.getByText('Ping').tagName).toBe('DT');
     // An image with no known size still draws, without width/height.
     expect(named.querySelector('img')).not.toHaveAttribute('width');
+    expect(named.querySelector('img')).not.toHaveAttribute('height');
   });
 
-  it('tints a rich webhook’s card instead of drawing a bar', () => {
-    render(<MessageRichAttachments attachments={[{ rich: true, color: '#32cd32', pretext: 'Monitor', title: 'up', image_url: '/media/unsized.webp' }]} />);
+  it.each([
+    ['green', 'Success'],
+    ['good', 'Success'],
+    ['#FF0000', 'Error'],
+    ['danger', 'Error'],
+    ['orange', 'Warning'],
+    ['warning', 'Warning'],
+    ['blue', 'Information'],
+    ['purple', 'Note'],
+    ['brown', 'Note'],
+    ['#888', 'Note'],
+  ])('leads a %s card\'s title with the %s icon', (color, label) => {
+    render(<MessageRichAttachments attachments={[{ color, title: 'Status', text: 'Details' }]} />);
+    const icon = screen.getByTestId('card-status-icon');
+    expect(icon).toHaveAccessibleName(label);
+    // Right before the title, on its line.
+    expect(icon.parentElement).toHaveTextContent('Status');
+    expect(icon.nextSibling).toHaveTextContent('Status');
+  });
+
+  it('gives a card with no colour no icon and the plain border', () => {
+    render(<MessageRichAttachments attachments={[{ title: 'Nightly backup finished', text: 'No colour sent.' }, { text: 'No title either' }]} />);
+    const [titled, bare] = screen.getAllByTestId('message-rich-attachment');
+    expect(screen.queryByTestId('card-status-icon')).toBeNull();
+    for (const card of [titled, bare]) {
+      expect(card).toHaveClass('border', 'border-border', 'bg-background');
+      expect(card).not.toHaveClass('card-outline', 'flex');
+    }
+  });
+
+  it("lets the sender's own emoji stand in for the status icon", () => {
+    render(<MessageRichAttachments attachments={[{ icon: '🚀', color: 'green', title: 'api deployed' }]} />);
+    expect(screen.queryByTestId('card-status-icon')).toBeNull();
+    expect(screen.getByTestId('message-rich-attachment')).toHaveTextContent('🚀api deployed');
+  });
+
+  it('leads a card that has no title with its status icon, beside the text', () => {
+    render(<MessageRichAttachments attachments={[{ color: 'red', text: 'Deploy to production failed' }]} />);
     const card = screen.getByTestId('message-rich-attachment');
-    expect(card).toHaveClass('bg-rt-green-bg/70', 'dark:bg-rt-green-bg/40', 'border-rt-green/15');
-    expect(card).not.toHaveAttribute('style');
-    expect(card).not.toHaveTextContent('Monitor');
-    expect(card.querySelector('img')).not.toHaveAttribute('height');
+    expect(card).toHaveClass('flex');
+    expect(card.firstElementChild).toBe(screen.getByTestId('card-status-icon'));
+    expect(card.lastElementChild).toHaveTextContent('Deploy to production failed');
+  });
+});
+
+// A card needs no mark from the server to draw all it carries: one posted
+// before rich webhooks were marked shows its blocks and its icon like any
+// other. (Such cards once fell to a second renderer that drew neither.)
+describe('MessageRichAttachments without the rich mark', () => {
+  it('draws an unmarked card’s blocks', () => {
+    render(
+      <MessageRichAttachments
+        attachments={[
+          { color: '#E01E5A', blocks: [{ type: 'section', block_id: 'b1', text: { type: 'markdown', text: '**TypeError** in PaymentForm.tsx' } }] },
+        ]}
+      />,
+    );
+    const card = screen.getByTestId('message-rich-attachment');
+    expect(card).toContainElement(screen.getByTestId('message-blocks'));
+    expect(screen.getByText('TypeError').tagName).toBe('STRONG');
+    expect(card).toHaveClass('card-outline', '[--card-hue:var(--color-rt-red)]');
+  });
+
+  it('draws an unmarked card’s icon', () => {
+    render(<MessageRichAttachments attachments={[{ icon: '🚨', color: 'red', text: 'Deploy to production failed' }]} />);
+    const card = screen.getByTestId('message-rich-attachment');
+    expect(card).toHaveTextContent('🚨');
+    expect(card).toHaveClass('flex');
   });
 });
 

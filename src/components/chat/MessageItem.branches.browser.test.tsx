@@ -183,6 +183,36 @@ describe('MessageItem desktop toolbar + menu branches', () => {
     }
   });
 
+  it('outlines a pinned message like a card, with no side bar and nothing moved', async () => {
+    const measure = () => {
+      const row = document.querySelector('[data-message-id]') as HTMLElement;
+      const text = (row.querySelector('[data-testid="message-text-column"]') as HTMLElement).getBoundingClientRect();
+      return { row, height: row.getBoundingClientRect().height, textLeft: text.left - row.getBoundingClientRect().left };
+    };
+    const plain = await renderWithProviders(
+      <MessageItem message={makeMessage()} authorName="Alice" isOwn channelId="channel-1" channelSlug="general" currentUserId="user-1" />,
+    );
+    const before = measure();
+    expect(getComputedStyle(before.row, '::before').content).toBe('none');
+    await plain.unmount();
+
+    await renderWithProviders(
+      <MessageItem message={makeMessage({ pinned: true })} authorName="Alice" isOwn channelId="channel-1" channelSlug="general" currentUserId="user-1" />,
+    );
+    const pinned = measure();
+    // The outline is a hairline painted over the row: a gradient from the
+    // pin's colour, which takes no clicks and no room.
+    const outline = getComputedStyle(pinned.row, '::before');
+    expect(outline.backgroundImage).toContain('linear-gradient(135deg');
+    expect(outline.paddingLeft).toBe('1px');
+    expect(outline.pointerEvents).toBe('none');
+    expect(getComputedStyle(pinned.row).borderLeftWidth).toBe('0px');
+    expect(pinned.textLeft).toBe(before.textLeft);
+    // The pinned row is taller only by its "Pinned" label line, if at all.
+    expect(Math.abs(pinned.height - before.height)).toBeLessThan(2);
+    expect(document.querySelector('[aria-label="Pinned"]')).not.toBeNull();
+  });
+
   it('toggles pin from the kebab menu (pinned message variant)', async () => {
     if (window.innerWidth <= 767) return;
     const screen = await renderWithProviders(

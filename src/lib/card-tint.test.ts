@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cardClass, cardTint } from './card-tint';
+import { cardClass, cardTint, HUE_TEXT, QUOTE_CARD } from './card-tint';
 
 describe('cardTint', () => {
   it('takes a palette name as is, and no colour as the theme default', () => {
@@ -31,9 +31,20 @@ describe('cardTint', () => {
     expect(Object.fromEntries(Object.keys(want).map((c) => [c, cardTint(c)]))).toEqual(want);
   });
 
-  it("edges a tinted card in its own hue, and the plain card in the theme's", () => {
-    // Thinner than a callout's tint, and thinner still in dark mode.
-    expect(cardClass('danger')).toBe('bg-rt-red-bg/70 dark:bg-rt-red-bg/40 border-rt-red/15');
-    expect(cardClass()).toBe('border-border bg-background');
+  it("outlines a coloured card from its own hue, and the plain card in the theme's border", () => {
+    // No fill and no side bar: .card-outline reads the hue from --card-hue.
+    expect(cardClass('danger')).toBe('card-outline [--card-hue:var(--color-rt-red)]');
+    expect(cardClass('#0a0')).toBe('card-outline [--card-hue:var(--color-rt-green)]');
+    expect(cardClass()).toBe('border border-border bg-background');
+    expect(cardClass('not-a-color')).toBe('border border-border bg-background');
+  });
+
+  it('gives a quoted message and a link preview the same card in grey', () => {
+    expect(QUOTE_CARD).toBe(cardClass('gray'));
+  });
+
+  it("colours a card's status icon in the card's hue", () => {
+    expect(HUE_TEXT.red).toBe('text-rt-red');
+    expect(Object.keys(HUE_TEXT).sort()).toEqual(['blue', 'brown', 'gray', 'green', 'orange', 'purple', 'red', 'yellow']);
   });
 });

@@ -39,24 +39,42 @@ export function cardTint(color?: string): RichColor | null {
   return 'purple';
 }
 
-// A card is a bigger box than a callout or a pill, so it takes its tint
-// thinner: most of it in light mode, well under half in dark, where a full
-// tint over a whole card reads as a coloured slab. Its edge is its own hue,
-// faint, so the paler tint still has a shape against the chat.
-const CARD: Record<RichColor, string> = {
-  gray: 'bg-rt-gray-bg/70 dark:bg-rt-gray-bg/40 border-rt-gray/15',
-  brown: 'bg-rt-brown-bg/70 dark:bg-rt-brown-bg/40 border-rt-brown/15',
-  orange: 'bg-rt-orange-bg/70 dark:bg-rt-orange-bg/40 border-rt-orange/15',
-  yellow: 'bg-rt-yellow-bg/70 dark:bg-rt-yellow-bg/40 border-rt-yellow/15',
-  green: 'bg-rt-green-bg/70 dark:bg-rt-green-bg/40 border-rt-green/15',
-  blue: 'bg-rt-blue-bg/70 dark:bg-rt-blue-bg/40 border-rt-blue/15',
-  purple: 'bg-rt-purple-bg/70 dark:bg-rt-purple-bg/40 border-rt-purple/15',
-  red: 'bg-rt-red-bg/70 dark:bg-rt-red-bg/40 border-rt-red/15',
+// Every webhook card, classic or rich, is one card: the page's own surface
+// with a hairline outline that starts in the card's hue at its top-left
+// corner and fades into the ordinary border (.card-outline in index.css
+// reads --card-hue). No fill and no side bar: the hue is a hint, and the
+// card's status icon carries the meaning for anyone who can't tell the hues
+// apart.
+const HUE: Record<RichColor, string> = {
+  gray: '[--card-hue:var(--color-rt-gray)]',
+  brown: '[--card-hue:var(--color-rt-brown)]',
+  orange: '[--card-hue:var(--color-rt-orange)]',
+  yellow: '[--card-hue:var(--color-rt-yellow)]',
+  green: '[--card-hue:var(--color-rt-green)]',
+  blue: '[--card-hue:var(--color-rt-blue)]',
+  purple: '[--card-hue:var(--color-rt-purple)]',
+  red: '[--card-hue:var(--color-rt-red)]',
 };
 
-// cardClass is the background and border colour a card with this `color`
-// takes.
+// The hue as a text colour, for the card's status icon.
+export const HUE_TEXT: Record<RichColor, string> = {
+  gray: 'text-rt-gray',
+  brown: 'text-rt-brown',
+  orange: 'text-rt-orange',
+  yellow: 'text-rt-yellow',
+  green: 'text-rt-green',
+  blue: 'text-rt-blue',
+  purple: 'text-rt-purple',
+  red: 'text-rt-red',
+};
+
+// cardClass is the surface and outline a card with this `color` takes; one
+// with no colour ex can read gets the plain bordered card.
 export function cardClass(color?: string): string {
   const tint = cardTint(color);
-  return tint ? CARD[tint] : 'border-border bg-background';
+  return tint ? `card-outline ${HUE[tint]}` : 'border border-border bg-background';
 }
+
+// A quoted message and a link preview are the same card in grey: they carry
+// no status, so no hue and no icon.
+export const QUOTE_CARD = `card-outline ${HUE.gray}`;

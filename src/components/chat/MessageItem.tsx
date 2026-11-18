@@ -929,7 +929,8 @@ function MessageItemImpl({
       // same distance apart, and every new author the same distance from
       // the lines before, however many there were.
       className={`group relative flex items-start gap-3 rounded-md px-3 mobile:gap-2 mobile:px-2 ${firstInGroup ? 'pt-3 pb-0.5' : 'py-0.5'} hover:bg-chat-hover ${
-        message.pinned ? 'border-l-2 border-pinned pl-2.5' : ''
+        // A pinned message is outlined like a card, in the pin's colour.
+        message.pinned ? 'pinned-outline' : ''
       } ${highlighted ? 'ring-1 ring-inset ring-amber-400/50 rounded-md' : ''} touch:select-none touch:touch-pan-y touch:[-webkit-touch-callout:none] touch:[-webkit-user-select:none]`}
       data-pending={pendingState}
     >

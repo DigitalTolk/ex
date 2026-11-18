@@ -1,4 +1,5 @@
 import { memo, type ReactNode } from 'react';
+import { Quote } from 'lucide-react';
 import { CodeBlock } from '@/components/chat/CodeBlock';
 import { EmojiGlyph } from '@/components/EmojiGlyph';
 import { formatDate } from '@/lib/block-text';
@@ -64,7 +65,9 @@ function RichPart({ node }: { node: RichNode }) {
       );
     case 'quote':
       return (
-        <blockquote className="border-l-2 border-border-strong pl-3 whitespace-pre-wrap text-secondary-foreground">
+        // The same quote a message's "> …" draws: a mark, no bar.
+        <blockquote className="relative pl-7 whitespace-pre-wrap text-muted-foreground">
+          <Quote className="absolute top-[3px] left-0.5 h-4 w-4 fill-current text-border-strong" aria-hidden="true" />
           <Spans spans={node.spans} />
         </blockquote>
       );

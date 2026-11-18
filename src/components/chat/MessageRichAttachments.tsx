@@ -4,7 +4,9 @@ import { renderMarkdown } from '@/lib/markdown';
 import { externalHref, isSafeUrl } from '@/lib/url-safety';
 import { BlockList } from '@/components/chat/blocks/MessageBlocks';
 import { BlockIcon } from '@/components/chat/blocks/BlockIcon';
-import { cardClass } from '@/lib/card-tint';
+import { CircleCheck, CircleDot, CircleX, Info, TriangleAlert, type LucideIcon } from 'lucide-react';
+import type { RichColor } from '@/types';
+import { cardClass, cardTint, HUE_TEXT } from '@/lib/card-tint';
 import { cn } from '@/lib/utils';
 
 // Image src must be a real fetchable URL — http(s) only. isSafeUrl also admits
@@ -23,11 +25,46 @@ const MarkdownField = memo(function MarkdownField({ text, className }: { text: s
   return <div className={className}>{renderMarkdown(text)}</div>;
 });
 
+// The meaning of a card's colour as a shape, so it never rests on colour
+// alone (some people can't tell the hues apart): done, failed, warning, for
+// your information, or simply marked.
+const STATUS_ICON: Record<RichColor, LucideIcon> = {
+  green: CircleCheck,
+  red: CircleX,
+  orange: TriangleAlert,
+  yellow: TriangleAlert,
+  blue: Info,
+  purple: CircleDot,
+  brown: CircleDot,
+  gray: CircleDot,
+};
+const STATUS_LABEL: Record<RichColor, string> = {
+  green: 'Success',
+  red: 'Error',
+  orange: 'Warning',
+  yellow: 'Warning',
+  blue: 'Information',
+  purple: 'Note',
+  brown: 'Note',
+  gray: 'Note',
+};
+
+// What leads a card: its own emoji when the sender chose one, else the status
+// icon its colour stands for, else nothing.
+function hasLead(att: MessageAttachment): boolean {
+  return !!att.icon || cardTint(att.color) !== null;
+}
+
+function CardLead({ att }: { att: MessageAttachment }) {
+  if (att.icon) return <BlockIcon icon={att.icon} size="lg" className="shrink-0" />;
+  const tint = cardTint(att.color);
+  if (!tint) return null;
+  const Icon = STATUS_ICON[tint];
+  return <Icon className={`h-[18px] w-[18px] shrink-0 ${HUE_TEXT[tint]}`} role="img" aria-label={STATUS_LABEL[tint]} data-testid="card-status-icon" />;
+}
+
 export function MessageRichAttachments({ attachments, onContentHeightChange }: { attachments?: MessageAttachment[]; onContentHeightChange?: () => void }) {
   if (!attachments?.length) return null;
-  // A classic webhook's cards look exactly as they always did; only a rich
-  // webhook's cards (marked by the server) take the tinted look.
-  if (!attachments.some((att) => att.rich)) return <ClassicAttachments attachments={attachments} onContentHeightChange={onContentHeightChange} />;
   return (
     // Capped so a card reads as one card on a wide screen, not a banner.
     <div className="mt-2 max-w-2xl space-y-2">
@@ -37,13 +74,12 @@ export function MessageRichAttachments({ attachments, onContentHeightChange }: {
           {att.pretext && <MarkdownField className="text-sm prose-message" text={att.pretext} />}
           <div
             data-testid="message-rich-attachment"
-            // Notion-style: a colour tints the whole card; none is the theme's
-            // plain card. Secondary text is the foreground, faded, so it keeps
-            // its contrast on every tint.
-            className={cn('relative overflow-hidden rounded-lg border px-4 py-3', !att.title && att.icon && 'flex gap-2.5', cardClass(att.color))}
+            // One card for every webhook, classic or rich: the page's surface,
+            // an outline that starts in the card's hue, and a status icon.
+            className={cn('relative overflow-hidden rounded-lg px-4 py-3', !att.title && hasLead(att) && 'flex gap-2.5', cardClass(att.color))}
           >
             {/* No title: the icon leads the card, beside its content, as in a callout. */}
-            {!att.title && att.icon && <BlockIcon icon={att.icon} size="lg" className="shrink-0" />}
+            {!att.title && <CardLead att={att} />}
             {/* The first part sits at the card's top edge, whatever it is. */}
             <div className="min-w-0 flex-1 [&>*:first-child]:mt-0">
               {safeImg(att.thumb_url) && (
@@ -55,14 +91,14 @@ export function MessageRichAttachments({ attachments, onContentHeightChange }: {
                 />
               )}
               {att.author_name && (
-                <div className="mb-1 flex items-center gap-1.5 text-xs font-medium text-foreground/70">
+                <div className="mb-1 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
                   {safeImg(att.author_icon) && <img src={safeImg(att.author_icon)} alt="" className="h-4 w-4 rounded-sm" onLoad={onContentHeightChange} />}
                   {externalHref(att.author_link) ? <a href={att.author_link} target="_blank" rel="noreferrer" className={LINK}>{att.author_name}</a> : att.author_name}
                 </div>
               )}
               {att.title && (
                 <div className="mb-1 flex items-center gap-2 text-sm font-semibold">
-                  {att.icon && <BlockIcon icon={att.icon} size="lg" className="shrink-0" />}
+                  <CardLead att={att} />
                   {externalHref(att.title_link) ? <a href={att.title_link} target="_blank" rel="noreferrer" className={LINK}>{att.title}</a> : att.title}
                 </div>
               )}
@@ -71,7 +107,7 @@ export function MessageRichAttachments({ attachments, onContentHeightChange }: {
                 <dl className="mt-3 grid grid-cols-1 gap-x-4 gap-y-2.5 sm:grid-cols-2">
                   {att.fields.map((field, fieldIndex) => (
                     <div key={fieldIndex} className={field.short ? 'min-w-0' : 'min-w-0 sm:col-span-2'}>
-                      {field.title && <dt className="text-xs font-medium text-foreground/70">{field.title}</dt>}
+                      {field.title && <dt className="text-xs font-medium text-muted-foreground">{field.title}</dt>}
                       {field.value && (
                         <dd>
                           <MarkdownField className="text-sm prose-message" text={field.value} />
@@ -98,7 +134,7 @@ export function MessageRichAttachments({ attachments, onContentHeightChange }: {
                 />
               )}
               {(att.footer || att.footer_icon) && (
-                <div className="clear-both mt-3 flex items-center gap-1.5 border-t border-foreground/10 pt-2 text-xs text-foreground/70">
+                <div className="clear-both mt-3 flex items-center gap-1.5 border-t border-border pt-2 text-xs text-muted-foreground">
                   {safeImg(att.footer_icon) && <img src={safeImg(att.footer_icon)} alt="" className="h-4 w-4 rounded-sm" onLoad={onContentHeightChange} />}
                   {att.footer}
                 </div>
@@ -114,76 +150,3 @@ export function MessageRichAttachments({ attachments, onContentHeightChange }: {
 // Links in a card's header read as text with a quiet underline, Notion-style,
 // rather than the blue of links in a message body.
 const LINK = 'underline decoration-foreground/30 underline-offset-2 hover:decoration-foreground';
-
-// The card a classic webhook posts: a bar in its colour down the left edge,
-// the pretext inside. Unchanged from before rich webhooks, so existing
-// integrations (alerts, monitors) keep the look people know.
-function ClassicAttachments({ attachments, onContentHeightChange }: { attachments: MessageAttachment[]; onContentHeightChange?: () => void }) {
-  return (
-    <div className="mt-2 space-y-2">
-      {attachments.map((att, index) => (
-        <div
-          key={index}
-          data-testid="message-rich-attachment"
-          className="relative overflow-hidden rounded-md border bg-background p-3"
-          style={{ borderLeftWidth: 4, borderLeftColor: validColor(att.color) ?? 'var(--border)' }}
-        >
-          {safeImg(att.thumb_url) && (
-            <img
-              src={safeImg(att.thumb_url)}
-              alt=""
-              className="float-right ml-3 h-[75px] w-[75px] rounded object-cover"
-              onLoad={onContentHeightChange}
-            />
-          )}
-          {att.pretext && <MarkdownField className="mb-2 text-sm prose-message" text={att.pretext} />}
-          {att.author_name && (
-            <div className="mb-1 flex items-center gap-1.5 text-sm font-medium">
-              {safeImg(att.author_icon) && <img src={safeImg(att.author_icon)} alt="" className="h-4 w-4 rounded-sm" onLoad={onContentHeightChange} />}
-              {externalHref(att.author_link) ? <a href={att.author_link} target="_blank" rel="noreferrer" className="text-link">{att.author_name}</a> : att.author_name}
-            </div>
-          )}
-          {att.title && (
-            <div className="mb-1 text-sm font-semibold">
-              {externalHref(att.title_link) ? <a href={att.title_link} target="_blank" rel="noreferrer" className="text-link">{att.title}</a> : att.title}
-            </div>
-          )}
-          {att.text && <MarkdownField className="text-sm prose-message" text={att.text} />}
-          {att.fields?.length ? (
-            <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
-              {att.fields.map((field, fieldIndex) => (
-                <div key={fieldIndex} className={field.short ? '' : 'sm:col-span-2'}>
-                  {field.title && <div className="text-sm font-semibold">{field.title}</div>}
-                  {field.value && <MarkdownField className="text-sm prose-message" text={field.value} />}
-                </div>
-              ))}
-            </div>
-          ) : null}
-          {safeImg(att.image_url) && (
-            <img
-              src={safeImg(att.image_url)}
-              alt=""
-              width={att.image_width || undefined}
-              height={att.image_height || undefined}
-              className="mt-2 h-auto max-h-[300px] w-auto max-w-full rounded object-contain"
-              onLoad={onContentHeightChange}
-            />
-          )}
-          {(att.footer || att.footer_icon) && (
-            <div className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
-              {safeImg(att.footer_icon) && <img src={safeImg(att.footer_icon)} alt="" className="h-4 w-4 rounded-sm" onLoad={onContentHeightChange} />}
-              {att.footer}
-            </div>
-          )}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// A classic card's bar takes a hex colour as sent; anything else gets the
-// plain border.
-function validColor(value?: string) {
-  if (!value) return null;
-  return /^#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/.test(value) ? value : null;
-}
