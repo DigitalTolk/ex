@@ -1061,14 +1061,17 @@ describe('mobile inline editing (conversation composer)', () => {
     await expect.element(screen.getByText('text to clear')).toBeVisible();
     dispatchEditMessage({ messageId: 'own-blank' });
     await expect.element(screen.getByRole('button', { name: 'Save' })).toBeVisible();
-    await vi.waitFor(() => {
-      expect(document.body.textContent ?? '').toContain('keeper.png');
-    }, { timeout: 15000 });
+    // The attachment's chip in the COMPOSER: the name alone also shows on the
+    // message in the list, and a Save before the chip is there has nothing to
+    // keep the emptied message alive, so it does nothing.
+    await expect.poll(() => document.querySelector('[data-testid="attachment-chip"]')?.textContent ?? '').toContain('keeper.png');
     // Clearing the text is a real change (the attachment keeps the message
     // non-empty, so this is NOT the blank-edit close path) → PATCH fires.
     const editor = screen.getByLabelText('Message input');
     await editor.click();
     await editor.fill('');
+    // Save once the text is gone from the editor, as the person would see it.
+    await expect.poll(() => (editor.element().textContent ?? '').trim()).toBe('');
     await screen.getByRole('button', { name: 'Save' }).click();
     await vi.waitFor(() => {
       expect(fetchCalls().some((u) => u.startsWith('PATCH') && u.includes(`/conversations/${DM_ID}/messages/own-blank`))).toBe(true);
