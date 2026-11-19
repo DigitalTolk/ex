@@ -16,7 +16,7 @@ import (
 const sniffHeadBytes = 4096
 
 // claimedKind is a file type the app opens in its own viewer — a PDF in the
-// PDF reader, an MP4 in the video player — so a file that claims to be one
+// PDF reader, an MP4 or a QuickTime movie in the video player — so a file that claims to be one
 // must really be one. A file claims it by its declared content type or by
 // its file name's extension, whichever the client sent; its first bytes
 // decide.
@@ -26,6 +26,8 @@ type claimedKind struct {
 	extensions  []string
 	// What mimetype may detect for the bytes to count as this kind.
 	detected []string
+	// video: it plays in the app's video player and takes a poster.
+	video bool
 }
 
 var claimedKinds = []claimedKind{
@@ -42,6 +44,15 @@ var claimedKinds = []claimedKind{
 		// Any ISO media file is video/mp4 to mimetype unless it is something
 		// more specific (an M4A, a HEIC photo, a 3GP): only these two pass.
 		detected: []string{"video/mp4", "video/x-m4v"},
+		video:    true,
+	},
+	{
+		// A phone's .mov. Its inside is often MP4 already, so either passes.
+		name:        "a QuickTime movie",
+		contentType: "video/quicktime",
+		extensions:  []string{".mov"},
+		detected:    []string{"video/quicktime", "video/mp4"},
+		video:       true,
 	},
 }
 

@@ -63,6 +63,19 @@ func TestSetVideoPoster_KeepsTheFrameAsTheVideosThumbnails(t *testing.T) {
 	}
 }
 
+// A phone's .mov plays in the app like an MP4, so it takes a poster too.
+func TestSetVideoPoster_TakesAQuickTimeMovie(t *testing.T) {
+	svc, storeM, _ := posterService(t)
+	storeM.byID["v1"].ContentType, storeM.byID["v1"].Filename = "video/quicktime", "IMG_0042.MOV"
+	a, err := svc.SetVideoPoster(context.Background(), "u1", "v1", bytes.NewReader(jpegFrame(t, 640, 360)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.ThumbnailS3Key == "" {
+		t.Fatalf("no poster kept: %+v", a)
+	}
+}
+
 func TestSetVideoPoster_StandsInForAVideoSizeTheUploadDidNotSend(t *testing.T) {
 	svc, storeM, _ := posterService(t)
 	storeM.byID["v1"].Width, storeM.byID["v1"].Height = 0, 0

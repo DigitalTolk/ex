@@ -254,6 +254,12 @@ func TestProcessUpload_ClaimedPDFOrVideoMustBeOne(t *testing.T) {
 		{"audio renamed .mp4", "clip.mp4", "video/mp4", isoMedia("M4A "), false},
 		{"a PNG called .mp4", "clip.mp4", "video/mp4", makePNG(2, 2), false},
 		{"an MP4 by its extension only", "clip.mp4", "application/octet-stream", isoMedia("mp42"), true},
+		// A phone's .mov is a QuickTime movie; one saved as MP4 inside is fine too.
+		{"a QuickTime movie", "IMG_0042.MOV", "video/quicktime", isoMedia("qt  "), true},
+		{"a MOV by its extension only", "clip.mov", "application/octet-stream", isoMedia("qt  "), true},
+		{"an MP4 named .mov", "clip.mov", "video/quicktime", isoMedia("isom"), true},
+		{"a photo renamed .mov", "clip.mov", "video/quicktime", isoMedia("heic"), false},
+		{"a PNG called .mov", "clip.mov", "video/quicktime", makePNG(2, 2), false},
 		{"a file that claims nothing", "notes.txt", "text/plain", []byte("%PDF-1.4"), true},
 	}
 	for _, tc := range cases {
