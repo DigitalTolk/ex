@@ -24,7 +24,7 @@ type fakeUserGroupStore struct {
 	groups    map[string]*model.UserGroupDetail
 	members   map[string][]string
 	handles   map[string]string
-	entra     map[string]string
+	sources   map[string]string
 	createErr error
 	updateErr error
 	// conflicts makes the next N updates fail as a concurrent write would.
@@ -44,7 +44,7 @@ type fakeUserGroupStore struct {
 func newFakeUserGroupStore() *fakeUserGroupStore {
 	return &fakeUserGroupStore{
 		groups: map[string]*model.UserGroupDetail{}, members: map[string][]string{},
-		handles: map[string]string{}, entra: map[string]string{},
+		handles: map[string]string{}, sources: map[string]string{},
 	}
 }
 
@@ -71,10 +71,10 @@ func (f *fakeUserGroupStore) CreateUserGroup(_ context.Context, g *model.UserGro
 	if _, taken := f.handles[g.Handle]; taken {
 		return store.ErrAlreadyExists
 	}
-	if _, taken := f.entra[g.EntraGroupID]; taken {
-		return store.ErrEntraGroupLinked
+	if _, taken := f.sources[g.Source.Key]; taken {
+		return store.ErrUserGroupSourceTaken
 	}
-	f.entra[g.EntraGroupID] = g.ID
+	f.sources[g.Source.Key] = g.ID
 	g.Version = 1
 	f.put(g)
 	return nil
@@ -98,13 +98,6 @@ func (f *fakeUserGroupStore) UpdateUserGroup(_ context.Context, g, previous *mod
 	}
 	if owner, taken := f.handles[g.Handle]; taken && owner != g.ID {
 		return store.ErrAlreadyExists
-	}
-	if g.EntraGroupID != previous.EntraGroupID {
-		if owner, taken := f.entra[g.EntraGroupID]; taken && owner != g.ID {
-			return store.ErrEntraGroupLinked
-		}
-		f.entra[g.EntraGroupID] = g.ID
-		delete(f.entra, previous.EntraGroupID)
 	}
 	delete(f.handles, previous.Handle)
 	g.Version = previous.Version + 1
@@ -313,22 +306,18 @@ func (c *fakeCopies) drop() {
 }
 
 type userGroupFixture struct {
-	copies   *fakeCopies
-	svc      *UserGroupService
-	store    *fakeUserGroupStore
-	people   *fakeGroupPeople
-	bots     *fakeBotNames
-	pub      *mockPublisher
-	dir      *fakeEntraDirectory
-	index    *fakeEntraIndex
-	locker   *fakeGroupSyncLocker
-	accounts *pagedAccounts
-	cache    *mockCache
+	copies *fakeCopies
+	svc    *UserGroupService
+	store  *fakeUserGroupStore
+	people *fakeGroupPeople
+	bots   *fakeBotNames
+	pub    *mockPublisher
+	status *mockCache
 }
 
-// newUserGroupFixture wires the service with Microsoft 365 in memory. Users
-// u-1, u-2, u-3, u-admin and u-member are active members; u-guest, u-bot and
-// u-gone can't be group members.
+// newUserGroupFixture wires the service in memory. Users u-1, u-2, u-3,
+// u-admin and u-member are active members; u-guest, u-bot and u-gone can't
+// be group members.
 func newUserGroupFixture() *userGroupFixture {
 	people := &fakeGroupPeople{users: map[string]*model.User{}}
 	for _, id := range []string{"u-1", "u-2", "u-3", "u-admin", "u-member"} {
@@ -342,22 +331,13 @@ func newUserGroupFixture() *userGroupFixture {
 		people: people,
 		bots:   &fakeBotNames{names: map[string]string{"deploybot": "b-1"}},
 		pub:    newMockPublisher(),
-		dir: &fakeEntraDirectory{
-			groups: map[string]*model.EntraGroup{}, members: map[string][]string{}, membersErr: map[string]error{},
-		},
-		index:    &fakeEntraIndex{m: map[string]string{}, complete: true},
-		locker:   &fakeGroupSyncLocker{held: map[string]bool{}},
-		accounts: &pagedAccounts{},
-		cache:    newMockCache(),
+		status: newMockCache(),
 	}
 	f.svc = NewUserGroupService(f.store, f.people, f.bots, f.pub)
 	f.svc.now = func() time.Time { return time.Date(2026, 11, 5, 9, 0, 0, 0, time.UTC) }
 	f.copies = newFakeCopies()
 	f.svc.SetCopies(f.copies)
-	f.svc.SetMicrosoft(UserGroupMicrosoftDeps{
-		Directory: f.dir, Index: f.index, Accounts: f.accounts, Locker: f.locker,
-		Cache: f.cache, IndexTTL: time.Hour, NewToken: func() string { return "tok" },
-	})
+	f.svc.SetSyncStatusCache(f.status)
 	return f
 }
 
@@ -367,29 +347,22 @@ var (
 	ugGuest  = UserGroupActor{ID: "u-guest", Role: model.SystemRoleGuest}
 )
 
-// msGroup puts a Microsoft 365 group "ms-<handle>" holding these ex users
-// (their object IDs are their user IDs) and returns its ID.
-func (f *userGroupFixture) msGroup(handle string, members ...string) string {
-	id := "ms-" + handle
-	f.dir.mu.Lock()
-	f.dir.groups[id] = &model.EntraGroup{ID: id, DisplayName: "MS " + handle, Kind: "security"}
-	f.dir.members[id] = slices.Clone(members)
-	f.dir.mu.Unlock()
-	f.index.mu.Lock()
-	for _, m := range members {
-		f.index.m[m] = m
-	}
-	f.index.mu.Unlock()
-	return id
-}
-
-// create makes group @handle from a Microsoft 365 group holding members.
+// create puts squad group @handle, holding members, straight into the store
+// (the directory sync makes groups; these tests exercise the rest).
 func (f *userGroupFixture) create(t *testing.T, handle string, members ...string) *model.UserGroupDetail {
 	t.Helper()
-	g, err := f.svc.Create(context.Background(), ugAdmin, UserGroupInput{Handle: handle, Name: "Group " + handle, EntraGroupID: f.msGroup(handle, members...)})
-	if err != nil {
-		t.Fatalf("Create %s: %v", handle, err)
+	ctx := context.Background()
+	g := &model.UserGroupDetail{UserGroup: model.UserGroup{
+		ID: model.UserGroupIDPrefix + handle, Handle: handle, Name: "Group " + handle, MemberCount: len(members),
+		Source: model.UserGroupSource{Kind: model.UserGroupSourceSquad, Squad: handle, Department: "Engineering", Key: "squad:" + handle},
+	}}
+	if err := f.store.CreateUserGroup(ctx, g); err != nil {
+		t.Fatalf("create %s: %v", handle, err)
 	}
+	if err := f.store.ApplyUserGroupMembers(ctx, g.ID, members, nil); err != nil {
+		t.Fatalf("members of %s: %v", handle, err)
+	}
+	g.MemberIDs = slices.Clone(members)
 	return g
 }
 
@@ -402,32 +375,6 @@ func (f *userGroupFixture) changedEvents() []string {
 		}
 	}
 	return out
-}
-
-func TestUserGroups_CreateNormalizesAndPublishes(t *testing.T) {
-	f := newUserGroupFixture()
-	entra := f.msGroup("oncall", "u-1", "u-2", "u-1", "u-guest", "u-bot", "u-gone", "u-nobody")
-	g, err := f.svc.Create(context.Background(), ugAdmin, UserGroupInput{
-		Handle: " @OnCall ", Name: "  On-call engineers ", Description: " Pages ", EntraGroupID: " " + entra + " ",
-	})
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	if !strings.HasPrefix(g.ID, model.UserGroupIDPrefix) || g.Handle != "oncall" || g.Name != "On-call engineers" || g.Description != "Pages" {
-		t.Fatalf("group = %+v", g)
-	}
-	if !slices.Equal(g.MemberIDs, []string{"u-1", "u-2"}) || g.MemberCount != 2 || g.CreatedBy != "u-admin" {
-		t.Fatalf("members = %v (%d), createdBy %q; want the eligible Microsoft 365 members", g.MemberIDs, g.MemberCount, g.CreatedBy)
-	}
-	if g.EntraGroupID != entra || g.EntraGroupName != "MS oncall" || g.SyncedAt == nil || g.SyncSkipped != 5 {
-		t.Fatalf("link = %+v", g)
-	}
-	if got := f.store.members[g.ID]; !slices.Equal(got, []string{"u-1", "u-2"}) {
-		t.Fatalf("member rows = %v", got)
-	}
-	if got := f.changedEvents(); len(got) != 1 || !strings.Contains(got[0], g.ID) {
-		t.Fatalf("usergroup.changed events = %v", got)
-	}
 }
 
 func TestUserGroups_Permissions(t *testing.T) {
@@ -448,16 +395,17 @@ func TestUserGroups_Permissions(t *testing.T) {
 		}
 	}
 
-	// Members read; only admins create and edit.
+	// Members read; only admins edit, approve and read the sync status.
 	if _, err := f.svc.List(ctx, ugMember, false); err != nil {
 		t.Fatalf("member List: %v", err)
 	}
 	for _, actor := range []UserGroupActor{ugMember, ugGuest, {Role: model.SystemRoleAdmin}} {
-		_, createErr := f.svc.Create(ctx, actor, UserGroupInput{Handle: "x" + actor.ID, Name: "X", EntraGroupID: f.msGroup("x")})
 		name := "Renamed"
 		_, updateErr := f.svc.Update(ctx, actor, g.ID, UserGroupPatch{Name: &name})
 		_, enableErr := f.svc.SetEnabled(ctx, actor, g.ID, true)
-		for op, err := range map[string]error{"Create": createErr, "Update": updateErr, "SetEnabled": enableErr} {
+		_, approveErr := f.svc.ApproveHeldRemoval(ctx, actor, g.ID)
+		_, statusErr := f.svc.SyncStatus(ctx, actor)
+		for op, err := range map[string]error{"Update": updateErr, "SetEnabled": enableErr, "ApproveHeldRemoval": approveErr, "SyncStatus": statusErr} {
 			if !errors.Is(err, ErrForbidden) {
 				t.Errorf("%+v %s = %v, want forbidden", actor, op, err)
 			}
@@ -465,87 +413,6 @@ func TestUserGroups_Permissions(t *testing.T) {
 	}
 	if f.svc.CanManage(ugMember) || !f.svc.CanManage(ugAdmin) || f.svc.CanManage(ugGuest) {
 		t.Error("CanManage disagrees with admins-only")
-	}
-}
-
-func TestUserGroups_CreateValidates(t *testing.T) {
-	f := newUserGroupFixture()
-	ctx := context.Background()
-	entra := f.msGroup("src", "u-1")
-	long := strings.Repeat("x", limits.MaxUserGroupNameChars+1)
-	longDesc := strings.Repeat("x", limits.MaxUserGroupDescriptionChars+1)
-	cases := map[string]UserGroupInput{
-		"bad handle":          {Handle: "-x", Name: "X", EntraGroupID: entra},
-		"short handle":        {Handle: "x", Name: "X", EntraGroupID: entra},
-		"reserved handle":     {Handle: "here", Name: "X", EntraGroupID: entra},
-		"everyone":            {Handle: "everyone", Name: "X", EntraGroupID: entra},
-		"blank name":          {Handle: "ok", Name: "  ", EntraGroupID: entra},
-		"long name":           {Handle: "ok", Name: long, EntraGroupID: entra},
-		"long description":    {Handle: "ok", Name: "X", Description: longDesc, EntraGroupID: entra},
-		"no Microsoft group":  {Handle: "ok", Name: "X"},
-		"blank Microsoft one": {Handle: "ok", Name: "X", EntraGroupID: "  "},
-	}
-	for name, in := range cases {
-		if _, err := f.svc.Create(ctx, ugAdmin, in); !errors.Is(err, ErrValidation) {
-			t.Errorf("%s: Create = %v, want validation error", name, err)
-		}
-	}
-	if _, err := f.svc.Create(ctx, ugAdmin, UserGroupInput{Handle: "ok", Name: "X", EntraGroupID: "ms-missing"}); !errors.Is(err, ErrNotFound) {
-		t.Errorf("Create from a missing Microsoft 365 group = %v, want not found", err)
-	}
-	if len(f.store.groups) != 0 {
-		t.Fatalf("invalid input stored %d groups", len(f.store.groups))
-	}
-}
-
-func TestUserGroups_CreateFailures(t *testing.T) {
-	f := newUserGroupFixture()
-	ctx := context.Background()
-	entra := f.msGroup("oncall", "u-1")
-	f.store.createErr = errors.New("dynamo down")
-	if _, err := f.svc.Create(ctx, ugAdmin, UserGroupInput{Handle: "oncall", Name: "X", EntraGroupID: entra}); err == nil || errors.Is(err, ErrUserGroupHandleTaken) {
-		t.Errorf("failed Create = %v, want a wrapped store error", err)
-	}
-	f.store.createErr = nil
-
-	// The members can't be written: the group exists, says its sync failed,
-	// and the next sync writes them.
-	f.store.applyErr = errors.New("dynamo down")
-	if _, err := f.svc.Create(ctx, ugAdmin, UserGroupInput{Handle: "oncall", Name: "X", EntraGroupID: entra}); err == nil {
-		t.Fatal("Create swallowed a member write error")
-	}
-	var g *model.UserGroupDetail
-	for _, row := range f.store.groups {
-		g = row
-	}
-	if g == nil || g.SyncState != model.UserGroupSyncError {
-		t.Fatalf("group after a failed member write = %+v", g)
-	}
-	f.store.applyErr = nil
-	if got, err := f.svc.SyncNow(ctx, ugAdmin, g.ID, false); err != nil || !slices.Equal(got.MemberIDs, []string{"u-1"}) || got.SyncState != "" {
-		t.Fatalf("the next sync = %+v, %v; want the members written", got, err)
-	}
-
-	f.dir.getErr = errors.New("graph down")
-	if _, err := f.svc.Create(ctx, ugAdmin, UserGroupInput{Handle: "sre", Name: "X", EntraGroupID: entra}); err == nil {
-		t.Error("Create swallowed a Graph error")
-	}
-}
-
-func TestUserGroups_HandleUniqueAcrossGroupsAndBots(t *testing.T) {
-	f := newUserGroupFixture()
-	ctx := context.Background()
-	f.create(t, "oncall")
-	entra := f.msGroup("other")
-	for _, handle := range []string{"oncall", "deploybot"} {
-		if _, err := f.svc.Create(ctx, ugAdmin, UserGroupInput{Handle: handle, Name: "X", EntraGroupID: entra}); !errors.Is(err, ErrUserGroupHandleTaken) {
-			t.Errorf("Create %q = %v, want handle taken", handle, err)
-		}
-	}
-	// Taken between the check and the write.
-	f.store.createErr = store.ErrAlreadyExists
-	if _, err := f.svc.Create(ctx, ugAdmin, UserGroupInput{Handle: "fresh", Name: "X", EntraGroupID: entra}); !errors.Is(err, ErrUserGroupHandleTaken) {
-		t.Errorf("racing Create = %v, want handle taken", err)
 	}
 }
 

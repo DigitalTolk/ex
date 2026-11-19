@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
 import { SearchInput } from '@/components/ui/search-input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Switch } from '@/components/ui/switch';
@@ -9,18 +8,18 @@ import { Label } from '@/components/ui/label';
 import { useUserGroupPermissions, useUserGroups } from '@/hooks/useUserGroups';
 import { rankedMatches } from '@/lib/fuzzy';
 import { UserGroupDetailDialog } from './UserGroupDetailDialog';
-import { UserGroupFormDialog } from './UserGroupFormDialog';
+import { UserGroupSyncReport } from './UserGroupSyncReport';
 
-// UserGroupsTab is Directory › Groups: every user group by handle, a search,
-// and — for admins — creating groups from Microsoft 365 groups, editing and
-// disabling them. "?group=<id>" opens one group (the mention card links here).
+// UserGroupsTab is Directory › Groups: every user group by handle (one per
+// Microsoft 365 department and squad), a search, and — for admins — the sync
+// report, editing and disabling. "?group=<id>" opens one group (the mention
+// card links here).
 export function UserGroupsTab() {
   const [query, setQuery] = useState('');
   const [showDisabled, setShowDisabled] = useState(false);
-  const [creating, setCreating] = useState(false);
   const [params, setParams] = useSearchParams();
   const openId = params.get('group') ?? '';
-  const { canManage, canLinkMicrosoft } = useUserGroupPermissions();
+  const { canManage } = useUserGroupPermissions();
   const { data: groups, isLoading } = useUserGroups(showDisabled);
 
   const visible = rankedMatches(groups ?? [], query, (g) => [g.handle, g.name, g.description]);
@@ -43,8 +42,8 @@ export function UserGroupsTab() {
             Show disabled
           </Label>
         </div>
-        {canLinkMicrosoft && <Button onClick={() => setCreating(true)}>Create user group</Button>}
       </div>
+      {canManage && <UserGroupSyncReport />}
 
       {isLoading ? (
         <div className="space-y-1">
@@ -53,7 +52,7 @@ export function UserGroupsTab() {
         </div>
       ) : visible.length === 0 ? (
         <p className="text-sm text-muted-foreground">
-          {query ? 'No user groups match.' : 'No user groups yet.'}
+          {query ? 'No user groups match.' : "No user groups yet. They're made from Microsoft 365 departments and squads."}
         </p>
       ) : (
         <ul className="space-y-1" aria-label="User groups">
@@ -81,12 +80,7 @@ export function UserGroupsTab() {
         </ul>
       )}
 
-      {creating && (
-        <UserGroupFormDialog onClose={() => setCreating(false)} onSaved={(g) => open(g.id)} />
-      )}
-      {openId && (
-        <UserGroupDetailDialog key={openId} groupId={openId} canManage={canManage} canLinkMicrosoft={canLinkMicrosoft} onClose={close} />
-      )}
+      {openId && <UserGroupDetailDialog key={openId} groupId={openId} canManage={canManage} onClose={close} />}
     </div>
   );
 }

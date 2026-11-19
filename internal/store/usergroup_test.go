@@ -18,7 +18,8 @@ func newTestUserGroup(id, handle string) *model.UserGroupDetail {
 	return &model.UserGroupDetail{
 		UserGroup: model.UserGroup{
 			ID: id, Handle: handle, Name: "Group " + handle, Description: "desc",
-			MemberCount: 2, CreatedBy: "u-admin", CreatedAt: now, UpdatedAt: now,
+			MemberCount: 2, CreatedAt: now, UpdatedAt: now,
+			Source: model.UserGroupSource{Kind: model.UserGroupSourceSquad, Squad: handle, Department: "Engineering", Key: "squad:" + handle},
 		},
 		// Members are rows of their own: never written with the group's row.
 		MemberIDs: []string{"u-ignored"},
@@ -222,61 +223,39 @@ func TestUserGroupStore_FaultArms(t *testing.T) {
 	}
 }
 
-func TestUserGroupStore_EntraClaimIsUniqueAndMoves(t *testing.T) {
+// One group per department or squad: a second group on the same source is
+// refused, and an update (which never changes the source) keeps the claim.
+func TestUserGroupStore_SourceClaimIsUnique(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
 	s := NewUserGroupStore(db)
 
-	linked := newTestUserGroup("group-1", "oncall")
-	linked.EntraGroupID = "entra-A"
-	if err := s.CreateUserGroup(ctx, linked); err != nil {
-		t.Fatalf("create linked: %v", err)
+	g := newTestUserGroup("group-1", "dope")
+	if err := s.CreateUserGroup(ctx, g); err != nil {
+		t.Fatalf("create: %v", err)
 	}
-	if got, _ := s.GetUserGroup(ctx, "group-1"); got.EntraGroupID != "entra-A" {
-		t.Fatalf("stored link = %q", got.EntraGroupID)
-	}
-
-	// Another group can't be created on, or linked to, the same Entra group.
-	dup := newTestUserGroup("group-2", "sre")
-	dup.EntraGroupID = "entra-A"
-	if err := s.CreateUserGroup(ctx, dup); !errors.Is(err, ErrEntraGroupLinked) {
-		t.Fatalf("create on a linked Entra group = %v, want ErrEntraGroupLinked", err)
-	}
-	other := newTestUserGroup("group-3", "design")
-	if err := s.CreateUserGroup(ctx, other); err != nil {
-		t.Fatal(err)
-	}
-	stale := *other
-	stale.EntraGroupID = "entra-A"
-	if err := s.UpdateUserGroup(ctx, &stale, other); !errors.Is(err, ErrEntraGroupLinked) {
-		t.Fatalf("link to a linked Entra group = %v, want ErrEntraGroupLinked", err)
+	if got, _ := s.GetUserGroup(ctx, "group-1"); got.Source != g.Source {
+		t.Fatalf("stored source = %+v, want %+v", got.Source, g.Source)
 	}
 
-	// Relinking group-1 to entra-B frees entra-A, which group-3 can then take.
+	dup := newTestUserGroup("group-2", "dope-2")
+	dup.Source = g.Source
+	if err := s.CreateUserGroup(ctx, dup); !errors.Is(err, ErrUserGroupSourceTaken) {
+		t.Fatalf("a second group on the same source = %v, want ErrUserGroupSourceTaken", err)
+	}
+	if _, err := s.UserGroupHandleOwner(ctx, "dope-2"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("the refused group claimed its handle: %v", err)
+	}
+
+	// Renaming keeps the source claimed.
 	read, _ := s.GetUserGroup(ctx, "group-1")
-	relinked := *read
-	relinked.EntraGroupID = "entra-B"
-	if err := s.UpdateUserGroup(ctx, &relinked, read); err != nil {
-		t.Fatalf("relink: %v", err)
+	renamed := *read
+	renamed.Handle = "dope-squad"
+	if err := s.UpdateUserGroup(ctx, &renamed, read); err != nil {
+		t.Fatalf("rename: %v", err)
 	}
-	read3, _ := s.GetUserGroup(ctx, "group-3")
-	take := *read3
-	take.EntraGroupID = "entra-A"
-	if err := s.UpdateUserGroup(ctx, &take, read3); err != nil {
-		t.Fatalf("link to the freed Entra group: %v", err)
-	}
-
-	// Unlinking frees the claim.
-	read, _ = s.GetUserGroup(ctx, "group-1")
-	unlinked := *read
-	unlinked.EntraGroupID = ""
-	if err := s.UpdateUserGroup(ctx, &unlinked, read); err != nil {
-		t.Fatalf("unlink: %v", err)
-	}
-	again := newTestUserGroup("group-4", "again")
-	again.EntraGroupID = "entra-B"
-	if err := s.CreateUserGroup(ctx, again); err != nil {
-		t.Fatalf("create on the unlinked Entra group: %v", err)
+	if err := s.CreateUserGroup(ctx, dup); !errors.Is(err, ErrUserGroupSourceTaken) {
+		t.Fatalf("source after a rename = %v, want still taken", err)
 	}
 }
 

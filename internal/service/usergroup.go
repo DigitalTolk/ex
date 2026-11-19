@@ -20,9 +20,10 @@ import (
 )
 
 // User groups, Slack-style: a named set of people mentioned together through
-// a handle ("@oncall"). Every group is linked to a Microsoft 365 group and
-// takes its members from there (usergroup_entra.go); admins choose the group,
-// its handle and its name. Mentioning a group alerts each member who can see
+// a handle ("@oncall"). Groups come from the Microsoft 365 department field,
+// one per department and one per squad, created and kept in sync by the
+// directory sweep (usergroup_sync.go); admins edit their details and enable or
+// disable them. Mentioning a group alerts each member who can see
 // the message exactly as if they had been @-mentioned by name (notification
 // fan-out); this file owns the groups themselves and the lookups the mention
 // paths make.
@@ -34,10 +35,6 @@ var reservedUserGroupHandles = map[string]bool{"all": true, "channel": true, "he
 
 // ErrUserGroupHandleTaken refuses a handle another group or a bot holds.
 var ErrUserGroupHandleTaken = apperr.Reject(ErrAlreadyExists, "that handle is taken")
-
-// ErrEntraGroupLinked refuses linking a Microsoft 365 group another user
-// group is already linked to.
-var ErrEntraGroupLinked = apperr.Reject(ErrAlreadyExists, "that Microsoft 365 group is already linked to another user group")
 
 // userGroupWriteAttempts bounds the optimistic-concurrency retries of one
 // group write.
@@ -73,15 +70,6 @@ type UserGroupActor struct {
 	Role model.SystemRole
 }
 
-// UserGroupInput is what an admin writes when creating a group: its details
-// and the Microsoft 365 group its members come from.
-type UserGroupInput struct {
-	Handle       string `json:"handle"`
-	Name         string `json:"name"`
-	Description  string `json:"description"`
-	EntraGroupID string `json:"entraGroupId"`
-}
-
 // UserGroupPatch is a partial edit of a group's details.
 type UserGroupPatch struct {
 	Handle      *string `json:"handle"`
@@ -99,11 +87,14 @@ type UserGroupService struct {
 	now       func() time.Time
 	// copies is the Redis copy of groups the mention paths read (SetCopies).
 	copies UserGroupCopies
-	// microsoft reads the Microsoft 365 groups members come from
-	// (SetMicrosoft); nil when the integration isn't configured, and then no
-	// group can be created.
-	microsoft *userGroupMicrosoft
+	// statusCache keeps the last sweep's group sync status
+	// (SetSyncStatusCache).
+	statusCache Cache
 }
+
+// SetSyncStatusCache wires where the directory sweep keeps its group sync
+// status, which admins read.
+func (s *UserGroupService) SetSyncStatusCache(c Cache) { s.statusCache = c }
 
 // UserGroupCopies is the shared copy of user groups (cache.UserGroupCopies):
 // a copy of the store, never the source. Every committed change Forgets it.
@@ -244,59 +235,6 @@ func (s *UserGroupService) HandleAvailable(ctx context.Context, actor UserGroupA
 	return true, nil
 }
 
-// Create makes a group from a Microsoft 365 group (admins only): its
-// details, then its members.
-func (s *UserGroupService) Create(ctx context.Context, actor UserGroupActor, in UserGroupInput) (*model.UserGroupDetail, error) {
-	if err := s.canLink(actor); err != nil {
-		return nil, err
-	}
-	handle, err := normalizeUserGroupHandle(in.Handle)
-	if err != nil {
-		return nil, err
-	}
-	name, err := normalizeUserGroupName(in.Name)
-	if err != nil {
-		return nil, err
-	}
-	desc, err := normalizeUserGroupDescription(in.Description)
-	if err != nil {
-		return nil, err
-	}
-	if strings.TrimSpace(in.EntraGroupID) == "" {
-		return nil, apperr.Invalid("choose the Microsoft 365 group the members come from")
-	}
-	snap, err := s.readEntraGroup(ctx, strings.TrimSpace(in.EntraGroupID), true)
-	if err != nil {
-		return nil, err
-	}
-	if err := s.handleFree(ctx, handle, ""); err != nil {
-		return nil, err
-	}
-	now := s.now()
-	g := &model.UserGroupDetail{
-		UserGroup: model.UserGroup{
-			ID:          model.UserGroupIDPrefix + store.NewID(),
-			Handle:      handle,
-			Name:        name,
-			Description: desc,
-			CreatedBy:   actor.ID,
-			CreatedAt:   now,
-			UpdatedAt:   now,
-		},
-	}
-	snap.applyTo(g, now)
-	if err := s.groups.CreateUserGroup(ctx, g); err != nil {
-		return nil, s.writeError("create", err)
-	}
-	defer s.publishChanged(ctx, g.ID)
-	if err := s.groups.ApplyUserGroupMembers(ctx, g.ID, snap.wanted, nil); err != nil {
-		s.recordSyncFailure(ctx, g.ID)
-		return nil, fmt.Errorf("user group: write members: %w", err)
-	}
-	g.MemberIDs = slices.Clone(snap.wanted)
-	return g, nil
-}
-
 // Update edits a group's handle, name or description.
 func (s *UserGroupService) Update(ctx context.Context, actor UserGroupActor, id string, patch UserGroupPatch) (*model.UserGroupDetail, error) {
 	if err := actor.canManage(); err != nil {
@@ -332,6 +270,8 @@ func (s *UserGroupService) Update(ctx context.Context, actor UserGroupActor, id 
 		if patch.Description != nil {
 			g.Description = desc
 		}
+		// From now on the sweep leaves the details as the admin set them.
+		g.AdminEdited = true
 		return nil
 	})
 }
@@ -411,8 +351,6 @@ func (s *UserGroupService) writeError(what string, err error) error {
 	switch {
 	case errors.Is(err, store.ErrAlreadyExists):
 		return ErrUserGroupHandleTaken
-	case errors.Is(err, store.ErrEntraGroupLinked):
-		return ErrEntraGroupLinked
 	}
 	return fmt.Errorf("user group: %s: %w", what, err)
 }

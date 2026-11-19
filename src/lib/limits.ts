@@ -16,17 +16,6 @@ export const MAX_USER_GROUP_DESCRIPTION_CHARS = 250;
 export const USER_GROUP_HANDLE_PATTERN = /^[a-z0-9][a-z0-9._-]{1,29}$/;
 export const RESERVED_USER_GROUP_HANDLES: ReadonlySet<string> = new Set(['all', 'channel', 'here', 'everyone']);
 
-// suggestUserGroupHandle turns a group's name into a handle candidate:
-// "On-call Engineers" → "on-call-engineers".
-export function suggestUserGroupHandle(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, '-')
-    .replace(/^[^a-z0-9]+/, '')
-    .replace(/-+$/, '')
-    .slice(0, 30);
-}
-
 export function isValidUserGroupHandle(handle: string): boolean {
   return USER_GROUP_HANDLE_PATTERN.test(handle) && !RESERVED_USER_GROUP_HANDLES.has(handle);
 }

@@ -21,7 +21,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -235,6 +234,9 @@ type UserAccount struct {
 	// longer sign in). Graph returns it only when selected; nil means it
 	// wasn't reported, which never counts as disabled.
 	AccountEnabled *bool `json:"accountEnabled"`
+	// Department is the Entra department field ("Department - Squad, Squad"),
+	// which user groups follow; "" when unset.
+	Department string `json:"department"`
 }
 
 // Enabled reports whether the account can sign in. An unreported flag
@@ -244,13 +246,13 @@ func (a UserAccount) Enabled() bool {
 }
 
 // ListUserAccounts returns every user account in the tenant with its enabled
-// flag, following Graph's paging to the end: one call per 999 accounts, so a
-// whole-tenant check stays cheap enough to run every few minutes. A page
-// link pointing anywhere but this client's Graph base URL is refused rather
-// than sent the bearer token.
+// flag and department, following Graph's paging to the end: one call per 999
+// accounts, so a whole-tenant check stays cheap enough to run every few
+// minutes. A page link pointing anywhere but this client's Graph base URL is
+// refused rather than sent the bearer token.
 func (c *Client) ListUserAccounts(ctx context.Context) ([]UserAccount, error) {
 	var accounts []UserAccount
-	path := "/users?$select=id,accountEnabled&$top=999"
+	path := "/users?$select=id,accountEnabled,department&$top=999"
 	for path != "" {
 		var page struct {
 			Value    []UserAccount `json:"value"`
@@ -281,83 +283,6 @@ func (c *Client) nextPath(nextLink string) (string, error) {
 		return "", errors.New("msgraph: next page link is outside the Graph base URL")
 	}
 	return "/" + rest, nil
-}
-
-// Group is an Entra ID group as the user-group link picker needs it.
-type Group struct {
-	ID          string   `json:"id"`
-	DisplayName string   `json:"displayName"`
-	Mail        string   `json:"mail"`
-	GroupTypes  []string `json:"groupTypes"`
-}
-
-// Kind classifies the group: "dynamic" (rule-based membership), "m365" (a
-// Microsoft 365 group) or "security".
-func (g Group) Kind() string {
-	switch {
-	case slices.Contains(g.GroupTypes, "DynamicMembership"):
-		return "dynamic"
-	case slices.Contains(g.GroupTypes, "Unified"):
-		return "m365"
-	}
-	return "security"
-}
-
-const groupSelect = "$select=id,displayName,mail,groupTypes"
-
-// SearchGroups returns up to 20 groups whose display name matches query.
-// $search needs the advanced-query header (ConsistencyLevel: eventual); a
-// group created moments ago may not be found yet.
-func (c *Client) SearchGroups(ctx context.Context, query string) ([]Group, error) {
-	query = strings.NewReplacer(`"`, "", `\`, "").Replace(strings.TrimSpace(query))
-	path := "/groups?$search=" + url.QueryEscape(`"displayName:`+query+`"`) + "&" + groupSelect + "&$top=20&$count=true"
-	var page struct {
-		Value []Group `json:"value"`
-	}
-	if err := c.do(ctx, http.MethodGet, path, map[string]string{"ConsistencyLevel": "eventual"}, nil, &page); err != nil {
-		return nil, err
-	}
-	return page.Value, nil
-}
-
-// GetGroup reads one group. ErrNotFound when it doesn't exist.
-func (c *Client) GetGroup(ctx context.Context, id string) (*Group, error) {
-	var g Group
-	if err := c.doJSON(ctx, http.MethodGet, "/groups/"+url.PathEscape(id)+"?"+groupSelect, nil, &g); err != nil {
-		return nil, err
-	}
-	return &g, nil
-}
-
-// GroupUserIDs returns the object IDs of every user in the group, nested
-// groups included (transitiveMembers), following Graph's paging; devices,
-// contacts and service principals are left out. The plain (non-cast)
-// request reads the directory itself, not the eventually consistent
-// advanced-query index, so a fresh membership change is seen.
-// ErrNotFound when the group doesn't exist.
-func (c *Client) GroupUserIDs(ctx context.Context, id string) (ids []string, err error) {
-	path := "/groups/" + url.PathEscape(id) + "/transitiveMembers?$select=id&$top=999"
-	for path != "" {
-		var page struct {
-			Value []struct {
-				Type string `json:"@odata.type"`
-				ID   string `json:"id"`
-			} `json:"value"`
-			NextLink string `json:"@odata.nextLink"`
-		}
-		if err := c.doJSON(ctx, http.MethodGet, path, nil, &page); err != nil {
-			return nil, err
-		}
-		for _, m := range page.Value {
-			if m.Type == "#microsoft.graph.user" && m.ID != "" {
-				ids = append(ids, m.ID)
-			}
-		}
-		if path, err = c.nextPath(page.NextLink); err != nil {
-			return nil, err
-		}
-	}
-	return ids, nil
 }
 
 // GetUserManager fetches a user's manager from the directory hierarchy.
@@ -476,15 +401,10 @@ const (
 )
 
 // doJSON authenticates, performs one Graph call, and decodes the JSON
-// response into dest.
+// response into dest, retrying a throttled call.
 func (c *Client) doJSON(ctx context.Context, method, path string, payload, dest any) error {
-	return c.do(ctx, method, path, nil, payload, dest)
-}
-
-// do is doJSON with extra request headers, retrying a throttled call.
-func (c *Client) do(ctx context.Context, method, path string, headers map[string]string, payload, dest any) error {
 	for attempt := 1; ; attempt++ {
-		retryAfter, err := c.once(ctx, method, path, headers, payload, dest)
+		retryAfter, err := c.once(ctx, method, path, payload, dest)
 		if retryAfter == 0 || attempt == throttleAttempts {
 			return err
 		}
@@ -505,16 +425,12 @@ func retryDelay(res *http.Response) time.Duration {
 
 // once performs one Graph call. A throttled answer returns how long to wait
 // before retrying, with the error to report if no retry is left.
-func (c *Client) once(ctx context.Context, method, path string, headers map[string]string, payload, dest any) (time.Duration, error) {
+func (c *Client) once(ctx context.Context, method, path string, payload, dest any) (time.Duration, error) {
 	tok, err := c.token()
 	if err != nil {
 		return 0, err
 	}
-	req := newRequest(ctx, c.baseURL+path, tok, method, payload)
-	for k, v := range headers {
-		req.Header.Set(k, v)
-	}
-	res, err := c.client.Do(req)
+	res, err := c.client.Do(newRequest(ctx, c.baseURL+path, tok, method, payload))
 	if err != nil {
 		return 0, fmt.Errorf("msgraph: request: %w", err)
 	}

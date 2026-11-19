@@ -2,8 +2,6 @@ package cache
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -83,94 +81,4 @@ func (c *UserGroupCopies) Forget(ctx context.Context, id string) error {
 		return fmt.Errorf("user group copies: forget %s: %w", id, err)
 	}
 	return nil
-}
-
-// EntraUserIndex maps Microsoft Entra object IDs to ex user IDs, so syncing a
-// linked user group reads only its members' entries instead of every
-// account. The directory status sweep rebuilds it whole each run (Replace);
-// a sign-in adds its user in between (Add).
-type EntraUserIndex struct {
-	rdb redis.UniversalClient
-}
-
-// NewEntraUserIndex wraps the shared Redis client.
-func NewEntraUserIndex(rdb redis.UniversalClient) *EntraUserIndex {
-	return &EntraUserIndex{rdb: rdb}
-}
-
-const (
-	entraIndexKey = "msobj:users"
-	// entraIndexBuilt marks a hash a full rebuild wrote, so an index holding
-	// only the users who signed in since a flush isn't taken as complete.
-	entraIndexBuilt = "_built"
-	// entraIndexBatch bounds one HSET while a rebuild writes the hash.
-	entraIndexBatch = 500
-)
-
-// Lookup returns the user ID of each object ID the index holds, and whether
-// the index is complete (built by a full rebuild). One round trip.
-func (x *EntraUserIndex) Lookup(ctx context.Context, objectIDs []string) (map[string]string, bool, error) {
-	fields := append([]string{entraIndexBuilt}, objectIDs...)
-	vals, err := x.rdb.HMGet(ctx, entraIndexKey, fields...).Result()
-	if err != nil {
-		return nil, false, fmt.Errorf("entra user index: read: %w", err)
-	}
-	out := make(map[string]string, len(objectIDs))
-	for i, v := range vals[1:] {
-		if s, ok := v.(string); ok {
-			out[objectIDs[i]] = s
-		}
-	}
-	return out, vals[0] != nil, nil
-}
-
-// Replace swaps the whole index for m: written under a temporary key and
-// renamed over the index, so a reader never sees a half-built one. ttl bounds
-// an index whose next rebuild never came.
-func (x *EntraUserIndex) Replace(ctx context.Context, m map[string]string, ttl time.Duration) error {
-	tmp := entraIndexKey + ":next:" + randomSuffix()
-	batch := make([]any, 0, 2*entraIndexBatch)
-	batch = append(batch, entraIndexBuilt, "1")
-	flush := func() error {
-		if err := x.rdb.HSet(ctx, tmp, batch...).Err(); err != nil {
-			return err
-		}
-		batch = batch[:0]
-		return nil
-	}
-	for objectID, userID := range m {
-		batch = append(batch, objectID, userID)
-		if len(batch) >= 2*entraIndexBatch {
-			if err := flush(); err != nil {
-				return fmt.Errorf("entra user index: write: %w", err)
-			}
-		}
-	}
-	if len(batch) > 0 {
-		if err := flush(); err != nil {
-			return fmt.Errorf("entra user index: write: %w", err)
-		}
-	}
-	pipe := x.rdb.TxPipeline()
-	pipe.PExpire(ctx, tmp, ttl)
-	pipe.Rename(ctx, tmp, entraIndexKey)
-	if _, err := pipe.Exec(ctx); err != nil {
-		x.rdb.Del(context.WithoutCancel(ctx), tmp)
-		return fmt.Errorf("entra user index: swap: %w", err)
-	}
-	return nil
-}
-
-// Add records one user (a sign-in). It never marks the index complete.
-func (x *EntraUserIndex) Add(ctx context.Context, objectID, userID string) error {
-	if err := x.rdb.HSet(ctx, entraIndexKey, objectID, userID).Err(); err != nil {
-		return fmt.Errorf("entra user index: add: %w", err)
-	}
-	return nil
-}
-
-func randomSuffix() string {
-	var b [8]byte
-	_, _ = rand.Read(b[:])
-	return hex.EncodeToString(b[:])
 }

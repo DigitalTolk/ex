@@ -8,8 +8,9 @@ import (
 )
 
 // UserGroupHandler is the user-group API (/api/v1/usergroups). Every member
-// reads groups; managing them is up to the service (admins, or every member
-// when the workspace allows it). Guests are refused.
+// reads groups; admins edit their details, enable or disable them and approve
+// held removals (the service decides). Groups themselves come from the
+// Microsoft 365 department field. Guests are refused.
 type UserGroupHandler struct {
 	svc *service.UserGroupService
 }
@@ -58,64 +59,26 @@ func (h *UserGroupHandler) HandleAvailable(w http.ResponseWriter, r *http.Reques
 }
 
 // Permissions answers GET /api/v1/usergroup-permissions: whether the caller
-// may edit groups, and create them from Microsoft 365 (the directory shows
-// its controls by it).
+// may edit groups (the directory shows its controls by it).
 func (h *UserGroupHandler) Permissions(w http.ResponseWriter, r *http.Request) {
-	actor := userGroupActor(r)
-	writeJSON(w, http.StatusOK, map[string]bool{
-		"canManage":        h.svc.CanManage(actor),
-		"canLinkMicrosoft": h.svc.CanLinkMicrosoft(actor),
-	})
+	writeJSON(w, http.StatusOK, map[string]bool{"canManage": h.svc.CanManage(userGroupActor(r))})
 }
 
-// SearchMicrosoft answers GET /api/v1/usergroup-sources/microsoft?q=.
-func (h *UserGroupHandler) SearchMicrosoft(w http.ResponseWriter, r *http.Request) {
-	groups, err := h.svc.SearchEntraGroups(r.Context(), userGroupActor(r), r.URL.Query().Get("q"))
+// SyncStatus answers GET /api/v1/usergroup-sync: the last sweep's group sync
+// and the department values it read only partly (admins).
+func (h *UserGroupHandler) SyncStatus(w http.ResponseWriter, r *http.Request) {
+	status, err := h.svc.SyncStatus(r.Context(), userGroupActor(r))
 	if err != nil {
 		writeServiceError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, groups)
+	writeJSON(w, http.StatusOK, status)
 }
 
-// PreviewMicrosoft answers GET
-// /api/v1/usergroup-sources/microsoft/{entraId}/preview?groupId=.
-func (h *UserGroupHandler) PreviewMicrosoft(w http.ResponseWriter, r *http.Request) {
-	preview, err := h.svc.PreviewLink(r.Context(), userGroupActor(r), r.PathValue("entraId"), r.URL.Query().Get("groupId"))
-	if err != nil {
-		writeServiceError(w, r, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, preview)
-}
-
-// Link answers POST /api/v1/usergroups/{id}/link.
-func (h *UserGroupHandler) Link(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		EntraGroupID string `json:"entraGroupId"`
-	}
-	if err := readJSON(r, &body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
-		return
-	}
-	g, err := h.svc.Link(r.Context(), userGroupActor(r), r.PathValue("id"), body.EntraGroupID)
-	if err != nil {
-		writeServiceError(w, r, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, g)
-}
-
-// Sync answers POST /api/v1/usergroups/{id}/sync.
-func (h *UserGroupHandler) Sync(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		ApplyRemovals bool `json:"applyRemovals"`
-	}
-	if err := readJSON(r, &body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
-		return
-	}
-	g, err := h.svc.SyncNow(r.Context(), userGroupActor(r), r.PathValue("id"), body.ApplyRemovals)
+// ApproveRemoval answers POST /api/v1/usergroups/{id}/approve-removal: the
+// next sweep applies the group's held removal.
+func (h *UserGroupHandler) ApproveRemoval(w http.ResponseWriter, r *http.Request) {
+	g, err := h.svc.ApproveHeldRemoval(r.Context(), userGroupActor(r), r.PathValue("id"))
 	if err != nil {
 		writeServiceError(w, r, err)
 		return
@@ -131,21 +94,6 @@ func (h *UserGroupHandler) ForUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, groups)
-}
-
-// Create answers POST /api/v1/usergroups.
-func (h *UserGroupHandler) Create(w http.ResponseWriter, r *http.Request) {
-	var body service.UserGroupInput
-	if err := readJSON(r, &body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
-		return
-	}
-	g, err := h.svc.Create(r.Context(), userGroupActor(r), body)
-	if err != nil {
-		writeServiceError(w, r, err)
-		return
-	}
-	writeJSON(w, http.StatusCreated, g)
 }
 
 // Update answers PATCH /api/v1/usergroups/{id}.

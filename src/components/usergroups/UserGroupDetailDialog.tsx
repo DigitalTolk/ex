@@ -5,30 +5,44 @@ import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useAllUsers } from '@/hooks/useConversations';
-import { useSetUserGroupEnabled, useSyncUserGroup, useUserGroup } from '@/hooks/useUserGroups';
+import { useApproveHeldRemoval, useSetUserGroupEnabled, useUserGroup } from '@/hooks/useUserGroups';
 import { errorMessage } from '@/lib/error-message';
-import { formatRelative, getInitials } from '@/lib/format';
-import { UserGroupFormDialog } from './UserGroupFormDialog';
-import { UserGroupLinkDialog } from './UserGroupLinkDialog';
+import { getInitials } from '@/lib/format';
+import type { UserGroupDetail } from '@/types/generated';
+import { UserGroupEditDialog } from './UserGroupEditDialog';
 
 interface Props {
   groupId: string;
   canManage: boolean;
-  // Admins with the Microsoft 365 integration: change the group's Microsoft
-  // 365 group and sync it.
-  canLinkMicrosoft: boolean;
   onClose: () => void;
 }
 
-const SYNC_STATE_TEXT: Record<string, string> = {
-  'source-missing': "The Microsoft 365 group can't be found. Members stay as last synced; choose another Microsoft 365 group or disable this one.",
-  error: "Microsoft 365 couldn't be reached at the last sync. Members stay as last synced.",
-};
+const people = (n: number) => `${n} ${n === 1 ? 'person' : 'people'}`;
 
-// UserGroupDetailDialog shows one group — its handle, name, description, its
-// Microsoft 365 group and members — and, for managers, edits it: details,
-// disable/enable, and (with the integration) its Microsoft 365 group.
-export function UserGroupDetailDialog({ groupId, canManage, canLinkMicrosoft, onClose }: Props) {
+// sourceText says where a group's members come from.
+function sourceText(g: UserGroupDetail): string {
+  return g.source.kind === 'squad' ? `Squad ${g.source.squad} in ${g.source.department}` : `Department ${g.source.department}`;
+}
+
+// heldText explains a removal the sync holds for an admin, or "" when none.
+function heldText(g: UserGroupDetail): string {
+  const what = g.source.kind === 'squad' ? 'squad' : 'department';
+  if (g.syncState === 'source-missing') {
+    return g.pendingRemoval
+      ? `No one in Microsoft 365 is in this ${what} any more. Its ${people(g.pendingRemoval)} stay until an admin approves removing them, or disables the group.`
+      : `No one in Microsoft 365 is in this ${what} any more.`;
+  }
+  if (g.syncState === 'held-removal') {
+    // A held removal always counts who would be removed.
+    return `${people(g.pendingRemoval!)} left this ${what} in Microsoft 365. Removing them waits for an admin.`;
+  }
+  return '';
+}
+
+// UserGroupDetailDialog shows one group: its handle, name, description, the
+// Microsoft 365 department or squad it follows, and its members. Admins edit
+// its details, disable or enable it, and approve a removal the sync holds.
+export function UserGroupDetailDialog({ groupId, canManage, onClose }: Props) {
   const { data: group, isLoading } = useUserGroup(groupId);
   const { data: users = [] } = useAllUsers();
   const byId = useMemo(() => new Map(users.map((u) => [u.id, u])), [users]);
@@ -36,20 +50,16 @@ export function UserGroupDetailDialog({ groupId, canManage, canLinkMicrosoft, on
   const [confirmDisable, setConfirmDisable] = useState(false);
   const [error, setError] = useState('');
   const setEnabled = useSetUserGroupEnabled();
-  const sync = useSyncUserGroup();
-  const [linking, setLinking] = useState(false);
+  const approve = useApproveHeldRemoval();
 
   const onError = (e: unknown) => setError(errorMessage(e, 'Saving failed'));
 
   if (editing && group) {
-    return <UserGroupFormDialog group={group} onClose={() => setEditing(false)} />;
-  }
-  if (linking && group) {
-    return <UserGroupLinkDialog groupId={group.id} handle={group.handle} onClose={() => setLinking(false)} />;
+    return <UserGroupEditDialog group={group} onClose={() => setEditing(false)} />;
   }
 
   const members = group?.memberIds ?? [];
-  const syncNow = (applyRemovals: boolean) => sync.mutate({ id: groupId, applyRemovals }, { onError });
+  const held = group ? heldText(group) : '';
   return (
     <>
       <Dialog open onOpenChange={onClose}>
@@ -67,38 +77,33 @@ export function UserGroupDetailDialog({ groupId, canManage, canLinkMicrosoft, on
                   {group.disabled && <Badge variant="secondary">Disabled</Badge>}
                 </p>
                 {group.description && <p className="mt-1 text-sm text-muted-foreground">{group.description}</p>}
-                {group.entraGroupId && (
-                  <div className="mt-2 space-y-0.5 text-sm text-muted-foreground" data-testid="usergroup-linked">
-                    <p>
-                      <Badge variant="secondary">Microsoft 365</Badge> Managed in Microsoft 365 · {group.entraGroupName}
-                    </p>
-                    {group.syncedAt && <p>Last synced {formatRelative(group.syncedAt)}</p>}
-                    {!!group.syncSkipped && (
-                      <p>
-                        {group.syncSkipped} {group.syncSkipped === 1 ? "person in the Microsoft 365 group isn't" : "people in the Microsoft 365 group aren't"} in ex
-                        yet.
-                      </p>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              {group.syncState === 'held-removal' && (
-                <div role="status" className="space-y-2 rounded-md border p-3 text-sm">
+                <div className="mt-2 space-y-0.5 text-sm text-muted-foreground" data-testid="usergroup-source">
                   <p>
-                    Sync needs review: {group.pendingRemoval} {group.pendingRemoval === 1 ? 'person' : 'people'} would be removed.
+                    <Badge variant="secondary">Microsoft 365</Badge> {sourceText(group)}
                   </p>
-                  {canLinkMicrosoft && (
-                    <Button size="sm" onClick={() => syncNow(true)} disabled={sync.isPending}>
-                      Apply
-                    </Button>
+                  {!!group.syncSkipped && (
+                    <p>
+                      {people(group.syncSkipped)} in this {group.source.kind === 'squad' ? 'squad' : 'department'}{' '}
+                      {group.syncSkipped === 1 ? "isn't" : "aren't"} in ex yet.
+                    </p>
                   )}
                 </div>
-              )}
-              {group.syncState && SYNC_STATE_TEXT[group.syncState] && (
-                <p role="status" className="rounded-md border p-3 text-sm">
-                  {SYNC_STATE_TEXT[group.syncState]}
-                </p>
+              </div>
+
+              {held && (
+                <div role="status" className="space-y-2 rounded-md border p-3 text-sm">
+                  <p>{held}</p>
+                  {group.removalApproved ? (
+                    <p className="text-muted-foreground">Removal approved: it happens at the next sync, within 30 minutes.</p>
+                  ) : (
+                    canManage &&
+                    !!group.pendingRemoval && (
+                      <Button size="sm" onClick={() => approve.mutate(group.id, { onError })} disabled={approve.isPending}>
+                        Approve removal
+                      </Button>
+                    )
+                  )}
+                </div>
               )}
 
               <div className="space-y-2">
@@ -133,18 +138,8 @@ export function UserGroupDetailDialog({ groupId, canManage, canLinkMicrosoft, on
             </div>
           )}
           {group && canManage && (
-            // Up to four actions: they wrap rather than widen the dialog.
+            // The actions wrap rather than widen the dialog.
             <DialogFooter className="sm:flex-wrap">
-              {canLinkMicrosoft && (
-                <>
-                  <Button variant="outline" onClick={() => setLinking(true)}>
-                    Change Microsoft 365 group
-                  </Button>
-                  <Button variant="outline" onClick={() => syncNow(false)} disabled={sync.isPending}>
-                    {sync.isPending ? 'Syncing…' : 'Sync now'}
-                  </Button>
-                </>
-              )}
               {group.disabled ? (
                 <Button variant="outline" onClick={() => setEnabled.mutate({ id: group.id, enabled: true }, { onError })}>
                   Enable group

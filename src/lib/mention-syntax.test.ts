@@ -15,7 +15,7 @@ import {
   typedUserGroupMentions,
   userGroupTokens,
 } from './non-member-mentions';
-import { isValidUserGroupHandle, suggestUserGroupHandle } from './limits';
+import { isValidUserGroupHandle } from './limits';
 import type { HastNode } from '@/types';
 
 interface FixtureCase {
@@ -124,12 +124,6 @@ describe('user-group invite helpers', () => {
 });
 
 describe('user-group handle rules', () => {
-  it('suggests a handle from a name', () => {
-    expect(suggestUserGroupHandle('On-call Engineers!')).toBe('on-call-engineers');
-    expect(suggestUserGroupHandle('  --Design  ')).toBe('design');
-    expect(suggestUserGroupHandle('x'.repeat(40))).toHaveLength(30);
-  });
-
   it('validates handles like the server', () => {
     expect(isValidUserGroupHandle('oncall')).toBe(true);
     expect(isValidUserGroupHandle('a')).toBe(false);

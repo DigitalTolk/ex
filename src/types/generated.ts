@@ -3488,9 +3488,10 @@ export interface MarkUnreadResult {
 export const UserGroupIDPrefix = "group-";
 /**
  * UserGroup is a named set of people mentioned together through its handle
- * (Slack-style "@oncall"). Its members come from the Microsoft 365 (Entra ID)
- * group it is linked to. A disabled group keeps its members and its handle
- * but is not mentionable.
+ * (Slack-style "@oncall"). Groups come from the Microsoft 365 (Entra ID)
+ * department field: one per department and one per squad, created and kept
+ * in sync by the directory sweep. A disabled group keeps its members and its
+ * handle but is not mentionable.
  */
 export interface UserGroup {
   id: string;
@@ -3503,74 +3504,104 @@ export interface UserGroup {
   createdAt: string /* RFC3339 */;
   updatedAt: string /* RFC3339 */;
   /**
-   * EntraGroupID is the Microsoft Entra ID group the members are synced
-   * from.
+   * Source is the department or squad the members come from.
    */
-  entraGroupId?: string;
+  source: UserGroupSource;
   /**
-   * EntraGroupName is the linked group's display name, refreshed on link and
-   * on Sync now.
+   * AdminEdited is set once an admin edits the handle, name or description:
+   * the sweep then never overwrites them.
    */
-  entraGroupName?: string;
+  adminEdited?: boolean;
   /**
-   * SyncedAt is when the linked group last synced successfully.
-   */
-  syncedAt?: string /* RFC3339 */;
-  /**
-   * SyncSkipped counts the Entra members who aren't group members in ex
-   * (no ex account yet, a guest, a bot or deactivated).
+   * SyncSkipped counts the people Microsoft 365 lists for the source who
+   * aren't group members in ex (no ex account yet, a guest or deactivated).
    */
   syncSkipped?: number /* int */;
   /**
-   * SyncState is why the last sync didn't apply ("" when it did).
+   * SyncState is why the last sweep didn't fully apply ("" when it did).
    */
   syncState?: UserGroupSyncState;
   /**
    * PendingRemoval is how many members a held sync would remove.
    */
   pendingRemoval?: number /* int */;
+  /**
+   * RemovalApproved: an admin approved the held removal; the next sweep
+   * applies it.
+   */
+  removalApproved?: boolean;
 }
 /**
- * UserGroupSyncState says why a linked group's last sync didn't apply.
+ * UserGroupSourceKind says what a group follows.
+ */
+export type UserGroupSourceKind = string;
+export const UserGroupSourceDepartment: UserGroupSourceKind = "department";
+export const UserGroupSourceSquad: UserGroupSourceKind = "squad";
+/**
+ * UserGroupSource is the department or squad a group's members come from.
+ * Key identifies it (case- and spacing-insensitive): "dept:<department>" or
+ * "squad:<squad>".
+ */
+export interface UserGroupSource {
+  kind: UserGroupSourceKind;
+  /**
+   * Department is the department's name; for a squad, the department most
+   * of its members list.
+   */
+  department?: string;
+  squad?: string;
+  key: string;
+}
+/**
+ * UserGroupSyncState says why a group's last sweep didn't fully apply.
  */
 export type UserGroupSyncState = string;
 /**
- * UserGroupSyncHeld: the sync would remove most members (or all of them);
- * it waits for an admin to apply it.
+ * UserGroupSyncHeld: the sweep would remove most members (or all of
+ * them); the removal waits for an admin's approval.
  */
 export const UserGroupSyncHeld: UserGroupSyncState = "held-removal";
 /**
- * UserGroupSyncSourceMissing: the Entra group is gone or unreadable; the
- * members are kept.
+ * UserGroupSyncSourceMissing: nobody in Microsoft 365 has the department
+ * or squad any more; the members are kept until an admin approves.
  */
 export const UserGroupSyncSourceMissing: UserGroupSyncState = "source-missing";
 /**
- * UserGroupSyncError: Microsoft Graph failed; members stay.
+ * UserGroupSyncStatus is the last directory sweep's group sync, for admins.
  */
-export const UserGroupSyncError: UserGroupSyncState = "error";
-/**
- * EntraGroup is a Microsoft Entra ID group as the link picker shows it.
- */
-export interface EntraGroup {
-  id: string;
-  displayName: string;
-  mail?: string;
+export interface UserGroupSyncStatus {
   /**
-   * Kind is "m365", "security" or "dynamic".
+   * LastSyncedAt is when the last sweep finished; nil before the first.
    */
-  kind: string;
+  lastSyncedAt?: string /* RFC3339 */;
+  /**
+   * Held is set while a sweep was held because far fewer departments came
+   * back than the time before; the next sweep applies if it agrees.
+   */
+  held?: boolean;
+  /**
+   * Readable is how many people had a readable department.
+   */
+  readable: number /* int */;
+  anomalies: DepartmentAnomalyReport;
 }
 /**
- * UserGroupLinkPreview is what linking a group to an Entra group would do.
+ * DepartmentAnomalyReport summarises the department values the parser read
+ * only partly: a count per kind, and up to a few example values.
  */
-export interface UserGroupLinkPreview {
-  /**
-   * Users is how many users the Entra group has (nested groups included).
-   */
-  users: number /* int */;
-  toAdd: number /* int */;
-  toRemove: number /* int */;
-  skipped: number /* int */;
+export interface DepartmentAnomalyReport {
+  people: number /* int */;
+  counts: { [key: string]: number /* int */};
+  examples: DepartmentAnomaly[];
+}
+/**
+ * DepartmentAnomaly is one unusual department value and how many people
+ * have it.
+ */
+export interface DepartmentAnomaly {
+  value: string;
+  kinds: string[];
+  people: number /* int */;
 }
 /**
  * UserGroupDetail is a group with its member IDs. The members are rows of

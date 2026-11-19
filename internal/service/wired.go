@@ -193,5 +193,6 @@ func (s *UserGroupService) Wired() error {
 		wiring.Dep{Name: "bot names", Set: s.bots != nil},
 		wiring.Dep{Name: "publisher", Set: s.publisher != nil},
 		wiring.Dep{Name: "shared copy", Set: s.copies != nil},
+		wiring.Dep{Name: "sync status", Set: s.statusCache != nil},
 	)
 }

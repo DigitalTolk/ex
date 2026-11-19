@@ -17,23 +17,23 @@ import (
 // written on both sides like channel memberships: under the group
 // (USERGROUP#<id>, MEMBER#<user>) for its member list and under the user
 // (USER#<user>, UGROUP#<id>) for the groups a user is in. Claim rows keep
-// handles and linked Entra groups unique. A handle may not equal a bot
+// handles and sources (one group per department or squad) unique. A handle may not equal a bot
 // username either: both stores check the other's claim in the same
 // transaction.
 
 func userGroupPK(id string) string           { return "USERGROUP#" + id }
 func userGroupSK(id string) string           { return "UGROUP#" + id }
 func userGroupHandlePK(handle string) string { return "UGHANDLE#" + handle }
-func entraGroupClaimPK(id string) string     { return "ENTRAGROUP#" + id }
+func userGroupSourcePK(key string) string    { return "UGSOURCE#" + key }
 func allUserGroupsGSI2PK() string            { return "ALL_USERGROUPS" }
 
 // ErrUserGroupChanged is returned when a group write expected a version the
 // group no longer has (a concurrent edit won) or the group is gone.
 var ErrUserGroupChanged = errors.New("store: user group changed concurrently")
 
-// ErrEntraGroupLinked is returned when the Entra group a write links is
-// already linked to another user group: one Entra group feeds one group.
-var ErrEntraGroupLinked = errors.New("store: entra group already linked")
+// ErrUserGroupSourceTaken is returned when another group already follows the
+// department or squad: one group per source.
+var ErrUserGroupSourceTaken = errors.New("store: user group source taken")
 
 // claimKind names what one transaction step guards, so a cancelled
 // transaction reports which condition failed.
@@ -42,14 +42,14 @@ type claimKind int
 const (
 	claimRow claimKind = iota
 	claimHandle
-	claimEntra
+	claimSource
 	claimOther
 )
 
 // transactGroup runs a group transaction, mapping a failed condition to the
 // error of the step that failed: the row's version (ErrUserGroupChanged), the
-// Entra claim (ErrEntraGroupLinked), or the handle claim or a bot's username
-// (ErrAlreadyExists).
+// source claim (ErrUserGroupSourceTaken), or the handle claim or a bot's
+// username (ErrAlreadyExists).
 func (s *UserGroupStoreImpl) transactGroup(ctx context.Context, what string, items []types.TransactWriteItem, kinds []claimKind) error {
 	_, err := s.Client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items})
 	if err == nil {
@@ -64,18 +64,14 @@ func (s *UserGroupStoreImpl) transactGroup(ctx context.Context, what string, ite
 			switch kinds[i] {
 			case claimRow:
 				return ErrUserGroupChanged
-			case claimEntra:
-				return ErrEntraGroupLinked
+			case claimSource:
+				return ErrUserGroupSourceTaken
 			default:
 				return ErrAlreadyExists
 			}
 		}
 	}
 	return fmt.Errorf("store: %s: %w", what, err)
-}
-
-func (s *UserGroupStoreImpl) claimEntraGroup(entraID, groupID string) types.TransactWriteItem {
-	return s.putNew(userGroupHandleItem{PK: entraGroupClaimPK(entraID), SK: metaSK(), GroupID: groupID})
 }
 
 func (s *UserGroupStoreImpl) deleteItem(pk string) types.TransactWriteItem {
@@ -138,8 +134,9 @@ func (s *UserGroupStoreImpl) noBotNamed(handle string) types.TransactWriteItem {
 }
 
 // CreateUserGroup writes a new group row (version 1), the claim on its handle
-// and the claim on its Entra group — all or nothing. Members are written
-// with ApplyUserGroupMembers.
+// and the claim on its source — all or nothing. Members are written with
+// ApplyUserGroupMembers. ErrAlreadyExists when the handle is taken by a group
+// or a bot; ErrUserGroupSourceTaken when another group follows the source.
 // ErrAlreadyExists when the handle is taken by a group or a bot;
 // ErrEntraGroupLinked when the Entra group is linked elsewhere.
 func (s *UserGroupStoreImpl) CreateUserGroup(ctx context.Context, g *model.UserGroupDetail) error {
@@ -148,20 +145,17 @@ func (s *UserGroupStoreImpl) CreateUserGroup(ctx context.Context, g *model.UserG
 		s.putNew(newUserGroupItem(g)),
 		s.putNew(userGroupHandleItem{PK: userGroupHandlePK(g.Handle), SK: metaSK(), GroupID: g.ID}),
 		s.noBotNamed(g.Handle),
+		s.putNew(userGroupHandleItem{PK: userGroupSourcePK(g.Source.Key), SK: metaSK(), GroupID: g.ID}),
 	}
-	kinds := []claimKind{claimOther, claimHandle, claimHandle}
-	if g.EntraGroupID != "" {
-		items = append(items, s.claimEntraGroup(g.EntraGroupID, g.ID))
-		kinds = append(kinds, claimEntra)
-	}
+	kinds := []claimKind{claimOther, claimHandle, claimHandle, claimSource}
 	return s.transactGroup(ctx, "create user group", items, kinds)
 }
 
 // UpdateUserGroup replaces a group's row when it still has the version of
-// previous (the row as read), and bumps g.Version. A changed handle or Entra
-// link moves its claim in the same transaction. ErrUserGroupChanged when the
-// group moved on (or is gone); ErrAlreadyExists when the new handle is taken;
-// ErrEntraGroupLinked when the new Entra group is linked elsewhere.
+// previous (the row as read), and bumps g.Version. A changed handle moves its
+// claim in the same transaction; a group's source never changes.
+// ErrUserGroupChanged when the group moved on (or is gone); ErrAlreadyExists
+// when the new handle is taken.
 func (s *UserGroupStoreImpl) UpdateUserGroup(ctx context.Context, g, previous *model.UserGroupDetail) error {
 	g.Version = previous.Version + 1
 	cond := mustExpr(expression.NewBuilder().WithCondition(
@@ -182,16 +176,6 @@ func (s *UserGroupStoreImpl) UpdateUserGroup(ctx context.Context, g, previous *m
 			s.deleteItem(userGroupHandlePK(previous.Handle)),
 		)
 		kinds = append(kinds, claimHandle, claimHandle, claimOther)
-	}
-	if g.EntraGroupID != previous.EntraGroupID {
-		if g.EntraGroupID != "" {
-			items = append(items, s.claimEntraGroup(g.EntraGroupID, g.ID))
-			kinds = append(kinds, claimEntra)
-		}
-		if previous.EntraGroupID != "" {
-			items = append(items, s.deleteItem(entraGroupClaimPK(previous.EntraGroupID)))
-			kinds = append(kinds, claimOther)
-		}
 	}
 	if err := s.transactGroup(ctx, "update user group", items, kinds); err != nil {
 		g.Version = previous.Version

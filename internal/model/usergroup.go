@@ -8,9 +8,10 @@ import "time"
 const UserGroupIDPrefix = "group-"
 
 // UserGroup is a named set of people mentioned together through its handle
-// (Slack-style "@oncall"). Its members come from the Microsoft 365 (Entra ID)
-// group it is linked to. A disabled group keeps its members and its handle
-// but is not mentionable.
+// (Slack-style "@oncall"). Groups come from the Microsoft 365 (Entra ID)
+// department field: one per department and one per squad, created and kept
+// in sync by the directory sweep. A disabled group keeps its members and its
+// handle but is not mentionable.
 type UserGroup struct {
 	ID          string    `json:"id" dynamodbav:"id"`
 	Handle      string    `json:"handle" dynamodbav:"handle"`
@@ -22,53 +23,81 @@ type UserGroup struct {
 	CreatedAt   time.Time `json:"createdAt" dynamodbav:"createdAt"`
 	UpdatedAt   time.Time `json:"updatedAt" dynamodbav:"updatedAt"`
 
-	// EntraGroupID is the Microsoft Entra ID group the members are synced
-	// from.
-	EntraGroupID string `json:"entraGroupId,omitempty" dynamodbav:"entraGroupId,omitempty"`
-	// EntraGroupName is the linked group's display name, refreshed on link and
-	// on Sync now.
-	EntraGroupName string `json:"entraGroupName,omitempty" dynamodbav:"entraGroupName,omitempty"`
-	// SyncedAt is when the linked group last synced successfully.
-	SyncedAt *time.Time `json:"syncedAt,omitempty" dynamodbav:"syncedAt,omitempty"`
-	// SyncSkipped counts the Entra members who aren't group members in ex
-	// (no ex account yet, a guest, a bot or deactivated).
+	// Source is the department or squad the members come from.
+	Source UserGroupSource `json:"source" dynamodbav:"source"`
+	// AdminEdited is set once an admin edits the handle, name or description:
+	// the sweep then never overwrites them.
+	AdminEdited bool `json:"adminEdited,omitempty" dynamodbav:"adminEdited,omitempty"`
+	// SyncSkipped counts the people Microsoft 365 lists for the source who
+	// aren't group members in ex (no ex account yet, a guest or deactivated).
 	SyncSkipped int `json:"syncSkipped,omitempty" dynamodbav:"syncSkipped,omitempty"`
-	// SyncState is why the last sync didn't apply ("" when it did).
+	// SyncState is why the last sweep didn't fully apply ("" when it did).
 	SyncState UserGroupSyncState `json:"syncState,omitempty" dynamodbav:"syncState,omitempty"`
 	// PendingRemoval is how many members a held sync would remove.
 	PendingRemoval int `json:"pendingRemoval,omitempty" dynamodbav:"pendingRemoval,omitempty"`
+	// RemovalApproved: an admin approved the held removal; the next sweep
+	// applies it.
+	RemovalApproved bool `json:"removalApproved,omitempty" dynamodbav:"removalApproved,omitempty"`
 }
 
-// UserGroupSyncState says why a linked group's last sync didn't apply.
+// UserGroupSourceKind says what a group follows.
+type UserGroupSourceKind string
+
+const (
+	UserGroupSourceDepartment UserGroupSourceKind = "department"
+	UserGroupSourceSquad      UserGroupSourceKind = "squad"
+)
+
+// UserGroupSource is the department or squad a group's members come from.
+// Key identifies it (case- and spacing-insensitive): "dept:<department>" or
+// "squad:<squad>".
+type UserGroupSource struct {
+	Kind UserGroupSourceKind `json:"kind" dynamodbav:"kind"`
+	// Department is the department's name; for a squad, the department most
+	// of its members list.
+	Department string `json:"department,omitempty" dynamodbav:"department,omitempty"`
+	Squad      string `json:"squad,omitempty" dynamodbav:"squad,omitempty"`
+	Key        string `json:"key" dynamodbav:"key"`
+}
+
+// UserGroupSyncState says why a group's last sweep didn't fully apply.
 type UserGroupSyncState string
 
 const (
-	// UserGroupSyncHeld: the sync would remove most members (or all of them);
-	// it waits for an admin to apply it.
+	// UserGroupSyncHeld: the sweep would remove most members (or all of
+	// them); the removal waits for an admin's approval.
 	UserGroupSyncHeld UserGroupSyncState = "held-removal"
-	// UserGroupSyncSourceMissing: the Entra group is gone or unreadable; the
-	// members are kept.
+	// UserGroupSyncSourceMissing: nobody in Microsoft 365 has the department
+	// or squad any more; the members are kept until an admin approves.
 	UserGroupSyncSourceMissing UserGroupSyncState = "source-missing"
-	// UserGroupSyncError: Microsoft Graph failed; members stay.
-	UserGroupSyncError UserGroupSyncState = "error"
 )
 
-// EntraGroup is a Microsoft Entra ID group as the link picker shows it.
-type EntraGroup struct {
-	ID          string `json:"id"`
-	DisplayName string `json:"displayName"`
-	Mail        string `json:"mail,omitempty"`
-	// Kind is "m365", "security" or "dynamic".
-	Kind string `json:"kind"`
+// UserGroupSyncStatus is the last directory sweep's group sync, for admins.
+type UserGroupSyncStatus struct {
+	// LastSyncedAt is when the last sweep finished; nil before the first.
+	LastSyncedAt *time.Time `json:"lastSyncedAt,omitempty"`
+	// Held is set while a sweep was held because far fewer departments came
+	// back than the time before; the next sweep applies if it agrees.
+	Held bool `json:"held,omitempty"`
+	// Readable is how many people had a readable department.
+	Readable  int                     `json:"readable"`
+	Anomalies DepartmentAnomalyReport `json:"anomalies"`
 }
 
-// UserGroupLinkPreview is what linking a group to an Entra group would do.
-type UserGroupLinkPreview struct {
-	// Users is how many users the Entra group has (nested groups included).
-	Users    int `json:"users"`
-	ToAdd    int `json:"toAdd"`
-	ToRemove int `json:"toRemove"`
-	Skipped  int `json:"skipped"`
+// DepartmentAnomalyReport summarises the department values the parser read
+// only partly: a count per kind, and up to a few example values.
+type DepartmentAnomalyReport struct {
+	People   int                 `json:"people"`
+	Counts   map[string]int      `json:"counts"`
+	Examples []DepartmentAnomaly `json:"examples"`
+}
+
+// DepartmentAnomaly is one unusual department value and how many people
+// have it.
+type DepartmentAnomaly struct {
+	Value  string   `json:"value"`
+	Kinds  []string `json:"kinds"`
+	People int      `json:"people"`
 }
 
 // UserGroupDetail is a group with its member IDs. The members are rows of

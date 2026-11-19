@@ -8,14 +8,11 @@ const mockApiFetch = vi.fn();
 vi.mock('@/lib/api', () => ({ apiFetch: (...args: unknown[]) => mockApiFetch(...args) }));
 
 import {
-  useEntraGroupSearch,
-  useLinkPreview,
-  useLinkUserGroup,
-  useSyncUserGroup,
+  useApproveHeldRemoval,
   useUserGroupPermissions,
+  useUserGroupSyncStatus,
   checkUserGroupHandle,
   useCanManageUserGroups,
-  useCreateUserGroup,
   useMyUserGroupIds,
   useSetUserGroupEnabled,
   useUpdateUserGroup,
@@ -105,69 +102,50 @@ describe('user-group mutations', () => {
     const spy = vi.spyOn(qc, 'invalidateQueries');
     const { result } = renderHook(
       () => ({
-        create: useCreateUserGroup(),
         update: useUpdateUserGroup(),
         setEnabled: useSetUserGroupEnabled(),
+        approve: useApproveHeldRemoval(),
       }),
       { wrapper },
     );
     await act(async () => {
-      await result.current.create.mutateAsync({ handle: 'oncall', name: 'On-call', description: '', entraGroupId: 'e-1' });
       await result.current.update.mutateAsync({ id: 'group-1', patch: { name: 'Pager' } });
       await result.current.setEnabled.mutateAsync({ id: 'group-1', enabled: false });
       await result.current.setEnabled.mutateAsync({ id: 'group-1', enabled: true });
+      await result.current.approve.mutateAsync('group 1');
     });
     expect(mockApiFetch.mock.calls).toEqual([
-      ['/api/v1/usergroups', { method: 'POST', body: JSON.stringify({ handle: 'oncall', name: 'On-call', description: '', entraGroupId: 'e-1' }) }],
       ['/api/v1/usergroups/group-1', { method: 'PATCH', body: JSON.stringify({ name: 'Pager' }) }],
       ['/api/v1/usergroups/group-1/disable', { method: 'POST' }],
       ['/api/v1/usergroups/group-1/enable', { method: 'POST' }],
+      ['/api/v1/usergroups/group%201/approve-removal', { method: 'POST' }],
     ]);
     expect(spy).toHaveBeenCalledTimes(4);
     expect(spy).toHaveBeenCalledWith({ queryKey: queryKeys.userGroupsAll() });
   });
 });
 
-describe('Microsoft 365 links', () => {
-  it('reads both permissions, and none when the answer is missing', async () => {
-    mockApiFetch.mockResolvedValueOnce({ canManage: true, canLinkMicrosoft: true });
+describe('the sync status', () => {
+  it('reads the permissions, and none when the answer is missing', async () => {
+    mockApiFetch.mockResolvedValueOnce({ canManage: true });
     const perms = renderHook(() => useUserGroupPermissions(), { wrapper });
-    await waitFor(() => expect(perms.result.current).toEqual({ canManage: true, canLinkMicrosoft: true }));
+    await waitFor(() => expect(perms.result.current).toEqual({ canManage: true }));
   });
 
-  it('searches Microsoft 365 groups, and not for a blank query', async () => {
-    const blank = renderHook(() => useEntraGroupSearch('  '), { wrapper });
-    expect(blank.result.current.fetchStatus).toBe('idle');
-    mockApiFetch.mockResolvedValueOnce([{ id: 'e-1', displayName: 'On call', kind: 'security' }]).mockResolvedValueOnce(undefined);
-    const found = renderHook(() => useEntraGroupSearch(' on call '), { wrapper });
-    await waitFor(() => expect(found.result.current.data).toHaveLength(1));
-    expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/usergroup-sources/microsoft?q=on%20call');
-    const odd = renderHook(() => useEntraGroupSearch('odd'), { wrapper });
-    await waitFor(() => expect(odd.result.current.data).toEqual([]));
-  });
+  it('reads the last sync for admins only, and an empty one when the answer is missing', async () => {
+    const off = renderHook(() => useUserGroupSyncStatus(false), { wrapper });
+    expect(off.result.current.fetchStatus).toBe('idle');
+    expect(mockApiFetch).not.toHaveBeenCalled();
 
-  it('previews a link for a new or an existing group', async () => {
-    const none = renderHook(() => useLinkPreview(undefined), { wrapper });
-    expect(none.result.current.fetchStatus).toBe('idle');
-    mockApiFetch.mockResolvedValue({ users: 1, toAdd: 1, toRemove: 0, skipped: 0 });
-    const fresh = renderHook(() => useLinkPreview('e 1'), { wrapper });
-    await waitFor(() => expect(fresh.result.current.data?.toAdd).toBe(1));
-    expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/usergroup-sources/microsoft/e%201/preview');
-    const existing = renderHook(() => useLinkPreview('e-1', 'group 1'), { wrapper });
-    await waitFor(() => expect(existing.result.current.data).toBeDefined());
-    expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/usergroup-sources/microsoft/e-1/preview?groupId=group%201');
-  });
+    const status = { lastSyncedAt: '2026-11-19T10:00:00Z', readable: 4, anomalies: { people: 0, counts: {}, examples: [] } };
+    mockApiFetch.mockResolvedValueOnce(status);
+    const on = renderHook(() => useUserGroupSyncStatus(true), { wrapper });
+    await waitFor(() => expect(on.result.current.data).toEqual(status));
+    expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/usergroup-sync');
 
-  it('changes the Microsoft 365 group and syncs', async () => {
-    mockApiFetch.mockResolvedValue(ONCALL);
-    const { result } = renderHook(() => ({ link: useLinkUserGroup(), sync: useSyncUserGroup() }), { wrapper });
-    await act(async () => {
-      await result.current.link.mutateAsync({ id: 'group-1', entraGroupId: 'e-1' });
-      await result.current.sync.mutateAsync({ id: 'group-1', applyRemovals: true });
-    });
-    expect(mockApiFetch.mock.calls).toEqual([
-      ['/api/v1/usergroups/group-1/link', { method: 'POST', body: JSON.stringify({ entraGroupId: 'e-1' }) }],
-      ['/api/v1/usergroups/group-1/sync', { method: 'POST', body: JSON.stringify({ applyRemovals: true }) }],
-    ]);
+    qc.clear();
+    mockApiFetch.mockResolvedValueOnce(undefined);
+    const empty = renderHook(() => useUserGroupSyncStatus(true), { wrapper });
+    await waitFor(() => expect(empty.result.current.data?.anomalies.examples).toEqual([]));
   });
 });
