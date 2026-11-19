@@ -82,3 +82,23 @@ func TestSetGitHost_Normalizes(t *testing.T) {
 		}
 	}
 }
+
+// Every run decides first whether the request needs chat context at all, so
+// a self-contained ask doesn't spend tokens reading channels and searching.
+func TestBundle_DecidesOnLookupsFirst(t *testing.T) {
+	fx := newOrchCovFixture(t)
+	for _, harness := range []string{model.HarnessClaude, model.HarnessCodex, model.HarnessBedrock} {
+		got, _ := fx.orch.buildBundle(context.Background(), gitRun(harness, model.RunModeDirect, ""))
+		tools := strings.Index(got, "# Using workspace tools")
+		step := strings.Index(got, "First decide whether the request needs anything from chat")
+		search := strings.Index(got, "Read, don't search")
+		if tools < 0 || step < tools || search < step {
+			t.Fatalf("%s: the lookup decision must open the workspace-tools section:\n%s", harness, got)
+		}
+		for _, want := range []string{"no read or search calls", "the # Thread section already holds", "fetch exactly that"} {
+			if !strings.Contains(got, want) {
+				t.Fatalf("%s: lacks %q", harness, want)
+			}
+		}
+	}
+}

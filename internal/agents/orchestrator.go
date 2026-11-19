@@ -3154,6 +3154,11 @@ func (b *bundleBuilder) codingTask() {
 // location from keyword hits instead of just reading it.
 func (b *bundleBuilder) toolCraft() {
 	b.must("\n# Using workspace tools\n" +
+		"- First decide whether the request needs anything from chat at all. Most don't: a general question, " +
+		"a calculation, writing or rewriting text, work in a connector or the shell. Answer those from the # Task " +
+		"with no read or search calls; when it is about this conversation, the # Thread section already holds it. " +
+		"Look something up only when the request points at what you can't see here (an earlier discussion, another " +
+		"channel or DM, what someone said, a linked message), and then fetch exactly that.\n" +
 		"- Read, don't search, when you hold a handle: a [m:<id>] marker, a #msg-<id> permalink, a [ch:<id>] or a " +
 		"user id names exactly where something lives — open it directly (read_channel with thread, read_dm, " +
 		"read_pins, get_thread). Search is for DISCOVERY, when you have no reference at all; it returns scattered " +
