@@ -169,6 +169,8 @@ type settingsResponse struct {
 	// SharePointHosts are the hosts whose links are shared SharePoint
 	// files; "*.example.com" matches every subdomain.
 	SharePointHosts []string `json:"sharePointHosts,omitempty"`
+	// AgentModels are the models agents may run on, per engine.
+	AgentModels []model.AgentModelOption `json:"agentModels"`
 }
 
 func (h *AdminHandler) newSettingsResponse(ws *model.WorkspaceSettings) settingsResponse {
@@ -179,6 +181,7 @@ func (h *AdminHandler) newSettingsResponse(ws *model.WorkspaceSettings) settings
 		GiphyEnabled:      ws.GiphyAPIKey != "",
 		RunnersInApp:      ws.RunnersInApp,
 		SharePointHosts:   h.sharePointHosts,
+		AgentModels:       ws.AgentModels,
 	}
 }
 
@@ -315,6 +318,27 @@ func nowUnix() int64 { return time.Now().Unix() }
 type updateSettingsBody struct {
 	model.WorkspaceSettings
 	RunnersInApp *bool `json:"runnersInApp"`
+}
+
+// SetAgentModels replaces the models agents may run on. Admin-only.
+// PUT /api/v1/admin/agent-models {"models": [{harness, id, label}]}
+func (h *AdminHandler) SetAgentModels(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
+	var body struct {
+		Models []model.AgentModelOption `json:"models"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
+		return
+	}
+	out, err := h.settings.SetAgentModels(r.Context(), body.Models)
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, h.newSettingsResponse(out))
 }
 
 // UpdateSettings replaces the workspace settings. Admin-only.

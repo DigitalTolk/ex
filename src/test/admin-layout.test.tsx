@@ -110,5 +110,7 @@ describe('AdminAgentsPage', () => {
     expect(
       screen.getByText(/Defaults every member inherits unless they set their own/),
     ).toBeInTheDocument();
+    // The models agents may run on are managed here too.
+    expect(screen.getByRole('heading', { name: 'Models' })).toBeInTheDocument();
   });
 });

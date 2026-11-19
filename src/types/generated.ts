@@ -1038,6 +1038,29 @@ export interface RunnerRegistration {
 }
 
 //////////
+// source: agent_models.go
+
+/**
+ * AgentModelOption is one model an admin offers for an engine: the agents
+ * page and the admin panel pick an agent's model from these instead of a free
+ * text field. Only the engines with a fixed set of models have a list:
+ * Claude Code (Claude models) and AWS Bedrock (Claude in the EU); Codex keeps
+ * its free text.
+ */
+export interface AgentModelOption {
+  harness: string;
+  id: string;
+  /**
+   * Label is what the dropdown shows; the id when blank.
+   */
+  label?: string;
+}
+/**
+ * MaxAgentModelsPerHarness caps each engine's list: it is a dropdown.
+ */
+export const MaxAgentModelsPerHarness = 25;
+
+//////////
 // source: attachment.go
 
 /**
@@ -3144,6 +3167,13 @@ export interface WorkspaceSettings {
    * set up from the command line and the account menu's Runners dialog.
    */
   runnersInApp: boolean;
+  /**
+   * AgentModels are the models agents may run on, per engine: the agents
+   * page and the admin panel offer them in a dropdown. Empty means the
+   * built-in list (DefaultAgentModels). Changed only through its own admin
+   * route, never by a save of the other settings.
+   */
+  agentModels: AgentModelOption[];
 }
 /**
  * DefaultMaxUploadBytes is the fallback ceiling when the workspace hasn't

@@ -21,6 +21,11 @@ type WorkspaceSettings struct {
 	// it for them). Off by default: until an admin turns it on, runners are
 	// set up from the command line and the account menu's Runners dialog.
 	RunnersInApp bool `json:"runnersInApp" dynamodbav:"runnersInApp"`
+	// AgentModels are the models agents may run on, per engine: the agents
+	// page and the admin panel offer them in a dropdown. Empty means the
+	// built-in list (DefaultAgentModels). Changed only through its own admin
+	// route, never by a save of the other settings.
+	AgentModels []AgentModelOption `json:"agentModels" dynamodbav:"agentModels,omitempty"`
 }
 
 // DefaultMaxUploadBytes is the fallback ceiling when the workspace hasn't

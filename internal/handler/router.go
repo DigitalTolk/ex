@@ -321,6 +321,7 @@ func NewRouter(d *Deps) http.Handler {
 		// inside the handler.
 		mux.Handle("GET /api/v1/admin/settings", middleware.WrapFunc(adminH.GetSettings, authMW))
 		mux.Handle("PUT /api/v1/admin/settings", middleware.WrapFunc(adminH.UpdateSettings, authMW))
+		mux.Handle("PUT /api/v1/admin/agent-models", middleware.WrapFunc(adminH.SetAgentModels, authMW))
 		mux.Handle("GET /api/v1/admin/search/status", middleware.WrapFunc(adminH.SearchStatus, authMW))
 		mux.Handle("GET /api/v1/admin/push-stats", middleware.WrapFunc(adminH.PushStats, authMW))
 		// Mail diagnostics: read the effective transport, and send a real

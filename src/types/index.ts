@@ -476,6 +476,14 @@ export interface ChannelMembership {
   joinedAt: string;
 }
 
+// One model an admin offers for an engine (Admin › Agents › Models).
+export interface AgentModelOption {
+  harness: string;
+  id: string;
+  // What the dropdown shows; the id when blank.
+  label?: string;
+}
+
 export interface WorkspaceSettings {
   maxUploadBytes: number;
   allowedExtensions: string[];
@@ -490,6 +498,9 @@ export interface WorkspaceSettings {
   // Hosts whose links are shared SharePoint files ("*.example.com" matches
   // every subdomain); absent when SharePoint sharing is off.
   sharePointHosts?: string[];
+  // The models agents may run on, per engine (Claude Code and Bedrock); the
+  // agent forms pick from these. Changed on Admin › Agents.
+  agentModels?: AgentModelOption[];
 }
 
 export interface IncomingWebhook {
@@ -810,6 +821,7 @@ export type WireDriftChecks = [
   AssertAssignable<Required<Attachment>, wire.Attachment>,
   AssertAssignable<Required<ChannelMembership>, wire.ChannelMembership>,
   AssertAssignable<Required<WorkspaceSettings>, wire.WorkspaceSettings>,
+  AssertAssignable<Required<AgentModelOption>, wire.AgentModelOption>,
   AssertAssignable<Required<IncomingWebhook>, wire.IncomingWebhook>,
   AssertAssignable<Required<UserChannel>, wire.UserChannel>,
   AssertAssignable<Required<SidebarCategory>, wire.UserChannelCategory>,
