@@ -8,9 +8,9 @@ import (
 )
 
 // UserGroupHandler is the user-group API (/api/v1/usergroups). Every member
-// reads groups; admins edit their details, enable or disable them and approve
-// held removals (the service decides). Groups themselves come from the
-// Microsoft 365 department field. Guests are refused.
+// reads groups; admins edit their details and enable or disable them (the
+// service decides). Groups themselves come from the Microsoft 365 department
+// field. Guests are refused.
 type UserGroupHandler struct {
 	svc *service.UserGroupService
 }
@@ -73,17 +73,6 @@ func (h *UserGroupHandler) SyncStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, status)
-}
-
-// ApproveRemoval answers POST /api/v1/usergroups/{id}/approve-removal: the
-// next sweep applies the group's held removal.
-func (h *UserGroupHandler) ApproveRemoval(w http.ResponseWriter, r *http.Request) {
-	g, err := h.svc.ApproveHeldRemoval(r.Context(), userGroupActor(r), r.PathValue("id"))
-	if err != nil {
-		writeServiceError(w, r, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, g)
 }
 
 // ForUser answers GET /api/v1/users/{id}/usergroups.

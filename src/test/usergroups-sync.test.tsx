@@ -53,12 +53,10 @@ const SYNCED = {
 let canManage = true;
 let detail: Record<string, unknown> = {};
 let status: unknown = SYNCED;
-let fail: Record<string, Error> = {};
 
 function routeApi() {
   mockApiFetch.mockImplementation((path: string, init?: Init) => {
     const key = `${init?.method ?? 'GET'} ${path}`;
-    if (fail[key]) return Promise.reject(fail[key]);
     if (key === 'GET /api/v1/usergroup-permissions') return Promise.resolve({ canManage });
     if (key === 'GET /api/v1/usergroup-sync') return Promise.resolve(status);
     if (key === 'GET /api/v1/usergroups') return Promise.resolve([DOPE, ENG]);
@@ -90,7 +88,6 @@ beforeEach(() => {
   canManage = true;
   detail = { 'group-dope': DOPE, 'group-eng': ENG };
   status = SYNCED;
-  fail = {};
   routeApi();
 });
 
@@ -114,54 +111,18 @@ describe("a group's source", () => {
   });
 });
 
-describe('a held removal', () => {
-  it('explains a large removal and lets an admin approve it', async () => {
-    detail['group-dope'] = { ...DOPE, syncState: 'held-removal', pendingRemoval: 7 };
-    renderAt('/directory/groups?group=group-dope');
-    expect(await screen.findByRole('status')).toHaveTextContent('7 people left this squad in Microsoft 365. Removing them waits for an admin.');
-    fireEvent.click(screen.getByRole('button', { name: 'Approve removal' }));
-    await waitFor(() => expect(calls('POST /api/v1/usergroups/group-dope/approve-removal')).toHaveLength(1));
-  });
-
-  it('says an approved removal happens at the next sync', async () => {
-    detail['group-dope'] = { ...DOPE, syncState: 'held-removal', pendingRemoval: 1, removalApproved: true };
-    renderAt('/directory/groups?group=group-dope');
-    const banner = await screen.findByRole('status');
-    expect(banner).toHaveTextContent('1 person left this squad');
-    expect(banner).toHaveTextContent('Removal approved: it happens at the next sync, within 30 minutes.');
-    expect(screen.queryByRole('button', { name: 'Approve removal' })).not.toBeInTheDocument();
-  });
-
-  it('explains a department or squad that is gone', async () => {
-    detail['group-eng'] = { ...ENG, syncState: 'source-missing', pendingRemoval: 2 };
-    renderAt('/directory/groups?group=group-eng');
-    expect(await screen.findByRole('status')).toHaveTextContent(
-      'No one in Microsoft 365 is in this department any more. Its 2 people stay until an admin approves removing them, or disables the group.',
-    );
-    expect(screen.getByRole('button', { name: 'Approve removal' })).toBeInTheDocument();
-  });
-
-  it('says a gone squad is empty once its removal applied', async () => {
+describe('a department or squad that is gone', () => {
+  it('tells admins the group is empty and can be disabled', async () => {
     detail['group-dope'] = { ...DOPE, memberIds: [], memberCount: 0, syncState: 'source-missing' };
     renderAt('/directory/groups?group=group-dope');
-    expect(await screen.findByRole('status')).toHaveTextContent('No one in Microsoft 365 is in this squad any more.');
-    expect(screen.queryByRole('button', { name: 'Approve removal' })).not.toBeInTheDocument();
+    expect(await screen.findByRole('status')).toHaveTextContent('No one in Microsoft 365 is in this squad any more. You can disable the group.');
+    expect(screen.getByRole('button', { name: 'Disable group' })).toBeInTheDocument();
   });
 
-  it('is shown to members without the approval', async () => {
-    canManage = false;
-    detail['group-dope'] = { ...DOPE, syncState: 'held-removal', pendingRemoval: 7 };
-    renderAt('/directory/groups?group=group-dope');
-    expect(await screen.findByRole('status')).toHaveTextContent('7 people left this squad');
-    expect(screen.queryByRole('button', { name: 'Approve removal' })).not.toBeInTheDocument();
-  });
-
-  it('shows a failed approval', async () => {
-    detail['group-dope'] = { ...DOPE, syncState: 'held-removal', pendingRemoval: 7 };
-    fail['POST /api/v1/usergroups/group-dope/approve-removal'] = new Error('this group has no held removal to approve');
-    renderAt('/directory/groups?group=group-dope');
-    fireEvent.click(await screen.findByRole('button', { name: 'Approve removal' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('no held removal');
+  it('names a gone department', async () => {
+    detail['group-eng'] = { ...ENG, memberIds: [], memberCount: 0, syncState: 'source-missing' };
+    renderAt('/directory/groups?group=group-eng');
+    expect(await screen.findByRole('status')).toHaveTextContent('No one in Microsoft 365 is in this department any more.');
   });
 });
 

@@ -8,7 +8,6 @@ const mockApiFetch = vi.fn();
 vi.mock('@/lib/api', () => ({ apiFetch: (...args: unknown[]) => mockApiFetch(...args) }));
 
 import {
-  useApproveHeldRemoval,
   useUserGroupPermissions,
   useUserGroupSyncStatus,
   checkUserGroupHandle,
@@ -104,7 +103,6 @@ describe('user-group mutations', () => {
       () => ({
         update: useUpdateUserGroup(),
         setEnabled: useSetUserGroupEnabled(),
-        approve: useApproveHeldRemoval(),
       }),
       { wrapper },
     );
@@ -112,15 +110,13 @@ describe('user-group mutations', () => {
       await result.current.update.mutateAsync({ id: 'group-1', patch: { name: 'Pager' } });
       await result.current.setEnabled.mutateAsync({ id: 'group-1', enabled: false });
       await result.current.setEnabled.mutateAsync({ id: 'group-1', enabled: true });
-      await result.current.approve.mutateAsync('group 1');
     });
     expect(mockApiFetch.mock.calls).toEqual([
       ['/api/v1/usergroups/group-1', { method: 'PATCH', body: JSON.stringify({ name: 'Pager' }) }],
       ['/api/v1/usergroups/group-1/disable', { method: 'POST' }],
       ['/api/v1/usergroups/group-1/enable', { method: 'POST' }],
-      ['/api/v1/usergroups/group%201/approve-removal', { method: 'POST' }],
     ]);
-    expect(spy).toHaveBeenCalledTimes(4);
+    expect(spy).toHaveBeenCalledTimes(3);
     expect(spy).toHaveBeenCalledWith({ queryKey: queryKeys.userGroupsAll() });
   });
 });

@@ -12,7 +12,7 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/DigitalTolk/ex/internal/apperr"
+	"github.com/DigitalTolk/ex/internal/cache"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/store"
 	"golang.org/x/text/unicode/norm"
@@ -24,10 +24,10 @@ import (
 // SyncDirectoryGroups; groups are created the first time their department or
 // squad is seen and their members kept in step from then on.
 //
-// A sync never silently shrinks a group: a removal of most of a group, or all
-// of it (the department or squad is gone), waits for an admin's approval, and
-// a sweep that reads far fewer departments than the one before is held once.
-// An empty @oncall is a pager that stopped paging.
+// A group's members always follow what Microsoft 365 says. The one guard is
+// tenant-wide: a sweep that reads far fewer departments than the one before
+// (a Graph or permission glitch) is held once, and applied only if the next
+// sweep agrees.
 
 // DirectoryPerson is one enabled Microsoft 365 account as the sweep reads it:
 // its department value and the ex user who is a group member for it, "" when
@@ -38,9 +38,6 @@ type DirectoryPerson struct {
 }
 
 const (
-	// userGroupSyncMinHeld: a sync removing more than max(this, half the
-	// members) waits for an admin.
-	userGroupSyncMinHeld = 5
 	// userGroupSyncStatusKey holds the last sweep's UserGroupSyncStatus.
 	userGroupSyncStatusKey = "usergroups:sync"
 	userGroupSyncStatusTTL = 7 * 24 * time.Hour
@@ -52,9 +49,6 @@ const (
 	// maxHandleAttempts bounds the -2, -3… suffixes tried for a new handle.
 	maxHandleAttempts = 50
 )
-
-// ErrUserGroupNothingHeld refuses approving a group with no held removal.
-var ErrUserGroupNothingHeld = apperr.Invalid("this group has no held removal to approve")
 
 // groupSource is one department or squad as a sweep reads it.
 type groupSource struct {
@@ -247,9 +241,8 @@ func (s *UserGroupService) createSourceGroup(ctx context.Context, src *groupSour
 }
 
 // syncSourceGroup applies a sweep's reading to an existing group; src is nil
-// when nobody has its department or squad any more. Member removals of most
-// of the group (or all of it) wait for an admin's approval. The row is only
-// written when something on it changes.
+// when nobody has its department or squad any more, which empties it. The row
+// is only written when something on it changes.
 func (s *UserGroupService) syncSourceGroup(ctx context.Context, g *model.UserGroupDetail, src *groupSource) error {
 	current, err := s.memberIDs(ctx, g.ID)
 	if err != nil {
@@ -262,13 +255,6 @@ func (s *UserGroupService) syncSourceGroup(ctx context.Context, g *model.UserGro
 		wanted, skipped, state = src.members, src.skipped, ""
 	}
 	added, removed := diffMembers(current, wanted)
-	pending := 0
-	if !g.RemovalApproved && len(removed) > 0 && (len(wanted) == 0 || len(removed) > max(userGroupSyncMinHeld, len(current)/2)) {
-		if state == "" {
-			state = model.UserGroupSyncHeld
-		}
-		pending, removed = len(removed), nil
-	}
 	membersChanged := len(added) > 0 || len(removed) > 0
 	if membersChanged {
 		if err := s.groups.ApplyUserGroupMembers(ctx, g.ID, added, removed); err != nil {
@@ -283,8 +269,7 @@ func (s *UserGroupService) syncSourceGroup(ctx context.Context, g *model.UserGro
 				row.Name, row.Description = src.name(), src.description()
 			}
 		}
-		row.MemberCount, row.SyncSkipped, row.SyncState, row.PendingRemoval = count, skipped, state, pending
-		row.RemovalApproved = row.RemovalApproved && pending > 0
+		row.MemberCount, row.SyncSkipped, row.SyncState = count, skipped, state
 	}
 	next := cloneUserGroup(g)
 	update(next)
@@ -300,22 +285,6 @@ func (s *UserGroupService) syncSourceGroup(ctx context.Context, g *model.UserGro
 		return nil
 	})
 	return err
-}
-
-// ApproveHeldRemoval lets the next sweep apply a held removal: most of a
-// group's members leaving, or all of them (its department or squad is gone).
-// Admins only.
-func (s *UserGroupService) ApproveHeldRemoval(ctx context.Context, actor UserGroupActor, id string) (*model.UserGroupDetail, error) {
-	if err := actor.canManage(); err != nil {
-		return nil, err
-	}
-	return s.mutate(ctx, id, func(g *model.UserGroupDetail) error {
-		if g.PendingRemoval == 0 {
-			return ErrUserGroupNothingHeld
-		}
-		g.RemovalApproved = true
-		return nil
-	})
 }
 
 // SyncStatus reports the last sweep's group sync: when it ran, whether it was
@@ -335,7 +304,7 @@ func (s *UserGroupService) loadSyncStatus(ctx context.Context) *model.UserGroupS
 		return status
 	}
 	if err := s.statusCache.Get(ctx, userGroupSyncStatusKey, status); err != nil {
-		if !errors.Is(err, store.ErrNotFound) {
+		if !errors.Is(err, cache.ErrCacheMiss) {
 			slog.WarnContext(ctx, "user group sync: reading the last status failed", "error", err)
 		}
 		return &model.UserGroupSyncStatus{}

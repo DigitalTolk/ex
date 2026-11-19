@@ -264,14 +264,14 @@ func (s *UserGroupService) Update(ctx context.Context, actor UserGroupActor, id 
 		if patch.Handle != nil {
 			g.Handle = handle
 		}
-		if patch.Name != nil {
-			g.Name = name
+		// Once an admin changes the name or description, the sweep leaves them
+		// as set; the handle is never synced, so changing it alone isn't an edit.
+		if patch.Name != nil && name != g.Name {
+			g.Name, g.AdminEdited = name, true
 		}
-		if patch.Description != nil {
-			g.Description = desc
+		if patch.Description != nil && desc != g.Description {
+			g.Description, g.AdminEdited = desc, true
 		}
-		// From now on the sweep leaves the details as the admin set them.
-		g.AdminEdited = true
 		return nil
 	})
 }

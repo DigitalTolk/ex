@@ -1,12 +1,16 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
+	"strings"
 	"testing"
 
+	"github.com/DigitalTolk/ex/internal/cache"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/store"
 )
@@ -183,9 +187,8 @@ func TestSync_AppliesOnlyChanges(t *testing.T) {
 	}
 }
 
-func TestSync_HoldsLargeRemovalsUntilApproved(t *testing.T) {
+func TestSync_AppliesLargeRemovals(t *testing.T) {
 	f := newUserGroupFixture()
-	ctx := context.Background()
 	var all []string
 	for i := range 12 {
 		id := fmt.Sprintf("p-%02d", i)
@@ -194,54 +197,27 @@ func TestSync_HoldsLargeRemovalsUntilApproved(t *testing.T) {
 	}
 	f.sync(all...)
 
-	// 7 of 12 leave (more than half) while one joins: the joiner is added,
-	// the removal waits.
-	kept := append(slices.Clone(all[:10]), "u-1", "Engineering - DOPE")
-	f.sync(kept...)
+	// 7 of 12 leave while one joins: the group follows Entra at once.
+	f.sync(append(slices.Clone(all[:10]), "u-1", "Engineering - DOPE")...)
 	dope := f.byHandle(t, "dope")
-	if dope.SyncState != model.UserGroupSyncHeld || dope.PendingRemoval != 7 || len(dope.MemberIDs) != 13 || dope.MemberCount != 13 {
-		t.Fatalf("held = %+v (%d members)", dope.UserGroup, len(dope.MemberIDs))
-	}
-
-	if _, err := f.svc.ApproveHeldRemoval(ctx, ugAdmin, dope.ID); err != nil {
-		t.Fatalf("approve: %v", err)
-	}
-	f.sync(kept...)
-	dope = f.byHandle(t, "dope")
-	if dope.SyncState != "" || dope.PendingRemoval != 0 || dope.RemovalApproved || len(dope.MemberIDs) != 6 {
-		t.Fatalf("applied = %+v (%d members)", dope.UserGroup, len(dope.MemberIDs))
-	}
-	if _, err := f.svc.ApproveHeldRemoval(ctx, ugAdmin, dope.ID); !errors.Is(err, ErrValidation) {
-		t.Fatalf("approving with nothing held = %v", err)
-	}
-	if _, err := f.svc.ApproveHeldRemoval(ctx, ugAdmin, "group-missing"); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("approving a missing group = %v", err)
+	if dope.SyncState != "" || len(dope.MemberIDs) != 6 || dope.MemberCount != 6 {
+		t.Fatalf("after the removal = %+v (%d members)", dope.UserGroup, len(dope.MemberIDs))
 	}
 }
 
-func TestSync_GoneSourceKeepsMembersUntilApproved(t *testing.T) {
+func TestSync_GoneSourceEmptiesTheGroup(t *testing.T) {
 	f := newUserGroupFixture()
-	ctx := context.Background()
 	f.sync("u-1", "Engineering - DOPE", "u-2", "Engineering - DOPE")
 
-	// DOPE is renamed in Entra: a new group appears, the old one is held.
+	// DOPE is renamed in Entra: a new group appears, the old one empties and
+	// is flagged for an admin.
 	f.sync("u-1", "Engineering - DOPE Squad", "u-2", "Engineering - DOPE Squad")
 	dope := f.byHandle(t, "dope")
-	if dope.SyncState != model.UserGroupSyncSourceMissing || dope.PendingRemoval != 2 || len(dope.MemberIDs) != 2 {
+	if dope.SyncState != model.UserGroupSyncSourceMissing || len(dope.MemberIDs) != 0 || dope.MemberCount != 0 {
 		t.Fatalf("gone = %+v", dope.UserGroup)
 	}
 	if got := f.byHandle(t, "dope-squad").MemberIDs; len(got) != 2 {
 		t.Fatalf("@dope-squad members = %v", got)
-	}
-
-	// An approval empties it; it stays gone.
-	if _, err := f.svc.ApproveHeldRemoval(ctx, ugAdmin, dope.ID); err != nil {
-		t.Fatal(err)
-	}
-	f.sync("u-1", "Engineering - DOPE Squad", "u-2", "Engineering - DOPE Squad")
-	dope = f.byHandle(t, "dope")
-	if dope.SyncState != model.UserGroupSyncSourceMissing || dope.PendingRemoval != 0 || len(dope.MemberIDs) != 0 || dope.RemovalApproved {
-		t.Fatalf("emptied = %+v", dope.UserGroup)
 	}
 
 	// It comes back: synced again.
@@ -249,20 +225,6 @@ func TestSync_GoneSourceKeepsMembersUntilApproved(t *testing.T) {
 	dope = f.byHandle(t, "dope")
 	if dope.SyncState != "" || !slices.Equal(dope.MemberIDs, []string{"u-1"}) {
 		t.Fatalf("back = %+v", dope.UserGroup)
-	}
-}
-
-func TestSync_ApprovalIsDroppedWhenNothingIsLeftToRemove(t *testing.T) {
-	f := newUserGroupFixture()
-	f.sync("u-1", "Engineering - DOPE")
-	f.sync("u-2", "Engineering - Ops")
-	dope := f.byHandle(t, "dope")
-	if _, err := f.svc.ApproveHeldRemoval(context.Background(), ugAdmin, dope.ID); err != nil {
-		t.Fatal(err)
-	}
-	f.sync("u-1", "Engineering - DOPE")
-	if got := f.byHandle(t, "dope"); got.RemovalApproved || got.SyncState != "" {
-		t.Fatalf("after the source came back = %+v", got.UserGroup)
 	}
 }
 
@@ -285,6 +247,23 @@ func TestSync_AdminEditsStick(t *testing.T) {
 	got := f.byHandle(t, "pagers")
 	if got.Name != "Pager crew" || got.Description != "Squad Dope in Engineering" || !got.AdminEdited || got.Source.Squad != "DOPE" {
 		t.Fatalf("after an admin edit = %+v", got.UserGroup)
+	}
+}
+
+// Saving the dialog unchanged, or changing only the handle (which the sweep
+// never sets), isn't an edit of the details: they keep following Entra.
+func TestSync_SavingDetailsUnchangedIsNoEdit(t *testing.T) {
+	f := newUserGroupFixture()
+	ctx := context.Background()
+	f.sync("u-1", "Engineering - DOPE")
+	dope := f.byHandle(t, "dope")
+	name, desc, handle := dope.Name, dope.Description, "pagers"
+	if _, err := f.svc.Update(ctx, ugAdmin, dope.ID, UserGroupPatch{Handle: &handle, Name: &name, Description: &desc}); err != nil {
+		t.Fatal(err)
+	}
+	f.sync("u-1", "Engineering - Dope")
+	if got := f.byHandle(t, "pagers"); got.AdminEdited || got.Name != "Dope" {
+		t.Fatalf("after an unchanged save = %+v", got.UserGroup)
 	}
 }
 
@@ -320,14 +299,13 @@ func TestSync_HoldsATenantWideDropOnce(t *testing.T) {
 		t.Fatalf("first low sweep: status %+v, writes %d", status, f.store.updates-updates)
 	}
 
-	// The next sweep agrees: it applies (the large removal itself is still
-	// held per group).
+	// The next sweep agrees: it applies.
 	f.sync(few...)
 	status, _ = f.svc.SyncStatus(context.Background(), ugAdmin)
 	if status.Held || status.Readable != 4 {
 		t.Fatalf("second low sweep: status %+v", status)
 	}
-	if got := f.byHandle(t, "dope"); got.SyncState != model.UserGroupSyncHeld {
+	if got := f.byHandle(t, "dope"); len(got.MemberIDs) != 4 {
 		t.Fatalf("@dope = %+v", got.UserGroup)
 	}
 }
@@ -517,5 +495,21 @@ func TestDiffMembers(t *testing.T) {
 	}
 	if a, r := diffMembers(nil, nil); a != nil || r != nil {
 		t.Fatalf("empty diff = %v %v", a, r)
+	}
+}
+
+// Redis answers a missing status with cache.ErrCacheMiss: the first sweep (or
+// one after the status expired) reads that as "no status", not a failure.
+func TestUserGroupSync_StatusCacheMissIsNotAFailure(t *testing.T) {
+	var logs bytes.Buffer
+	orig := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(orig) })
+
+	f := newUserGroupFixture()
+	f.status.getErr = cache.ErrCacheMiss
+	f.sync("u-1", "Engineering - DOPE")
+	if strings.Contains(logs.String(), "reading the last status failed") {
+		t.Fatalf("a cache miss was logged as a failure:\n%s", logs.String())
 	}
 }

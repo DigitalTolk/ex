@@ -113,13 +113,6 @@ export function useUpdateUserGroup() {
   );
 }
 
-// useApproveHeldRemoval lets the next sync apply a group's held removal.
-export function useApproveHeldRemoval() {
-  return useInvalidatingMutation((id: string) =>
-    apiFetch<UserGroupDetail>(`${groupPath(id)}/approve-removal`, { method: 'POST' }),
-  );
-}
-
 export function useSetUserGroupEnabled() {
   return useInvalidatingMutation(({ id, enabled }: { id: string; enabled: boolean }) =>
     apiFetch<UserGroupDetail>(`${groupPath(id)}/${enabled ? 'enable' : 'disable'}`, { method: 'POST' }),

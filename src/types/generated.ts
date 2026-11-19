@@ -3508,8 +3508,8 @@ export interface UserGroup {
    */
   source: UserGroupSource;
   /**
-   * AdminEdited is set once an admin edits the handle, name or description:
-   * the sweep then never overwrites them.
+   * AdminEdited is set once an admin changes the name or description: the
+   * sweep then never overwrites them.
    */
   adminEdited?: boolean;
   /**
@@ -3518,18 +3518,10 @@ export interface UserGroup {
    */
   syncSkipped?: number /* int */;
   /**
-   * SyncState is why the last sweep didn't fully apply ("" when it did).
+   * SyncState flags something about the source an admin should know (""
+   * when there's nothing).
    */
   syncState?: UserGroupSyncState;
-  /**
-   * PendingRemoval is how many members a held sync would remove.
-   */
-  pendingRemoval?: number /* int */;
-  /**
-   * RemovalApproved: an admin approved the held removal; the next sweep
-   * applies it.
-   */
-  removalApproved?: boolean;
 }
 /**
  * UserGroupSourceKind says what a group follows.
@@ -3553,17 +3545,12 @@ export interface UserGroupSource {
   key: string;
 }
 /**
- * UserGroupSyncState says why a group's last sweep didn't fully apply.
+ * UserGroupSyncState flags a group's source for admins.
  */
 export type UserGroupSyncState = string;
 /**
- * UserGroupSyncHeld: the sweep would remove most members (or all of
- * them); the removal waits for an admin's approval.
- */
-export const UserGroupSyncHeld: UserGroupSyncState = "held-removal";
-/**
- * UserGroupSyncSourceMissing: nobody in Microsoft 365 has the department
- * or squad any more; the members are kept until an admin approves.
+ * UserGroupSyncSourceMissing: nobody in Microsoft 365 has the department or
+ * squad any more, so the group has no members; an admin can disable it.
  */
 export const UserGroupSyncSourceMissing: UserGroupSyncState = "source-missing";
 /**

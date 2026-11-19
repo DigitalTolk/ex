@@ -25,19 +25,15 @@ type UserGroup struct {
 
 	// Source is the department or squad the members come from.
 	Source UserGroupSource `json:"source" dynamodbav:"source"`
-	// AdminEdited is set once an admin edits the handle, name or description:
-	// the sweep then never overwrites them.
+	// AdminEdited is set once an admin changes the name or description: the
+	// sweep then never overwrites them.
 	AdminEdited bool `json:"adminEdited,omitempty" dynamodbav:"adminEdited,omitempty"`
 	// SyncSkipped counts the people Microsoft 365 lists for the source who
 	// aren't group members in ex (no ex account yet, a guest or deactivated).
 	SyncSkipped int `json:"syncSkipped,omitempty" dynamodbav:"syncSkipped,omitempty"`
-	// SyncState is why the last sweep didn't fully apply ("" when it did).
+	// SyncState flags something about the source an admin should know (""
+	// when there's nothing).
 	SyncState UserGroupSyncState `json:"syncState,omitempty" dynamodbav:"syncState,omitempty"`
-	// PendingRemoval is how many members a held sync would remove.
-	PendingRemoval int `json:"pendingRemoval,omitempty" dynamodbav:"pendingRemoval,omitempty"`
-	// RemovalApproved: an admin approved the held removal; the next sweep
-	// applies it.
-	RemovalApproved bool `json:"removalApproved,omitempty" dynamodbav:"removalApproved,omitempty"`
 }
 
 // UserGroupSourceKind says what a group follows.
@@ -60,17 +56,12 @@ type UserGroupSource struct {
 	Key        string `json:"key" dynamodbav:"key"`
 }
 
-// UserGroupSyncState says why a group's last sweep didn't fully apply.
+// UserGroupSyncState flags a group's source for admins.
 type UserGroupSyncState string
 
-const (
-	// UserGroupSyncHeld: the sweep would remove most members (or all of
-	// them); the removal waits for an admin's approval.
-	UserGroupSyncHeld UserGroupSyncState = "held-removal"
-	// UserGroupSyncSourceMissing: nobody in Microsoft 365 has the department
-	// or squad any more; the members are kept until an admin approves.
-	UserGroupSyncSourceMissing UserGroupSyncState = "source-missing"
-)
+// UserGroupSyncSourceMissing: nobody in Microsoft 365 has the department or
+// squad any more, so the group has no members; an admin can disable it.
+const UserGroupSyncSourceMissing UserGroupSyncState = "source-missing"
 
 // UserGroupSyncStatus is the last directory sweep's group sync, for admins.
 type UserGroupSyncStatus struct {

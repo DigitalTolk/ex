@@ -191,27 +191,21 @@ func TestUserGroupHandler_Lifecycle(t *testing.T) {
 	}
 }
 
-func TestUserGroupHandler_SyncStatusAndHeldRemovals(t *testing.T) {
+func TestUserGroupHandler_SyncStatusAndGoneSources(t *testing.T) {
 	f := newUserGroupAPIFixture(t)
 	rec := f.do(http.MethodGet, "/api/v1/usergroup-sync", f.adminJWT, "")
 	if st := decodeBody[model.UserGroupSyncStatus](t, rec); rec.Code != http.StatusOK || st.LastSyncedAt == nil || st.Readable != 2 {
 		t.Fatalf("sync status = %d %s", rec.Code, rec.Body.String())
 	}
 
-	// DOPE disappears from Microsoft 365: its member is kept until an admin
-	// approves.
+	// DOPE disappears from Microsoft 365: the group empties and says why.
 	f.svc.SyncDirectoryGroups(context.Background(), []service.DirectoryPerson{
 		{UserID: "u-member", Department: "Engineering"},
 		{UserID: "u-bob", Department: "Engineering - Platform"},
 	})
-	dope := f.id("dope")
-	rec = f.do(http.MethodPost, "/api/v1/usergroups/"+dope+"/approve-removal", f.adminJWT, "")
-	if g := decodeBody[model.UserGroupDetail](t, rec); rec.Code != http.StatusOK || !g.RemovalApproved || g.SyncState != model.UserGroupSyncSourceMissing {
-		t.Fatalf("approve = %d %s", rec.Code, rec.Body.String())
-	}
-	rec = f.do(http.MethodPost, "/api/v1/usergroups/"+f.id("platform")+"/approve-removal", f.adminJWT, "")
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("approving a group with nothing held = %d %s, want 400", rec.Code, rec.Body.String())
+	rec = f.do(http.MethodGet, "/api/v1/usergroups/"+f.id("dope"), f.adminJWT, "")
+	if g := decodeBody[model.UserGroupDetail](t, rec); rec.Code != http.StatusOK || len(g.MemberIDs) != 0 || g.SyncState != model.UserGroupSyncSourceMissing {
+		t.Fatalf("gone group = %d %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -231,13 +225,13 @@ func TestUserGroupHandler_Refusals(t *testing.T) {
 		{"member updates", http.MethodPatch, "/api/v1/usergroups/" + id, f.memberJWT, `{"name":"x"}`, http.StatusForbidden},
 		{"member disables", http.MethodPost, "/api/v1/usergroups/" + id + "/disable", f.memberJWT, "", http.StatusForbidden},
 		{"member reads the sync status", http.MethodGet, "/api/v1/usergroup-sync", f.memberJWT, "", http.StatusForbidden},
-		{"member approves a removal", http.MethodPost, "/api/v1/usergroups/" + id + "/approve-removal", f.memberJWT, "", http.StatusForbidden},
 		{"missing group", http.MethodGet, "/api/v1/usergroups/group-nope", f.memberJWT, "", http.StatusNotFound},
 		// Groups come from Microsoft 365 only: no way to create one, edit its
-		// members, link or sync it by hand.
+		// members, link, sync it or hold its removals by hand.
 		{"creating", http.MethodPost, "/api/v1/usergroups", f.adminJWT, `{"handle":"x","name":"X"}`, http.StatusMethodNotAllowed},
 		{"adding members", http.MethodPost, "/api/v1/usergroups/" + id + "/members", f.adminJWT, `{"userIds":["u-bob"]}`, http.StatusNotFound},
 		{"linking", http.MethodPost, "/api/v1/usergroups/" + id + "/link", f.adminJWT, `{}`, http.StatusNotFound},
+		{"approving a removal", http.MethodPost, "/api/v1/usergroups/" + id + "/approve-removal", f.adminJWT, "", http.StatusNotFound},
 		{"syncing", http.MethodPost, "/api/v1/usergroups/" + id + "/sync", f.adminJWT, `{}`, http.StatusNotFound},
 		{"searching Microsoft 365", http.MethodGet, "/api/v1/usergroup-sources/microsoft?q=x", f.adminJWT, "", http.StatusNotFound},
 	}

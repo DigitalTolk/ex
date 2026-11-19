@@ -388,7 +388,6 @@ func NewRouter(d *Deps) http.Handler {
 		mux.Handle("GET /api/v1/usergroup-handles/{handle}", middleware.WrapFunc(userGroupH.HandleAvailable, authMW))
 		mux.Handle("GET /api/v1/usergroup-permissions", middleware.WrapFunc(userGroupH.Permissions, authMW))
 		mux.Handle("GET /api/v1/usergroup-sync", middleware.WrapFunc(userGroupH.SyncStatus, authMW))
-		mux.Handle("POST /api/v1/usergroups/{id}/approve-removal", middleware.WrapFunc(userGroupH.ApproveRemoval, authMW, writeLimit))
 		mux.Handle("GET /api/v1/users/{id}/usergroups", middleware.WrapFunc(userGroupH.ForUser, authMW))
 	}
 	if botH != nil {

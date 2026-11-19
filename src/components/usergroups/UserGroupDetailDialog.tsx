@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useAllUsers } from '@/hooks/useConversations';
-import { useApproveHeldRemoval, useSetUserGroupEnabled, useUserGroup } from '@/hooks/useUserGroups';
+import { useSetUserGroupEnabled, useUserGroup } from '@/hooks/useUserGroups';
 import { errorMessage } from '@/lib/error-message';
 import { getInitials } from '@/lib/format';
 import type { UserGroupDetail } from '@/types/generated';
@@ -24,24 +24,9 @@ function sourceText(g: UserGroupDetail): string {
   return g.source.kind === 'squad' ? `Squad ${g.source.squad} in ${g.source.department}` : `Department ${g.source.department}`;
 }
 
-// heldText explains a removal the sync holds for an admin, or "" when none.
-function heldText(g: UserGroupDetail): string {
-  const what = g.source.kind === 'squad' ? 'squad' : 'department';
-  if (g.syncState === 'source-missing') {
-    return g.pendingRemoval
-      ? `No one in Microsoft 365 is in this ${what} any more. Its ${people(g.pendingRemoval)} stay until an admin approves removing them, or disables the group.`
-      : `No one in Microsoft 365 is in this ${what} any more.`;
-  }
-  if (g.syncState === 'held-removal') {
-    // A held removal always counts who would be removed.
-    return `${people(g.pendingRemoval!)} left this ${what} in Microsoft 365. Removing them waits for an admin.`;
-  }
-  return '';
-}
-
 // UserGroupDetailDialog shows one group: its handle, name, description, the
 // Microsoft 365 department or squad it follows, and its members. Admins edit
-// its details, disable or enable it, and approve a removal the sync holds.
+// its details and disable or enable it.
 export function UserGroupDetailDialog({ groupId, canManage, onClose }: Props) {
   const { data: group, isLoading } = useUserGroup(groupId);
   const { data: users = [] } = useAllUsers();
@@ -50,7 +35,6 @@ export function UserGroupDetailDialog({ groupId, canManage, onClose }: Props) {
   const [confirmDisable, setConfirmDisable] = useState(false);
   const [error, setError] = useState('');
   const setEnabled = useSetUserGroupEnabled();
-  const approve = useApproveHeldRemoval();
 
   const onError = (e: unknown) => setError(errorMessage(e, 'Saving failed'));
 
@@ -59,7 +43,6 @@ export function UserGroupDetailDialog({ groupId, canManage, onClose }: Props) {
   }
 
   const members = group?.memberIds ?? [];
-  const held = group ? heldText(group) : '';
   return (
     <>
       <Dialog open onOpenChange={onClose}>
@@ -90,20 +73,11 @@ export function UserGroupDetailDialog({ groupId, canManage, onClose }: Props) {
                 </div>
               </div>
 
-              {held && (
-                <div role="status" className="space-y-2 rounded-md border p-3 text-sm">
-                  <p>{held}</p>
-                  {group.removalApproved ? (
-                    <p className="text-muted-foreground">Removal approved: it happens at the next sync, within 30 minutes.</p>
-                  ) : (
-                    canManage &&
-                    !!group.pendingRemoval && (
-                      <Button size="sm" onClick={() => approve.mutate(group.id, { onError })} disabled={approve.isPending}>
-                        Approve removal
-                      </Button>
-                    )
-                  )}
-                </div>
+              {group.syncState === 'source-missing' && (
+                <p role="status" className="rounded-md border p-3 text-sm">
+                  No one in Microsoft 365 is in this {group.source.kind === 'squad' ? 'squad' : 'department'} any more. You can
+                  disable the group.
+                </p>
               )}
 
               <div className="space-y-2">

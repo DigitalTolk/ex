@@ -395,7 +395,7 @@ func TestUserGroups_Permissions(t *testing.T) {
 		}
 	}
 
-	// Members read; only admins edit, approve and read the sync status.
+	// Members read; only admins edit and read the sync status.
 	if _, err := f.svc.List(ctx, ugMember, false); err != nil {
 		t.Fatalf("member List: %v", err)
 	}
@@ -403,9 +403,8 @@ func TestUserGroups_Permissions(t *testing.T) {
 		name := "Renamed"
 		_, updateErr := f.svc.Update(ctx, actor, g.ID, UserGroupPatch{Name: &name})
 		_, enableErr := f.svc.SetEnabled(ctx, actor, g.ID, true)
-		_, approveErr := f.svc.ApproveHeldRemoval(ctx, actor, g.ID)
 		_, statusErr := f.svc.SyncStatus(ctx, actor)
-		for op, err := range map[string]error{"Update": updateErr, "SetEnabled": enableErr, "ApproveHeldRemoval": approveErr, "SyncStatus": statusErr} {
+		for op, err := range map[string]error{"Update": updateErr, "SetEnabled": enableErr, "SyncStatus": statusErr} {
 			if !errors.Is(err, ErrForbidden) {
 				t.Errorf("%+v %s = %v, want forbidden", actor, op, err)
 			}
