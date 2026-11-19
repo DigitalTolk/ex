@@ -20,7 +20,19 @@ export type GestureState =
   | { kind: 'tap-pending'; pointerId: number; startTime: number; startX: number; startY: number }
   | { kind: 'pan'; pointerId: number; startX: number; startY: number; originX: number; originY: number }
   | { kind: 'swipe'; pointerId: number; startX: number; startY: number; lastX: number; lastY: number }
-  | { kind: 'pinch'; startDistance: number; startZoom: number; centerX: number; centerY: number; originX: number; originY: number };
+  | {
+      kind: 'pinch';
+      startDistance: number;
+      startZoom: number;
+      centerX: number;
+      centerY: number;
+      originX: number;
+      originY: number;
+      // Where the image's center sits on screen with no pan or zoom: the
+      // point it scales around.
+      anchorX: number;
+      anchorY: number;
+    };
 
 export const idleGesture: GestureState = { kind: 'idle' };
 
@@ -30,6 +42,11 @@ export interface GestureContext {
   zoom: number;
   panX: number;
   panY: number;
+  // The image's center on screen with no pan or zoom. A pinch zooms around
+  // the fingers by knowing where the image scales from; without it, the
+  // fingers' starting point stands in.
+  anchorX?: number;
+  anchorY?: number;
 }
 
 export interface PinchSnapshot {
@@ -102,6 +119,8 @@ export function onPointerDown(
         centerY: c.y,
         originX: ctx.panX,
         originY: ctx.panY,
+        anchorX: ctx.anchorX ?? c.x,
+        anchorY: ctx.anchorY ?? c.y,
       },
       tapStart: null,
     };
@@ -151,14 +170,18 @@ export function readPinchUpdate(
   const [a, b] = activePointers.slice(0, 2);
   const dist = Math.max(1, distance(a, b));
   const c = center(a, b);
-  const nextZoom = Math.min(
-    imageDevicePixelMaxZoom,
-    Math.max(1, Math.round((state.startZoom * dist / state.startDistance) * 100) / 100),
-  );
+  // Unrounded: rounded steps make the image tick as the fingers spread.
+  const zoom = Math.min(imageDevicePixelMaxZoom, Math.max(1, (state.startZoom * dist) / state.startDistance));
+  // At the fitted size the image sits centered, as it shows.
+  if (zoom === 1) return { zoom, panX: 0, panY: 0 };
+  // Keep the point that was under the fingers under them: it sat
+  // (start center - anchor - start pan) / start zoom from the image's
+  // middle, and the image scales around the anchor.
+  const k = zoom / state.startZoom;
   return {
-    zoom: nextZoom,
-    panX: state.originX + c.x - state.centerX,
-    panY: state.originY + c.y - state.centerY,
+    zoom,
+    panX: c.x - state.anchorX - k * (state.centerX - state.anchorX - state.originX),
+    panY: c.y - state.anchorY - k * (state.centerY - state.anchorY - state.originY),
   };
 }
 

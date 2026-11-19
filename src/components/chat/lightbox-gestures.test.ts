@@ -234,6 +234,8 @@ describe('lightbox-gestures.readPanUpdate / readPinchUpdate', () => {
       centerY: 200,
       originX: 0,
       originY: 0,
+      anchorX: 200,
+      anchorY: 200,
     };
     const result = readPinchUpdate(
       state,
@@ -251,12 +253,52 @@ describe('lightbox-gestures.readPanUpdate / readPinchUpdate', () => {
       centerY: 200,
       originX: 0,
       originY: 0,
+      anchorX: 200,
+      anchorY: 200,
     };
     const result = readPinchUpdate(
       state,
       [{ pointerId: 1, x: 0, y: 200 }, { pointerId: 2, x: 1000, y: 200 }],
     );
     expect(result?.zoom).toBe(6);
+  });
+
+  it('readPinchUpdate keeps the point between the fingers still while zooming', () => {
+    // The image's resting center is at (200, 200); the fingers start around
+    // (300, 200), 100px right of it, and spread to twice the distance.
+    const { state } = onPointerDown(
+      idleGesture,
+      { pointerId: 2, x: 350, y: 200, pointerType: 'touch', time: 0 },
+      [{ pointerId: 1, x: 250, y: 200 }, { pointerId: 2, x: 350, y: 200 }],
+      { ...baseCtx, anchorX: 200, anchorY: 200 },
+    );
+    const result = readPinchUpdate(state, [{ pointerId: 1, x: 200, y: 200 }, { pointerId: 2, x: 400, y: 200 }]);
+    expect(result).toEqual({ zoom: 2, panX: -100, panY: 0 });
+    // The content point that was under the fingers is under them still:
+    // anchor + pan + zoom * (its offset from the center at zoom 1).
+    expect(200 + result!.panX + result!.zoom * 100).toBe(300);
+  });
+
+  it('readPinchUpdate follows the fingers as they move, and zooms smoothly', () => {
+    const state: GestureState = {
+      kind: 'pinch', startDistance: 100, startZoom: 2, centerX: 200, centerY: 200,
+      originX: 40, originY: -20, anchorX: 200, anchorY: 200,
+    };
+    // Same spread, moved 30px right and 10px down: a pure pan.
+    expect(readPinchUpdate(state, [{ pointerId: 1, x: 180, y: 210 }, { pointerId: 2, x: 280, y: 210 }]))
+      .toEqual({ zoom: 2, panX: 70, panY: -10 });
+    // No 1% steps: a 3px spread is a 3% zoom, not a rounded one.
+    expect(readPinchUpdate(state, [{ pointerId: 1, x: 150, y: 200 }, { pointerId: 2, x: 251.5, y: 200 }])?.zoom).toBe(2.03);
+    expect(readPinchUpdate(state, [{ pointerId: 1, x: 150, y: 200 }, { pointerId: 2, x: 250.7, y: 200 }])?.zoom).toBeCloseTo(2.014, 6);
+  });
+
+  it('readPinchUpdate drops the pan when the pinch reaches the fitted size', () => {
+    const state: GestureState = {
+      kind: 'pinch', startDistance: 200, startZoom: 2, centerX: 300, centerY: 200,
+      originX: 80, originY: 0, anchorX: 200, anchorY: 200,
+    };
+    expect(readPinchUpdate(state, [{ pointerId: 1, x: 280, y: 200 }, { pointerId: 2, x: 330, y: 200 }]))
+      .toEqual({ zoom: 1, panX: 0, panY: 0 });
   });
 });
 
