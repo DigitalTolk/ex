@@ -145,7 +145,11 @@ type Config struct {
 	WorkbenchURL string `env:"WORKBENCH_URL"`
 	// WorkbenchToken is the bearer token ex calls the workbench with
 	// (WORKBENCH_TOKEN, a secret).
-	WorkbenchToken       string `env:"WORKBENCH_TOKEN"`
+	WorkbenchToken string `env:"WORKBENCH_TOKEN"`
+	// AgentGitHost is the team's GitLab (AGENT_GIT_HOST, e.g.
+	// gitlab.example.com). Agents with a shell are told to use it with the
+	// machine's own git and glab sign-in. Empty → they aren't told.
+	AgentGitHost         string `env:"AGENT_GIT_HOST"`
 	ConnectorProviderKey string `env:"CONNECTOR_PROVIDER_API_KEY"`
 	// ConnectorPrivateDomains lists the domains whose hosts connector calls
 	// may reach on a private 10.x address ("digitaltolk.net" covers the domain

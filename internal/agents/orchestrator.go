@@ -296,6 +296,10 @@ type Orchestrator struct {
 	// feature is off and picks never attach to runs).
 	connectors connectorRegistry
 
+	// gitHost is the team's GitLab (SetGitHost); "" leaves the bundle's git
+	// layer out.
+	gitHost string
+
 	// archive tiers a terminal run's timeline into object storage and prunes
 	// the hot DynamoDB rows (nil → archiving is off and events stay in
 	// DynamoDB — e.g. dev without S3 configured).
@@ -3494,6 +3498,7 @@ func (o *Orchestrator) buildBundle(ctx context.Context, run *model.Run) (string,
 	b.taskBrief()
 	b.codingTask()
 	b.toolCraft()
+	b.gitAccess()
 	b.memory()
 	b.coRoster()
 	b.design()

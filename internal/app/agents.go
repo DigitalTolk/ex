@@ -90,6 +90,7 @@ func (a *App) buildAgents(ctx context.Context) error {
 	// Metabase) may be reached on a private 10.x address; no other host may.
 	agents.ConfigureConnectorDomains(ctx, cfg.ConnectorPrivateDomains)
 	ag.orch.SetConnectorRegistry(ag.connectors)
+	ag.orch.SetGitHost(cfg.AgentGitHost)
 	ag.engine = newServerEngine(cfg, ag.orch, ag.connectors)
 	if ag.engine != nil {
 		ag.orch.SetServerEngine(ag.engine)
