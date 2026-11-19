@@ -56,6 +56,9 @@ func TestParseDepartment(t *testing.T) {
 		// The squad list.
 		"Engineering - DOPE,Platform":        {dept: "Engineering", squads: []string{"DOPE", "Platform"}, anomalies: []DepartmentAnomalyKind{AnomalySpacing}},
 		"Engineering - DOPE, , Platform,":    {dept: "Engineering", squads: []string{"DOPE", "Platform"}, anomalies: []DepartmentAnomalyKind{AnomalyEmptySquad}},
+		"Engineering - DOPE,,Platform":       {dept: "Engineering", squads: []string{"DOPE", "Platform"}, anomalies: []DepartmentAnomalyKind{AnomalyEmptySquad, AnomalySpacing}},
+		"Engineering - DOPE,, Platform":      {dept: "Engineering", squads: []string{"DOPE", "Platform"}, anomalies: []DepartmentAnomalyKind{AnomalyEmptySquad}},
+		"Engineering - A,B;C":                {dept: "Engineering", squads: []string{"A", "B", "C"}, anomalies: []DepartmentAnomalyKind{AnomalySemicolon, AnomalySpacing}},
 		"Engineering - DOPE, dope":           {dept: "Engineering", squads: []string{"DOPE"}, anomalies: []DepartmentAnomalyKind{AnomalyDuplicateSquad}},
 		"Engineering - DOPE; Platform":       {dept: "Engineering", squads: []string{"DOPE", "Platform"}, anomalies: []DepartmentAnomalyKind{AnomalySemicolon}},
 		"Engineering - DOPE;Platform":        {dept: "Engineering", squads: []string{"DOPE", "Platform"}, anomalies: []DepartmentAnomalyKind{AnomalySemicolon, AnomalySpacing}},

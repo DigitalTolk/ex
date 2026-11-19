@@ -95,7 +95,7 @@ func ParseDepartment(raw string) ParsedDepartment {
 	if next, _ := findDepartmentSeparator(rest, 0); next >= 0 {
 		out.anomaly(AnomalySecondSeparator)
 	}
-	out.Squads = out.splitSquads(rest)
+	out.Squads = out.splitSquads(string(rest))
 	return out
 }
 
@@ -107,23 +107,17 @@ func (p *ParsedDepartment) anomaly(kind DepartmentAnomalyKind) {
 
 // splitSquads splits a squad list on "," (and ";"), dropping empty entries
 // and repeats.
-func (p *ParsedDepartment) splitSquads(list []rune) []string {
+func (p *ParsedDepartment) splitSquads(list string) []string {
+	if strings.Contains(list, ";") {
+		p.anomaly(AnomalySemicolon)
+	}
 	var squads, seen []string
-	start := 0
-	for i := 0; i <= len(list); i++ {
-		if i < len(list) && list[i] != ',' && list[i] != ';' {
-			continue
+	for i, entry := range strings.Split(strings.ReplaceAll(list, ";", ","), ",") {
+		// Every entry after the first follows a separator, which needs a space.
+		if i > 0 && entry != "" && !strings.HasPrefix(entry, " ") {
+			p.anomaly(AnomalySpacing)
 		}
-		if i < len(list) {
-			if list[i] == ';' {
-				p.anomaly(AnomalySemicolon)
-			}
-			if i+1 < len(list) && list[i+1] != ' ' {
-				p.anomaly(AnomalySpacing)
-			}
-		}
-		squad := strings.TrimSpace(string(list[start:i]))
-		start = i + 1
+		squad := strings.TrimSpace(entry)
 		key := strings.ToLower(squad)
 		switch {
 		case squad == "":
