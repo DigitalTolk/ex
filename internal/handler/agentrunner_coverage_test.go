@@ -1859,3 +1859,8 @@ func TestHrunnerCovLinkMessage(t *testing.T) {
 		}
 	})
 }
+
+func (s hrunnerCovConvStore) SetMuted(context.Context, string, string, bool) error { return nil }
+func (s hrunnerCovConvStore) ConversationMuted(context.Context, string, string) (bool, error) {
+	return false, nil
+}

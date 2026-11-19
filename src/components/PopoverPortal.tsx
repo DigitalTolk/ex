@@ -21,6 +21,8 @@ interface PopoverPortalProps {
   estimatedWidth?: number;
   preferredSide?: 'top' | 'bottom';
   preferredAlign?: 'start' | 'end';
+  // Beside the trigger (to its right, tops level), not under it.
+  beside?: boolean;
   className?: string;
   role?: string;
   ariaLabel?: string;
@@ -43,6 +45,7 @@ export function PopoverPortal({
   estimatedWidth,
   preferredSide = 'bottom',
   preferredAlign = 'start',
+  beside,
   className = '',
   role = 'dialog',
   ariaLabel,
@@ -87,6 +90,7 @@ export function PopoverPortal({
     estimatedWidth,
     preferredSide,
     preferredAlign,
+    beside,
     contentRef,
   });
 

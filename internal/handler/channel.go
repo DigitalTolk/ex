@@ -207,6 +207,29 @@ func (h *ChannelHandler) Update(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, ch)
 }
 
+// SetIcon sets or clears ({"icon": ""}) the emoji shown for the channel.
+func (h *ChannelHandler) SetIcon(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.UserIDFromContext(r.Context())
+	id := pathParam(r, "id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "missing_id", "channel ID is required")
+		return
+	}
+	var body struct {
+		Icon string `json:"icon"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
+		return
+	}
+	ch, err := h.channelSvc.SetIcon(r.Context(), userID, id, body.Icon)
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, ch)
+}
+
 // NameAvailable answers whether a channel may be called {name}: the create
 // and rename dialogs ask while the name is typed, so a taken name shows
 // before submitting. ?channel= is the channel being renamed — its own name

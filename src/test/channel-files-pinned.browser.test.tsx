@@ -77,6 +77,9 @@ interface FetchPlan {
   // Optional override for the channel's message page (defaults to one Alice
   // message referencing the attachment).
   messages?: unknown[];
+  // What a thread's panel loads (GET …/messages/:id/thread): the root, then
+  // its replies. Left out, the thread request gets the message page.
+  thread?: unknown[];
   // Optional override for the channel member list (defaults to Me + Alice).
   members?: unknown[];
   // Role of the current user (Me) in the default member list. Drives the
@@ -98,6 +101,9 @@ interface FetchPlan {
 function installFetchStub(plan: FetchPlan): () => void {
   const slug = plan.slug ?? 'general';
   const myRole = plan.myRole ?? 'member';
+  // The channel's emoji: kept across requests, so a PUT …/icon shows in the
+  // channel the page reads back.
+  let icon = '';
   const original = globalThis.fetch;
   globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -127,17 +133,21 @@ function installFetchStub(plan: FetchPlan): () => void {
     if (url.includes('/api/v1/admin/settings')) return apiJSON({ maxUploadBytes: 0, allowedExtensions: [], giphyEnabled: false });
 
     // Channel page bootstrap
-    if (url.endsWith(`/api/v1/channels/${slug}`)) {
-      return apiJSON({
-        id: CHANNEL_ID,
-        name: slug,
-        slug,
-        type: 'public',
-        description: '',
-        createdBy: ME_ID,
-        archived: false,
-        createdAt: '2026-01-01T00:00:00Z',
-      });
+    const channelWire = () => ({
+      id: CHANNEL_ID,
+      name: slug,
+      slug,
+      type: 'public',
+      description: '',
+      createdBy: ME_ID,
+      archived: false,
+      createdAt: '2026-01-01T00:00:00Z',
+      ...(icon ? { icon } : {}),
+    });
+    if (url.endsWith(`/api/v1/channels/${slug}`)) return apiJSON(channelWire());
+    if (url.endsWith(`/api/v1/channels/${CHANNEL_ID}/icon`) && method === 'PUT') {
+      icon = (JSON.parse(String(init?.body)) as { icon: string }).icon;
+      return apiJSON(channelWire());
     }
     if (url.endsWith(`/api/v1/channels/${CHANNEL_ID}/members`)) {
       return apiJSON(plan.members ?? [
@@ -161,6 +171,7 @@ function installFetchStub(plan: FetchPlan): () => void {
         attachmentIDs: [],
       });
     }
+    if (plan.thread && /\/messages\/[^/?]+\/thread/.test(url) && method === 'GET') return apiJSON(plan.thread);
     if (url.includes(`/api/v1/channels/${CHANNEL_ID}/messages`) && !url.includes('/pinned') && !url.includes('/no-unfurl')) {
       // Initial tail page with one message that references the attachment
       // (or a caller-supplied override).
@@ -253,6 +264,13 @@ function renderRoute(initialPath: string) {
   );
 }
 
+// Opens the channel menu from the channel's name in the header. Not "the
+// first button" there: for whoever may edit the channel, the icon before the
+// name is a button of its own (it changes the icon).
+function openChannelMenu(screen: Awaited<ReturnType<typeof render>>) {
+  return screen.getByTestId('channel-title-stack').getByRole('heading').click();
+}
+
 // Renders ChannelView directly under a route WITHOUT the :id param so the
 // `if (!slug)` placeholder branch runs.
 function renderNoSlug() {
@@ -278,9 +296,10 @@ function renderNoSlug() {
   );
 }
 
-// Renders the channel route with a pre-seeded active tag so the right rail
-// shows the TagSearchPanel branch.
-function renderWithActiveTag(initialPath: string) {
+// Renders the channel route inside the tag provider (the app shell's, in the
+// real app). By default a tag is already open, so the right rail shows the
+// TagSearchPanel branch; `null` starts with none.
+function renderWithActiveTag(initialPath: string, initialTag: string | null = 'urgent') {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0, staleTime: 0 } } });
   return render(
     <QueryClientProvider client={qc}>
@@ -288,7 +307,7 @@ function renderWithActiveTag(initialPath: string) {
         <PresenceProvider>
           <NotificationProvider>
             <TypingProvider>
-              <TagSearchProvider initialTag="urgent">
+              <TagSearchProvider initialTag={initialTag}>
                 <MemoryRouter initialEntries={[initialPath]}>
                   <div style={{ height: 800, width: 1280 }}>
                     <Routes>
@@ -603,6 +622,77 @@ describe('channel → header toggles → files + pinned panels (full route)', ()
     }, { timeout: 15000 });
   });
 
+  // Regression: the thread kept the right-hand slot, so a #tag clicked while
+  // a thread was open (in the thread itself, or in the list beside it) did
+  // nothing the user could see.
+  it('opening a tag while a thread is open closes the thread and shows the tag panel', async () => {
+    const tagged = {
+      id: 'm-1',
+      parentID: CHANNEL_ID,
+      parentType: 'channel',
+      authorID: ALICE_ID,
+      body: 'ship it #urgent',
+      createdAt: '2026-05-01T11:00:00Z',
+    };
+    teardown = installFetchStub({ files: [], pinned: [], attachments: {}, messages: [tagged], thread: [tagged] });
+    const screen = await renderWithActiveTag('/channel/general?thread=m-1', null);
+    const thread = screen.getByRole('complementary', { name: 'Thread' });
+    await expect.element(thread).toBeVisible();
+    expect(screen.getByRole('complementary', { name: 'Messages tagged urgent' }).query()).toBeNull();
+
+    // The tag on the thread's own root message: on a phone the thread covers
+    // the list, so it is the one within reach at every width.
+    await thread.getByRole('button', { name: '#urgent' }).click();
+
+    await expect.element(screen.getByRole('complementary', { name: 'Messages tagged urgent' })).toBeVisible();
+    await expect.element(screen.getByRole('heading', { name: 'Tagged: urgent' })).toBeVisible();
+    await expect.element(thread).not.toBeInTheDocument();
+  });
+
+  // The other half of the same rule: only a tag OPENED here takes the slot.
+  // One left open from the last chat must not close a thread a link opened.
+  it('keeps a link-opened thread when a tag was already open on arrival', async () => {
+    teardown = installFetchStub({ files: [], pinned: [], attachments: {} });
+    const screen = await renderWithActiveTag('/channel/general?thread=m-1');
+    const thread = screen.getByRole('complementary', { name: 'Thread' });
+    await expect.element(thread).toBeVisible();
+    // Once the channel and its messages are in, the thread is still there.
+    await expect.element(screen.getByText('see attached').first()).toBeInTheDocument();
+    await expect.element(thread).toBeVisible();
+    expect(screen.getByRole('complementary', { name: 'Messages tagged urgent' }).query()).toBeNull();
+  });
+
+  // A tag takes the slot from the other panels too.
+  it('opening a tag while the pinned panel is open swaps the pinned panel for the tag panel', async () => {
+    teardown = installFetchStub({
+      files: [],
+      pinned: [],
+      attachments: {},
+      messages: [
+        {
+          id: 'm-1',
+          parentID: CHANNEL_ID,
+          parentType: 'channel',
+          authorID: ALICE_ID,
+          body: 'ship it #urgent',
+          createdAt: '2026-05-01T11:00:00Z',
+        },
+      ],
+    });
+    // The full chat page: the tag sits in the message list, which takes its
+    // height from the app shell. Mounted bare at phone width the list has
+    // none of its own, and could measure 0 tall and draw no messages at all.
+    const screen = await renderRoute('/channel/general');
+    await expect.element(screen.getByRole('button', { name: '#urgent' })).toBeVisible();
+    await screen.getByTestId('pinned-toggle').click();
+    await expect.element(screen.getByTestId('pinned-toggle')).toHaveAttribute('aria-pressed', 'true');
+    // On a phone the open panel covers the list, so the tag is pressed where
+    // it sits rather than through the pointer.
+    (screen.getByRole('button', { name: '#urgent' }).element() as HTMLElement).click();
+    await expect.element(screen.getByRole('complementary', { name: 'Messages tagged urgent' })).toBeVisible();
+    await expect.element(screen.getByTestId('pinned-toggle')).toHaveAttribute('aria-pressed', 'false');
+  });
+
   it('shows the placeholder when there is no channel slug in the route', async () => {
     teardown = installFetchStub({ files: [], pinned: [], attachments: {} });
     const screen = await renderNoSlug();
@@ -818,7 +908,7 @@ describe('channel → header toggles → files + pinned panels (full route)', ()
       screen.getByTestId('channel-title-stack').getByRole('heading', { name: 'general' }),
     ).toBeVisible();
     // Open the channel header dropdown and click Mute.
-    await screen.getByTestId('channel-title-stack').getByRole('button').first().click();
+    await openChannelMenu(screen);
     await screen.getByRole('menuitem', { name: 'Mute channel' }).click();
     await vi.waitFor(() => {
       const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.map((c) => String(c[0]));
@@ -845,7 +935,7 @@ describe('channel → header toggles → files + pinned panels (full route)', ()
 
     // Archive opens a confirm dialog; confirming → DELETE /channels/:id
     // (handleArchive's non-null arm).
-    await screen.getByTestId('channel-title-stack').getByRole('button').first().click();
+    await openChannelMenu(screen);
     await screen.getByRole('menuitem', { name: /Archive channel/ }).click();
     await screen.getByRole('button', { name: /^Archive$/ }).click();
     await vi.waitFor(() => {
@@ -887,7 +977,7 @@ describe('channel → header toggles → files + pinned panels (full route)', ()
       screen.getByTestId('channel-title-stack').getByRole('heading', { name: 'random' }),
     ).toBeVisible();
 
-    await screen.getByTestId('channel-title-stack').getByRole('button').first().click();
+    await openChannelMenu(screen);
     await screen.getByRole('menuitem', { name: /Leave channel/ }).click();
     await vi.waitFor(() => {
       const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.map((c) => `${c[1]?.method ?? 'GET'} ${String(c[0])}`);
@@ -910,17 +1000,56 @@ describe('channel → header toggles → files + pinned panels (full route)', ()
       screen.getByTestId('channel-title-stack').getByRole('heading', { name: 'general' }),
     ).toBeVisible();
 
-    await screen.getByTestId('channel-title-stack').getByRole('button').first().click();
+    await openChannelMenu(screen);
     await screen.getByRole('menuitem', { name: /Edit description/ }).click();
-    const descInput = screen.getByPlaceholder('Add a description...');
+    const descInput = screen.getByRole('textbox', { name: 'Description' });
     await descInput.fill('A brand new description');
-    // Enter commits the description edit (Header's onDescriptionSave →
+    // Save commits the description edit (Header's onDescriptionSave →
     // ChannelView.handleDescriptionSave → PATCH /channels/:id).
-    await descInput.element().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await screen.getByTestId('channel-description-save').click();
     await vi.waitFor(() => {
       const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.map((c) => `${c[1]?.method ?? 'GET'} ${String(c[0])}`);
       expect(calls.some((u) => u.startsWith('PATCH') && u.includes(`/channels/${CHANNEL_ID}`))).toBe(true);
     }, { timeout: 15000 });
+  });
+
+  // The channel's icon, end to end: the owner clicks the icon in the header,
+  // picks an emoji, the channel is saved with its name and the header shows
+  // it; "Remove icon" in the channel menu gives the globe back.
+  it('an owner picks an emoji as the channel icon from the header, then removes it', async () => {
+    if (window.innerWidth <= 767) return; // the header icon is a desktop control
+    teardown = installFetchStub({
+      files: [],
+      pinned: [],
+      attachments: {},
+      members: [
+        { channelID: CHANNEL_ID, userID: ME_ID, role: 'owner', displayName: 'Me', joinedAt: '2026-01-01T00:00:00Z' },
+      ],
+    });
+    const iconPuts = () =>
+      (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls
+        .filter((c) => String(c[0]).endsWith(`/api/v1/channels/${CHANNEL_ID}/icon`))
+        .map((c) => [c[1]?.method, c[1]?.body]);
+    const screen = await renderRoute('/channel/general');
+    const iconButton = screen.getByRole('button', { name: 'Change channel icon' });
+    await expect.element(iconButton).toBeVisible();
+    expect(iconButton.getByTestId('channel-emoji').query()).toBeNull();
+
+    await iconButton.click();
+    const picker = screen.getByRole('dialog', { name: 'Channel icon' });
+    await picker.getByRole('textbox', { name: 'Search emojis' }).fill('rocket');
+    await picker.getByRole('listitem', { name: 'React with :rocket:', exact: true }).click();
+
+    await expect.element(iconButton.getByTestId('channel-emoji')).toHaveTextContent('\u{1F680}');
+    expect(iconPuts()).toEqual([['PUT', JSON.stringify({ icon: 'rocket' })]]);
+
+    await openChannelMenu(screen);
+    await screen.getByRole('menuitem', { name: 'Remove icon' }).click();
+    await expect.element(iconButton.getByTestId('channel-emoji')).not.toBeInTheDocument();
+    expect(iconPuts()).toEqual([
+      ['PUT', JSON.stringify({ icon: 'rocket' })],
+      ['PUT', JSON.stringify({ icon: '' })],
+    ]);
   });
 
   it('closes a UI-opened thread (local thread anchor — undefined arm)', async () => {
@@ -1133,7 +1262,7 @@ describe('channel → header toggles → files + pinned panels (full route)', ()
     await expect.element(
       screen.getByTestId('channel-title-stack').getByRole('heading', { name: 'general' }),
     ).toBeVisible();
-    await screen.getByTestId('channel-title-stack').getByRole('button').first().click();
+    await openChannelMenu(screen);
     // ChannelView's onNotificationPrefsClick flips notifPrefsOpen → the
     // per-channel NotificationPreferencesDialog mounts.
     await screen.getByRole('menuitem', { name: 'Notification preferences' }).click();

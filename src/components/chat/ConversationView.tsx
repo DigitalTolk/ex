@@ -121,7 +121,7 @@ export function ConversationView() {
   const [threadRootID, setThreadRootID] = useState<string | null>(null);
   const inputRef = useRef<MessageInputHandle>(null);
   const panels = useSidePanels<'members' | 'pinned' | 'files'>();
-  const { activeTag, closeTag } = useTagState();
+  const { activeTag, tagNonce, closeTag } = useTagState();
 
   // Tracks a URL-driven thread the user has dismissed. See
   // ChannelView for the full rationale — stripping the URL on close
@@ -149,6 +149,21 @@ export function ConversationView() {
     panels.close();
   }, [closeTag, panels]);
   const closeThread = dismissThread;
+  // A tag opened from a message (one in the open thread included) takes the
+  // right-hand slot, so the thread and the other panels make way for it. The
+  // tag itself opens through context, where this view has no say: its nonce
+  // moving is the signal. (Not on mount: a tag left open from the last chat
+  // must not close a thread a link opened here.)
+  const onTagOpened = useEventCallback(() => {
+    dismissThread();
+    panels.close();
+  });
+  const servedTagNonce = useRef(tagNonce);
+  useEffect(() => {
+    if (servedTagNonce.current === tagNonce) return;
+    servedTagNonce.current = tagNonce;
+    onTagOpened();
+  }, [tagNonce, onTagOpened]);
   const togglePinned = () => { dismissThread(); closeTag(); panels.toggle('pinned'); };
   const toggleFiles = () => { dismissThread(); closeTag(); panels.toggle('files'); };
   const showMembers = panels.isActive('members');

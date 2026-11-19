@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import {
   ChannelIntro,
   DMIntro,
@@ -35,7 +35,51 @@ describe('ChannelIntro', () => {
 
   it('renders description when present', () => {
     render(<ChannelIntro channel={{ ...channel, description: 'water-cooler chat' }} creatorName="A" />);
-    expect(screen.getByText('water-cooler chat')).toBeInTheDocument();
+    expect(within(screen.getByTestId('channel-intro-description')).getByText('water-cooler chat')).toBeInTheDocument();
+  });
+
+  it('has no description block for a channel without one', () => {
+    render(<ChannelIntro channel={channel} creatorName="A" />);
+    expect(screen.queryByTestId('channel-intro-description')).toBeNull();
+  });
+
+  // A description is written like a message: its lines stay apart, its links
+  // can be clicked and its emphasis shows.
+  it('renders the description as markdown, with its lines kept and its links live', () => {
+    render(
+      <ChannelIntro
+        channel={{ ...channel, description: 'Daily **standup** notes.\nRunbook: https://example.com/runbook' }}
+        creatorName="A"
+      />,
+    );
+    const description = screen.getByTestId('channel-intro-description');
+    expect(within(description).getByRole('link', { name: 'example.com/runbook' })).toHaveAttribute(
+      'href',
+      'https://example.com/runbook',
+    );
+    expect(within(description).getByText('standup').tagName).toBe('STRONG');
+    expect(description.textContent).not.toContain('**');
+    // Two lines, not one run of text: the line break is kept, and shown.
+    expect(description.textContent).toBe('Daily standup notes.\nRunbook: example.com/runbook');
+    expect(description.querySelector('p')).toHaveClass('whitespace-pre-wrap');
+  });
+
+  it("shows the channel's own emoji in place of the globe", () => {
+    render(<ChannelIntro channel={{ ...channel, icon: 'rocket' }} creatorName="A" />);
+    const intro = screen.getByTestId('conversation-intro');
+    expect(within(intro).getByTestId('channel-emoji')).toHaveTextContent('\u{1F680}');
+    expect(intro.querySelector('svg.lucide-globe')).toBeNull();
+    // Decorative here: the heading beside it names the channel.
+    expect(within(intro).getByTestId('channel-emoji')).toHaveAttribute('aria-hidden', 'true');
+  });
+
+  it('keeps the globe, or the lock of a private channel, when the channel has no emoji', () => {
+    const { unmount } = render(<ChannelIntro channel={channel} creatorName="A" />);
+    expect(screen.getByTestId('conversation-intro').querySelector('svg.lucide-globe')).not.toBeNull();
+    expect(screen.queryByTestId('channel-emoji')).toBeNull();
+    unmount();
+    render(<ChannelIntro channel={{ ...channel, type: 'private' }} creatorName="A" />);
+    expect(screen.getByTestId('conversation-intro').querySelector('svg.lucide-lock')).not.toBeNull();
   });
 });
 

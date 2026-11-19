@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { ReactNode } from 'react';
 import { render } from 'vitest-browser-react';
 import { MemoryRouter } from 'react-router-dom';
 import { AppLayout } from './AppLayout';
@@ -12,13 +13,23 @@ import { nativeTouchSwipe, touchScrollWorks } from '@/test/native-scroll';
 // through the browser's touch-action decision — so these go through CDP
 // (Chromium only; the probe skips the gesture where the harness can't).
 
-vi.mock('@/components/activity/ActivityModeSwitch', () => ({
-  ActivityModeSwitch: () => <div data-testid="sidebar-mode-switch" />,
-}));
 vi.mock('./MobileTabBar', () => ({ MobileTabBar: () => <nav data-testid="mobile-tab-bar" /> }));
 vi.mock('@/components/activity/ActivityPanel', () => ({ ActivityPanel: () => <div data-testid="activity-panel" /> }));
 vi.mock('./Sidebar', () => ({ Sidebar: () => <div>Sidebar</div> }));
+// The phone tab bar still draws the account menu.
 vi.mock('./AccountMenu', () => ({ AccountMenu: () => <div data-testid="sidebar-account" /> }));
+// The icon rail and the column header have their own tests; here they are
+// markers, so the layout's structure can be read without their providers.
+vi.mock('./SidebarRail', () => ({
+  SidebarRail: ({ onNavigate }: { onNavigate?: () => void }) => (
+    <nav data-testid="sidebar-rail">
+      <button type="button" onClick={onNavigate}>Rail link</button>
+    </nav>
+  ),
+}));
+vi.mock('./SidebarColumnHeader', () => ({
+  SidebarColumnHeader: ({ children }: { children?: ReactNode }) => <div data-testid="sidebar-column-header">{children}</div>,
+}));
 vi.mock('./AppTopBar', () => ({ AppTopBar: () => <header data-testid="app-shell-header" /> }));
 vi.mock('@/components/NotificationPermissionBanner', () => ({ NotificationPermissionBanner: () => null }));
 vi.mock('./LoadingBar', () => ({ LoadingBar: () => null }));

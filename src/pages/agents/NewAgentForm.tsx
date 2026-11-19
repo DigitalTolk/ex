@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useCreateAgent } from '@/hooks/useAgents';
 import { NativeSelect } from '@/components/ui/native-select';
+import { AgentModelSelect } from './AgentModelSelect';
 
 // starterPersona is a REAL, editable starting prompt — not a ghost
 // placeholder. New agents begin from working words the creator tweaks
@@ -119,7 +120,11 @@ export function NewAgentForm({ onDone }: { onDone: () => void }) {
               id="new-agent-harness"
               className="mt-1"
               value={harness}
-              onChange={(e) => setHarness(e.target.value)}
+              onChange={(e) => {
+                setHarness(e.target.value);
+                // Each engine has its own models: start the new one on its default.
+                setModel('');
+              }}
             >
               <option value="claude">Claude Code (CLI)</option>
               <option value="codex">Codex (CLI)</option>
@@ -128,14 +133,14 @@ export function NewAgentForm({ onDone }: { onDone: () => void }) {
           </div>
           <div>
             <Label htmlFor="new-agent-model">Model</Label>
-            <Input
+            <AgentModelSelect
               id="new-agent-model"
               className={isBedrock ? 'mt-1 w-72' : 'mt-1 w-48'}
+              harness={harness}
               value={model}
-              placeholder={
-                isBedrock ? 'eu.anthropic.claude-opus-5' : 'backend default'
-              }
-              onChange={(e) => setModel(e.target.value)}
+              onChange={setModel}
+              emptyLabel="Backend default"
+              placeholder="backend default"
             />
           </div>
           {isBedrock && (

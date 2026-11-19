@@ -59,6 +59,7 @@ function optimisticSidebarAttr(body: Record<string, unknown>): Partial<SidebarAt
   if (typeof body.favorite === 'boolean') next.favorite = body.favorite;
   if (typeof body.categoryID === 'string') next.categoryID = body.categoryID;
   if (typeof body.sidebarPosition === 'number') next.sidebarPosition = body.sidebarPosition;
+  if (typeof body.muted === 'boolean') next.muted = body.muted;
   return next;
 }
 
@@ -234,7 +235,7 @@ export function useDeleteCategory() {
 // channel or conversation's user-side row (favorite or category) and
 // invalidates the right list cache. Internal — exported callers below
 // pin the kind/attr at compile time.
-function usePutSidebarAttr(kind: SidebarItemKind, attr: 'favorite' | 'category') {
+function usePutSidebarAttr(kind: SidebarItemKind, attr: 'favorite' | 'category' | 'mute') {
   const qc = useQueryClient();
   const invalidateKey = INVALIDATE_KEY[kind];
   return useMutation({
@@ -290,6 +291,18 @@ export function useFavoriteConversation() {
     ...m,
     mutate: (vars: { conversationID: string; favorite: boolean }) =>
       m.mutate({ id: vars.conversationID, body: { favorite: vars.favorite } }),
+  };
+}
+
+// Mutes or unmutes the user's chat with a bot or a webhook (the server
+// refuses a chat with a person). While muted it alerts for nothing but a
+// direct @-mention.
+export function useMuteConversation() {
+  const m = usePutSidebarAttr('conversation', 'mute');
+  return {
+    ...m,
+    mutate: (vars: { conversationID: string; muted: boolean }) =>
+      m.mutate({ id: vars.conversationID, body: { muted: vars.muted } }),
   };
 }
 

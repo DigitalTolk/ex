@@ -14,6 +14,7 @@ import { ScheduledOrders } from './ScheduledOrders';
 import { WatchedChannels } from './WatchedChannels';
 import { InfoTip } from '@/components/ui/info-tip';
 import { NativeSelect } from '@/components/ui/native-select';
+import { AgentModelSelect } from './AgentModelSelect';
 import { wholeNumberField } from '@/lib/numeric-field';
 
 function statusBadge(status: string, serverRun: boolean) {
@@ -267,7 +268,11 @@ export function AgentCard({ agent, runnersTab }: { agent: AgentView; runnersTab:
                   id={`harness-${agent.slug}`}
                   className="w-full"
                   value={harness}
-                  onChange={(e) => setHarness(e.target.value)}
+                  onChange={(e) => {
+                    setHarness(e.target.value);
+                    // Each engine has its own models: start the new one on its default.
+                    setModel('');
+                  }}
                 >
                   <option value="">default ({agent.resolved.harness})</option>
                   <option value="claude">Claude Code (CLI)</option>
@@ -280,20 +285,24 @@ export function AgentCard({ agent, runnersTab }: { agent: AgentView; runnersTab:
                 htmlFor={`model-${agent.slug}`}
                 info={
                   isBedrock
-                    ? 'A Bedrock model id or inference-profile ARN.'
-                    : 'Leave empty for the backend’s default model.'
+                    ? 'Claude in the EU, from the models your admin offers.'
+                    : 'The models your admin offers for this backend; default keeps the agent’s.'
                 }
               >
-                <Input
+                <AgentModelSelect
                   id={`model-${agent.slug}`}
                   className="w-full"
+                  harness={harness || agent.defaultHarness || agent.resolved.harness}
                   value={model}
-                  placeholder={
-                    isBedrock
-                      ? agent.resolved.model || 'eu.anthropic.claude-opus-5'
-                      : agent.resolved.model || 'harness default'
+                  onChange={setModel}
+                  // The model in effect belongs to the engine in effect: once
+                  // another engine is picked, its default is that engine's own.
+                  emptyLabel={
+                    harness && harness !== agent.resolved.harness
+                      ? 'default'
+                      : `default (${agent.resolved.model || 'the backend’s'})`
                   }
-                  onChange={(e) => setModel(e.target.value)}
+                  placeholder={agent.resolved.model || 'harness default'}
                 />
               </Field>
               <Field

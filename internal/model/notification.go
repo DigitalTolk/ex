@@ -65,6 +65,10 @@ type Notification struct {
 	// badge to this value — never increment locally — so replayed or
 	// duplicated events can't drift the count.
 	ParentUnreadNotifyCount int64 `json:"parentUnreadNotifyCount,omitempty"`
+	// Silent: the recipient has Do Not Disturb on. The client takes the
+	// notification in (badges, Activity) but shows no popup and plays no
+	// sound; the server sends no phone push for it either.
+	Silent bool `json:"silent,omitempty"`
 }
 
 // DeliveryKey is the identity the desktop ack and the mobile-push

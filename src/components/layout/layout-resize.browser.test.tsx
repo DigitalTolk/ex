@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import type { ReactNode } from 'react';
 import { render } from 'vitest-browser-react';
 import { MemoryRouter } from 'react-router-dom';
 import { AppLayout } from './AppLayout';
@@ -15,11 +16,8 @@ import {
 // widths, clamps hold at the configured bounds, widths persist across a
 // remount and the Appearance settings reset puts everything back.
 
-// The sidebar header's Home / Activity switch reads the activity feed; these
-// layout tests don't mount a QueryClient, so stand it (and the panel) in.
-vi.mock('@/components/activity/ActivityModeSwitch', () => ({
-  ActivityModeSwitch: () => <div data-testid="sidebar-mode-switch" />,
-}));
+// The Activity panel reads the activity feed; these layout tests don't mount
+// a QueryClient, so stand it in.
 // The phone tab bar reads the activity feed too.
 vi.mock('./MobileTabBar', () => ({
   MobileTabBar: ({ hidden }: { hidden?: boolean }) => (
@@ -43,7 +41,20 @@ vi.mock('@/context/ThemeContext', () => ({
 }));
 vi.mock('./Sidebar', () => ({ Sidebar: () => <nav data-testid="sidebar-body">channels</nav> }));
 vi.mock('./AppTopBar', () => ({ AppTopBar: () => <header data-testid="app-shell-header" /> }));
+// The phone tab bar still draws the account menu.
 vi.mock('./AccountMenu', () => ({ AccountMenu: () => <div data-testid="sidebar-account" /> }));
+// The icon rail and the column header have their own tests; here they are
+// markers, so the layout's structure can be read without their providers.
+vi.mock('./SidebarRail', () => ({
+  SidebarRail: ({ onNavigate }: { onNavigate?: () => void }) => (
+    <nav data-testid="sidebar-rail">
+      <button type="button" onClick={onNavigate}>Rail link</button>
+    </nav>
+  ),
+}));
+vi.mock('./SidebarColumnHeader', () => ({
+  SidebarColumnHeader: ({ children }: { children?: ReactNode }) => <div data-testid="sidebar-column-header">{children}</div>,
+}));
 vi.mock('@/components/NotificationPermissionBanner', () => ({ NotificationPermissionBanner: () => null }));
 vi.mock('./LoadingBar', () => ({ LoadingBar: () => null }));
 vi.mock('@/components/UpdateBanner', () => ({ UpdateBanner: () => null }));

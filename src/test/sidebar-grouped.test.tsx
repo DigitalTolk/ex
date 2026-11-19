@@ -101,6 +101,7 @@ vi.mock('@/hooks/useSidebar', () => ({
   useReorderCategories: () => ({ mutate: reorderCategoriesMutate }),
   useFavoriteChannel: () => ({ mutate: vi.fn() }),
   useSetCategory: () => ({ mutate: vi.fn() }),
+  useMuteConversation: () => ({ mutate: vi.fn(), isPending: false }),
   useFavoriteConversation: () => ({ mutate: vi.fn() }),
   useSetConversationCategory: () => ({ mutate: vi.fn() }),
 }));
@@ -112,7 +113,13 @@ vi.mock('@/lib/api', () => ({
 }));
 
 // Render dropdown menu items inline so kebab menus inside ChannelRow are reachable.
+// The page links (Threads, Directory, Drafts) are a phone's; on desktop they
+// are stops on the icon rail. Tests about them switch this on.
+const isMobileRef = vi.hoisted(() => ({ value: false }));
+vi.mock('@/hooks/useIsMobile', () => ({ useIsMobile: () => isMobileRef.value }));
+
 vi.mock('@/components/ui/dropdown-menu', () => ({
+  DropdownMenuSeparator: () => <hr />,
   DropdownMenu: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   DropdownMenuTrigger: ({ children, ...props }: { children: React.ReactNode; [k: string]: unknown }) => (
     <button {...props}>{children}</button>
@@ -165,6 +172,7 @@ function renderSidebarAt(path: string) {
 
 describe('Sidebar grouped rendering', () => {
   beforeEach(() => {
+    isMobileRef.value = false;
     createCategoryMutate.mockReset();
     deleteCategoryMutate.mockReset();
     mockUserState = {};
@@ -342,12 +350,19 @@ describe('Sidebar grouped rendering', () => {
     expect(toggle.textContent).toBe('Work');
   });
 
-  it('renders the divider between top-level pages and the channel list', () => {
-    renderSidebar();
+  it('renders the divider between top-level pages and the channel list on a phone, and neither on desktop', () => {
+    isMobileRef.value = true;
+    const phone = renderSidebar();
     expect(screen.getByTestId('sidebar-top-divider')).toBeInTheDocument();
+    phone.unmount();
+    isMobileRef.value = false;
+    renderSidebar();
+    expect(screen.queryByTestId('sidebar-top-divider')).not.toBeInTheDocument();
+    expect(screen.queryByText('Threads')).not.toBeInTheDocument();
   });
 
   it('Directory + Threads links use the same vertical padding as channel rows', () => {
+    isMobileRef.value = true;
     // Channel rows use px-2 py-1.5 (the spec's airy list-row rhythm);
     // Directory and Threads must match so the eye doesn't catch on a height
     // bump between the top-level links and the channel list. Margin-bottom
@@ -362,12 +377,14 @@ describe('Sidebar grouped rendering', () => {
   });
 
   it('does not highlight Threads without an unread thread', () => {
+    isMobileRef.value = true;
     renderSidebar();
     expect(screen.getByText('Threads')).not.toHaveClass('font-bold');
   });
 
   // One lookup: the unread markers in the user state.
   it('highlights Threads while a thread has an unread marker, and clears once it goes', () => {
+    isMobileRef.value = true;
     mockUserState = { threadNotifications: ['root-1'] };
     const view = renderSidebar();
     expect(screen.getByText('Threads')).toHaveClass('font-bold');
@@ -384,6 +401,7 @@ describe('Sidebar grouped rendering', () => {
   });
 
   it('keeps Directory highlighted on nested directory routes', () => {
+    isMobileRef.value = true;
     renderSidebarAt('/directory/users');
 
     // Active nav rows use the sidebar "selected" fill (bg/level2) per the

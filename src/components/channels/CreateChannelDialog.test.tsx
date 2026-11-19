@@ -5,6 +5,7 @@ import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ApiError } from '@/lib/api';
 import { CreateChannelDialog } from './CreateChannelDialog';
+import { MAX_CHANNEL_DESCRIPTION_LEN } from '@/lib/limits';
 
 const mockMutate = vi.fn();
 let mockIsPending = false;
@@ -216,7 +217,7 @@ describe('CreateChannelDialog', () => {
 
     await user.type(screen.getByLabelText('Name'), 'general');
     await user.click(screen.getByLabelText(/Description/));
-    await user.paste('a'.repeat(256));
+    await user.paste('a'.repeat(MAX_CHANNEL_DESCRIPTION_LEN + 1));
     fireEvent.submit(document.querySelector('form')!);
     expect(mockMutate).not.toHaveBeenCalled();
   });

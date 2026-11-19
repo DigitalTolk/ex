@@ -117,7 +117,7 @@ describe('Header browser behavior', () => {
     await expect.element(screen.getByText('In a meeting').first()).toBeVisible();
   });
 
-  it('edits the channel description from the desktop dropdown and saves on Enter', async () => {
+  it('edits the channel description from the desktop dropdown and saves it', async () => {
     if (window.innerWidth <= 767) return;
     const onDescriptionSave = vi.fn();
     const screen = await render(
@@ -127,14 +127,17 @@ describe('Header browser behavior', () => {
     );
     await screen.getByRole('button', { name: /general/ }).click();
     await screen.getByText('Edit description').click();
-    const input = screen.getByPlaceholder('Add a description...');
+    // The editor is a dialog with room for several lines.
+    await expect.element(screen.getByTestId('channel-description-editor')).toBeVisible();
+    const input = screen.getByRole('textbox', { name: 'Description' });
     await expect.element(input).toBeVisible();
-    await input.fill('Updated topic');
-    input.element().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-    await vi.waitFor(() => expect(onDescriptionSave).toHaveBeenCalledWith('Updated topic'));
+    await input.fill('Updated topic\nwith a second line');
+    await expect.element(screen.getByTestId('channel-description-count')).toHaveTextContent('32/1000');
+    await screen.getByTestId('channel-description-save').click();
+    await vi.waitFor(() => expect(onDescriptionSave).toHaveBeenCalledWith('Updated topic\nwith a second line'));
   });
 
-  it('cancels the desktop inline description edit on Escape', async () => {
+  it('saves the desktop description editor with Ctrl+Enter, and plain Enter only adds a line', async () => {
     if (window.innerWidth <= 767) return;
     const onDescriptionSave = vi.fn();
     const screen = await render(
@@ -142,14 +145,39 @@ describe('Header browser behavior', () => {
         <Header channel={channel} memberCount={3} canEdit onDescriptionSave={onDescriptionSave} />
       </div>,
     );
-    // Clicking the existing description text enters edit mode directly.
-    await screen.getByText(channel.description).click();
-    const input = screen.getByPlaceholder('Add a description...');
-    await expect.element(input).toBeVisible();
-    input.element().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await screen.getByRole('button', { name: /general/ }).click();
+    await screen.getByText('Edit description').click();
+    const input = screen.getByRole('textbox', { name: 'Description' });
+    await input.fill('Quick topic');
+    input.element().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    expect(onDescriptionSave).not.toHaveBeenCalled();
+    input.element().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true, cancelable: true }));
+    await vi.waitFor(() => expect(onDescriptionSave).toHaveBeenCalledWith('Quick topic'));
+  });
+
+  it('opens the whole description from the header, edits from there, and cancels without saving', async () => {
+    if (window.innerWidth <= 767) return;
+    const onDescriptionSave = vi.fn();
+    const screen = await render(
+      <div style={{ width: 960 }}>
+        <Header channel={channel} memberCount={3} canEdit onDescriptionSave={onDescriptionSave} />
+      </div>,
+    );
+    // Clicking the description in the header shows it in full; Edit goes on
+    // to the editor.
+    await screen.getByTestId('channel-description-teaser').click();
+    await expect.element(screen.getByTestId('channel-description-view')).toBeVisible();
+    await screen.getByTestId('channel-description-edit').click();
+    const input = screen.getByRole('textbox', { name: 'Description' });
+    await expect.element(input).toHaveValue(channel.description);
+    await input.fill('thrown away');
+    await screen.getByRole('button', { name: 'Cancel' }).click();
+    // Dismissed = removed from the DOM, or mid-exit (`data-closed`, which
+    // base-ui stamps synchronously on close).
     await vi.waitFor(() => {
-      expect(document.querySelector('input[placeholder="Add a description..."]')).toBeNull();
-    });
+      const el = document.querySelector('[data-testid="channel-description-editor"]');
+      expect(el === null || el.hasAttribute('data-closed')).toBe(true);
+    }, { timeout: 10000 });
     expect(onDescriptionSave).not.toHaveBeenCalled();
   });
 
@@ -275,8 +303,8 @@ describe('Header browser behavior', () => {
     const menu = document.querySelector('[data-testid="mobile-channel-menu"]') as HTMLElement;
     (Array.from(menu.querySelectorAll('button')).find((b) => b.textContent?.includes('Edit description')) as HTMLButtonElement).click();
     // The mobile editor dialog opens with a textarea + Save.
-    await expect.element(screen.getByTestId('mobile-description-editor')).toBeVisible();
-    const textarea = document.querySelector('#mobile-channel-description') as HTMLTextAreaElement;
+    await expect.element(screen.getByTestId('channel-description-editor')).toBeVisible();
+    const textarea = document.querySelector('#channel-description') as HTMLTextAreaElement;
     expect(textarea).not.toBeNull();
     await screen.getByRole('button', { name: 'Save' }).click();
     await vi.waitFor(() => expect(onDescriptionSave).toHaveBeenCalled());
@@ -293,7 +321,7 @@ describe('Header browser behavior', () => {
     await screen.getByRole('button', { name: /general/ }).click();
     const menu = document.querySelector('[data-testid="mobile-channel-menu"]') as HTMLElement;
     (Array.from(menu.querySelectorAll('button')).find((b) => b.textContent?.includes('Edit description')) as HTMLButtonElement).click();
-    await expect.element(screen.getByTestId('mobile-description-editor')).toBeVisible();
+    await expect.element(screen.getByTestId('channel-description-editor')).toBeVisible();
     await screen.getByRole('textbox', { name: 'Description' }).fill('rewritten on mobile');
     await screen.getByRole('button', { name: 'Save' }).click();
     await vi.waitFor(() => expect(onDescriptionSave).toHaveBeenCalledWith('rewritten on mobile'));
@@ -310,7 +338,7 @@ describe('Header browser behavior', () => {
     await screen.getByRole('button', { name: /general/ }).click();
     const menu = document.querySelector('[data-testid="mobile-channel-menu"]') as HTMLElement;
     (Array.from(menu.querySelectorAll('button')).find((b) => b.textContent?.includes('Edit description')) as HTMLButtonElement).click();
-    await expect.element(screen.getByTestId('mobile-description-editor')).toBeVisible();
+    await expect.element(screen.getByTestId('channel-description-editor')).toBeVisible();
     // The header Cancel dismisses via the dialog's onOpenChange(false) →
     // cancelDescriptionEdit; nothing is saved.
     await screen.getByRole('button', { name: 'Cancel' }).click();
@@ -319,7 +347,7 @@ describe('Header browser behavior', () => {
     // React's unmount commit under full-suite CPU load even with animations
     // disabled — the closed STATE is the user-visible contract.
     await vi.waitFor(() => {
-      const el = document.querySelector('[data-testid="mobile-description-editor"]');
+      const el = document.querySelector('[data-testid="channel-description-editor"]');
       expect(el === null || el.hasAttribute('data-closed')).toBe(true);
     }, { timeout: 10000 });
     expect(onDescriptionSave).not.toHaveBeenCalled();

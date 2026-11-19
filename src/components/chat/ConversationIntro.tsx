@@ -1,6 +1,7 @@
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { ChannelIcon } from '@/components/ChannelIcon';
 import { getInitials, formatLongDate } from '@/lib/format';
+import { renderMarkdown } from '@/lib/markdown';
 import { PresenceDot } from '@/components/PresenceDot';
 import { presenceNotchStyle } from '@/lib/presence';
 import type { Channel } from '@/types';
@@ -25,7 +26,7 @@ export function ChannelIntro({ channel, creatorName, className }: ChannelIntroPr
     >
       <div className="mb-2 flex items-center gap-2">
         <span className="flex h-9 w-9 items-center justify-center rounded-md bg-muted">
-          <ChannelIcon type={channel.type} className="h-5 w-5 text-muted-foreground" ariaLabel="" />
+          <ChannelIcon type={channel.type} icon={channel.icon} className="h-5 w-5 text-muted-foreground" ariaLabel="" />
         </span>
         <h2 className="text-base font-semibold">
           ~{channel.name}
@@ -37,7 +38,10 @@ export function ChannelIntro({ channel, creatorName, className }: ChannelIntroPr
         channel.
       </p>
       {channel.description && (
-        <p className="mt-2 text-sm text-muted-foreground">{channel.description}</p>
+        // Several lines, with its links live, as written.
+        <div className="prose-message mt-2 text-sm break-words text-muted-foreground" data-testid="channel-intro-description">
+          {renderMarkdown(channel.description)}
+        </div>
       )}
     </div>
   );

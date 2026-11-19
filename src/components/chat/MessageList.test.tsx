@@ -359,7 +359,9 @@ describe('MessageList Virtuoso wiring (regression contract)', () => {
       />
     );
     // Wait past the old 100/350/800ms chase. Smooth chat scrolling
-    // relies on Virtuoso measurement, not repeated imperative scrolls.
+    // relies on Virtuoso measurement, not repeated imperative scrolls: the
+    // list aims again only after checking the message is out of view, and
+    // with nothing to check against it never does.
     await new Promise((r) => setTimeout(r, 850));
     const anchorCalls = captured.scrollToIndexCalls.filter(
       (c) => c.index === 2 && c.align === 'center',

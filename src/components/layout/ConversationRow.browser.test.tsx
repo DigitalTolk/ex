@@ -13,6 +13,7 @@ vi.mock('@/hooks/useSidebar', () => ({
   markLocalSidebarReorder: vi.fn(),
   shouldRefetchSidebarForRemoteUpdate: vi.fn(() => true),
   resetSidebarReorderSessionState: vi.fn(),
+  useMuteConversation: () => ({ mutate: vi.fn(), isPending: false }),
   useFavoriteConversation: () => ({ mutate: favoriteMutate, isPending: false }),
   useSetConversationCategory: () => ({ mutate: setCategoryMutate, isPending: false }),
   useCategories: () => ({ data: [{ id: 'cat-9', name: 'Nine', position: 1000 }] }),

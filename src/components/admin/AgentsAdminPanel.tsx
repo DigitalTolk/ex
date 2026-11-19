@@ -1,10 +1,10 @@
 import { useState } from 'react';
 import { Bot, ChevronDown, ChevronRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
 import { NativeSelect } from '@/components/ui/native-select';
+import { AgentModelSelect } from '@/pages/agents/AgentModelSelect';
 import {
   useAgentOverrides,
   useAgents,
@@ -127,7 +127,11 @@ function AgentTemplateRow({ agent }: { agent: AgentView }) {
               <NativeSelect
                 id={`admin-harness-${agent.slug}`}
                 value={harness}
-                onChange={(e) => setHarness(e.target.value)}
+                onChange={(e) => {
+                  setHarness(e.target.value);
+                  // Each engine has its own models: start the new one on its default.
+                  setModel('');
+                }}
                 className="mt-1"
               >
                 <option value="claude">Claude Code (each person’s machine)</option>
@@ -137,11 +141,13 @@ function AgentTemplateRow({ agent }: { agent: AgentView }) {
             </div>
             <div>
               <Label htmlFor={`admin-model-${agent.slug}`}>Model</Label>
-              <Input
+              <AgentModelSelect
                 id={`admin-model-${agent.slug}`}
+                harness={harness}
                 value={model}
-                onChange={(e) => setModel(e.target.value)}
-                placeholder={isBedrock ? 'eu.anthropic.claude-opus-5' : 'claude-opus-5'}
+                onChange={setModel}
+                emptyLabel={isBedrock ? 'Default (Claude Opus 5, EU)' : 'The backend’s own default'}
+                placeholder="codex default"
                 className="mt-1"
               />
             </div>
@@ -149,9 +155,8 @@ function AgentTemplateRow({ agent }: { agent: AgentView }) {
 
           {isBedrock && (
             <p className="text-xs text-muted-foreground">
-              Bedrock ids are not validated here — a wrong one fails at run time as
-              “bedrock_error”. Paste the inference-profile id exactly as Bedrock lists it for the
-              backend’s region. Bedrock agents always run on the server.
+              Bedrock agents always run on the server, on Claude in the EU. The models offered are
+              listed under Models below.
             </p>
           )}
 

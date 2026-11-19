@@ -76,7 +76,17 @@ describe('Header - description editing', () => {
     vi.clearAllMocks();
   });
 
-  it('opens channel description editing as a full-page mobile dialog', () => {
+  // "Edit description" in the channel menu.
+  function openEditorFromMenu() {
+    const items = screen.getAllByTestId('dropdown-item');
+    fireEvent.click(items.find((item) => item.textContent?.includes('Edit description'))!);
+    return screen.getByLabelText('Description') as HTMLTextAreaElement;
+  }
+  // The editor's own Save (the first of two: a phone gets a second one in the
+  // dialog's top bar).
+  const save = () => fireEvent.click(screen.getAllByText('Save')[0]);
+
+  it('opens channel description editing as a full-page dialog on a phone, saved from its top bar', () => {
     const originalMatchMedia = window.matchMedia;
     Object.defineProperty(window, 'matchMedia', {
       configurable: true,
@@ -90,44 +100,33 @@ describe('Header - description editing', () => {
     const onDescriptionSave = vi.fn();
     render(<Header channel={baseChannel} canEdit onDescriptionSave={onDescriptionSave} />);
 
-    const items = screen.getAllByTestId('dropdown-item');
-    const editItem = items.find(item => item.textContent?.includes('Edit description'));
-    fireEvent.click(editItem!);
-
-    const editor = screen.getByTestId('mobile-description-editor');
-    expect(editor).toHaveClass('max-w-none');
-    const textarea = screen.getByLabelText('Description');
+    const textarea = openEditorFromMenu();
+    expect(screen.getByTestId('channel-description-editor')).toHaveClass('mobile:grid-rows-[auto_1fr]');
     fireEvent.change(textarea, { target: { value: 'Mobile desc' } });
-    fireEvent.click(screen.getByText('Save'));
+    fireEvent.click(document.querySelector('[data-slot="dialog-mobile-action"]')!);
 
     expect(onDescriptionSave).toHaveBeenCalledWith('Mobile desc');
     Object.defineProperty(window, 'matchMedia', { configurable: true, value: originalMatchMedia });
   });
 
-  it('clicking edit description opens inline input', () => {
+  it('opens the editor from the menu with the current description in it', () => {
     render(<Header channel={baseChannel} canEdit />);
-    const items = screen.getAllByTestId('dropdown-item');
-    const editItem = items.find(item => item.textContent?.includes('Edit description'));
-    fireEvent.click(editItem!);
-
-    const input = screen.getByRole('textbox') || screen.getByDisplayValue('Test description');
-    expect(input).toBeInTheDocument();
+    const textarea = openEditorFromMenu();
+    expect(textarea.value).toBe('Test description');
+    expect(textarea).toHaveAttribute('maxLength', '1000');
+    expect(screen.getByTestId('channel-description-count')).toHaveTextContent('16/1000');
   });
 
-  it('opens inline editor via dropdown when description is empty and canEdit', () => {
+  it('opens an empty editor from the menu when there is no description yet', () => {
     render(<Header channel={{ ...baseChannel, description: '' }} canEdit />);
-    // No "Add a description..." button should render anymore
-    expect(screen.queryByText('Add a description...')).not.toBeInTheDocument();
-    // Click the dropdown's "Edit description" item to open the inline editor
-    const items = screen.getAllByTestId('dropdown-item');
-    const editItem = items.find(item => item.textContent?.includes('Edit description'));
-    fireEvent.click(editItem!);
-    // Inline input should now render with the placeholder
-    const input = screen.getByPlaceholderText('Add a description...');
-    expect(input).toBeInTheDocument();
+    // Nothing in the header invites a description; the menu does.
+    expect(screen.queryByTestId('channel-description-teaser')).not.toBeInTheDocument();
+    const textarea = openEditorFromMenu();
+    expect(textarea.value).toBe('');
+    expect(textarea).toHaveAttribute('placeholder', 'What is this channel for?');
   });
 
-  it('opens inline editor via dropdown when description is undefined and canEdit', () => {
+  it.each([{ ctrlKey: true }, { metaKey: true }])('saves a first description with %o + Enter, and keeps plain Enter for a new line', (modifier) => {
     // baseChannel has description set; build one without it
     const channelNoDesc: Channel = {
       id: 'ch1',
@@ -141,72 +140,102 @@ describe('Header - description editing', () => {
     const onDescriptionSave = vi.fn();
     render(<Header channel={channelNoDesc} canEdit onDescriptionSave={onDescriptionSave} />);
 
-    // Click "Edit description" in dropdown
-    const items = screen.getAllByTestId('dropdown-item');
-    const editItem = items.find(item => item.textContent?.includes('Edit description'));
-    fireEvent.click(editItem!);
-
-    // Inline input must render even though description is undefined
-    const input = screen.getByPlaceholderText('Add a description...');
-    expect(input).toBeInTheDocument();
-
-    // Typing and pressing Enter saves
-    fireEvent.change(input, { target: { value: 'Brand new description' } });
-    fireEvent.keyDown(input, { key: 'Enter' });
-    expect(onDescriptionSave).toHaveBeenCalledWith('Brand new description');
-  });
-
-  it('clicking description text opens edit mode', () => {
-    render(<Header channel={baseChannel} canEdit />);
-    const descButton = screen.getByTitle('Click to edit description');
-    fireEvent.click(descButton);
-
-    const input = screen.getByDisplayValue('Test description');
-    expect(input).toBeInTheDocument();
-  });
-
-  it('pressing Enter saves the description', () => {
-    const onDescriptionSave = vi.fn();
-    render(<Header channel={baseChannel} canEdit onDescriptionSave={onDescriptionSave} />);
-
-    // Open edit mode via description button
-    const descButton = screen.getByTitle('Click to edit description');
-    fireEvent.click(descButton);
-
-    const input = screen.getByDisplayValue('Test description');
-    fireEvent.change(input, { target: { value: 'New desc' } });
-    fireEvent.keyDown(input, { key: 'Enter' });
-
-    expect(onDescriptionSave).toHaveBeenCalledWith('New desc');
-  });
-
-  it('pressing Escape cancels editing', () => {
-    const onDescriptionSave = vi.fn();
-    render(<Header channel={baseChannel} canEdit onDescriptionSave={onDescriptionSave} />);
-
-    const descButton = screen.getByTitle('Click to edit description');
-    fireEvent.click(descButton);
-
-    const input = screen.getByDisplayValue('Test description');
-    fireEvent.keyDown(input, { key: 'Escape' });
-
-    // Should no longer show input, back to button
+    const textarea = openEditorFromMenu();
+    fireEvent.change(textarea, { target: { value: 'Brand new description' } });
+    fireEvent.keyDown(textarea, { key: 'Enter' });
     expect(onDescriptionSave).not.toHaveBeenCalled();
-    expect(screen.getByTitle('Click to edit description')).toBeInTheDocument();
+    fireEvent.keyDown(textarea, { key: 'Enter', ...modifier });
+    expect(onDescriptionSave).toHaveBeenCalledWith('Brand new description');
+    expect(screen.queryByTestId('channel-description-editor')).not.toBeInTheDocument();
   });
 
-  it('blur saves the description', () => {
+  it('shows the whole description from the header, and edits it from there', () => {
+    render(<Header channel={baseChannel} canEdit />);
+    fireEvent.click(screen.getByTestId('channel-description-teaser'));
+
+    const view = screen.getByTestId('channel-description-view');
+    expect(view).toHaveTextContent('About ~general');
+    expect(view).toHaveTextContent('Test description');
+
+    fireEvent.click(screen.getByText('Edit'));
+    expect(screen.queryByTestId('channel-description-view')).not.toBeInTheDocument();
+    expect(screen.getByDisplayValue('Test description')).toBeInTheDocument();
+  });
+
+  it('shows the first line in the header, a link as its words, and the rest in the dialog', () => {
+    const description = '\n\nRunbooks live in [the wiki](https://example.com/wiki)\nAsk in the thread before paging.';
+    render(<Header channel={{ ...baseChannel, description }} />);
+    const teaser = screen.getByTestId('channel-description-teaser');
+    expect(teaser).toHaveTextContent('Runbooks live in the wiki');
+    expect(teaser).not.toHaveTextContent('Ask in the thread');
+
+    fireEvent.click(teaser);
+    const view = screen.getByTestId('channel-description-view');
+    expect(view).toHaveTextContent('Ask in the thread before paging.');
+    expect(screen.getByRole('link', { name: 'the wiki' })).toHaveAttribute('href', 'https://example.com/wiki');
+  });
+
+  it('shows nothing in the header for a description that is only white space', () => {
+    render(<Header channel={{ ...baseChannel, description: '  \n  ' }} canEdit />);
+    expect(screen.queryByTestId('channel-description-teaser')).not.toBeInTheDocument();
+  });
+
+  it('keeps the open description dialog standing when the description is removed meanwhile', () => {
+    const { rerender } = render(<Header channel={baseChannel} />);
+    fireEvent.click(screen.getByTestId('channel-description-teaser'));
+    expect(screen.getByTestId('channel-description-view')).toHaveTextContent('Test description');
+    // Someone else clears it while it is open here.
+    rerender(<Header channel={{ ...baseChannel, description: undefined }} />);
+    const view = screen.getByTestId('channel-description-view');
+    expect(view).toHaveTextContent('About ~general');
+    expect(view).not.toHaveTextContent('Test description');
+    expect(screen.queryByTestId('channel-description-teaser')).not.toBeInTheDocument();
+  });
+
+  it('saves the edited description, trimmed, with the Save button', () => {
     const onDescriptionSave = vi.fn();
     render(<Header channel={baseChannel} canEdit onDescriptionSave={onDescriptionSave} />);
 
-    const descButton = screen.getByTitle('Click to edit description');
-    fireEvent.click(descButton);
+    const textarea = openEditorFromMenu();
+    fireEvent.change(textarea, { target: { value: '  New desc\nsecond line  ' } });
+    expect(screen.getByTestId('channel-description-count')).toHaveTextContent('24/1000');
+    save();
 
-    const input = screen.getByDisplayValue('Test description');
-    fireEvent.change(input, { target: { value: 'Blurred desc' } });
-    fireEvent.blur(input);
+    expect(onDescriptionSave).toHaveBeenCalledWith('New desc\nsecond line');
+    expect(screen.queryByTestId('channel-description-editor')).not.toBeInTheDocument();
+  });
 
-    expect(onDescriptionSave).toHaveBeenCalledWith('Blurred desc');
+  it('cancels editing without saving', () => {
+    const onDescriptionSave = vi.fn();
+    render(<Header channel={baseChannel} canEdit onDescriptionSave={onDescriptionSave} />);
+
+    const textarea = openEditorFromMenu();
+    fireEvent.change(textarea, { target: { value: 'Thrown away' } });
+    fireEvent.click(screen.getByText('Cancel'));
+
+    expect(onDescriptionSave).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('channel-description-editor')).not.toBeInTheDocument();
+    // The header still shows the description as it was.
+    expect(screen.getByTestId('channel-description-teaser')).toHaveTextContent('Test description');
+  });
+
+  it('does not save when the field merely loses focus', () => {
+    const onDescriptionSave = vi.fn();
+    render(<Header channel={baseChannel} canEdit onDescriptionSave={onDescriptionSave} />);
+
+    const textarea = openEditorFromMenu();
+    fireEvent.change(textarea, { target: { value: 'Blurred desc' } });
+    fireEvent.blur(textarea);
+
+    expect(onDescriptionSave).not.toHaveBeenCalled();
+    expect(screen.getByDisplayValue('Blurred desc')).toBeInTheDocument();
+  });
+
+  it('saves without a handler wired (nothing to call) and still closes', () => {
+    render(<Header channel={baseChannel} canEdit />);
+    openEditorFromMenu();
+    save();
+    expect(screen.queryByTestId('channel-description-editor')).not.toBeInTheDocument();
   });
 
   it('cancel button in archive dialog closes it', () => {
@@ -225,9 +254,12 @@ describe('Header - description editing', () => {
     expect(onArchive).not.toHaveBeenCalled();
   });
 
-  it('shows description as read-only text when canEdit is false', () => {
+  it('lets someone who cannot edit read the description in full, with no way to edit it', () => {
     render(<Header channel={baseChannel} canEdit={false} />);
-    expect(screen.getByText('Test description')).toBeInTheDocument();
-    expect(screen.queryByTitle('Click to edit description')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('channel-description-teaser'));
+    expect(screen.getByTestId('channel-description-view')).toHaveTextContent('Test description');
+    expect(screen.queryByText('Edit')).not.toBeInTheDocument();
+    const items = screen.queryAllByTestId('dropdown-item');
+    expect(items.some((item) => item.textContent?.includes('Edit description'))).toBe(false);
   });
 });
