@@ -16,9 +16,10 @@ interface MobileTabBarProps {
 
 // MobileTabBar is the phone's bottom navigation: Home, Activity, Search and
 // You, where thumbs reach. It is to a phone what the icon rail is to the
-// desktop. It shows on the list screens; inside a
-// conversation or thread the back button and composer take its place — so
-// it only ever switches the list that is already showing.
+// desktop (the rail's other pages, Agents & tools among them, lead the Home
+// list). It shows on the list screens; inside a conversation or thread the
+// back button and composer take its place, so it only ever switches the list
+// that is already showing.
 export function MobileTabBar({ hidden = false }: MobileTabBarProps) {
   const mode = useSidebarModeStore((s) => s.mode);
   const unread = useActivityUnread();

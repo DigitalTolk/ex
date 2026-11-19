@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { cleanup, render, screen, fireEvent } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import AiHubLayout from '@/pages/AiHubLayout';
@@ -50,6 +50,27 @@ describe('AiHubLayout', () => {
       view.unmount();
     },
   );
+
+  it('keeps the open tab in view, as a phone needs when the strip is wider than the screen', () => {
+    const scrolled: string[] = [];
+    const original = HTMLElement.prototype.scrollIntoView;
+    HTMLElement.prototype.scrollIntoView = function (this: HTMLElement) {
+      scrolled.push(this.textContent ?? '');
+    };
+    try {
+      renderAt('/projects');
+      expect(scrolled).toEqual(['Projects']);
+      fireEvent.click(screen.getByRole('link', { name: 'Runners' }));
+      expect(scrolled).toEqual(['Projects', 'Runners']);
+      // With Runners switched off there's no open tab to bring into view.
+      cleanup();
+      scrolled.length = 0;
+      renderAt('/runners', false);
+      expect(scrolled).toEqual([]);
+    } finally {
+      HTMLElement.prototype.scrollIntoView = original;
+    }
+  });
 
   it('switches pages when a tab is clicked', () => {
     renderAt('/agents');

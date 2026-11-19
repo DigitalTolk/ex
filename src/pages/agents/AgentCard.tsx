@@ -186,9 +186,16 @@ export function AgentCard({ agent, runnersTab, runners }: { agent: AgentView; ru
         <Bot className="h-4 w-4 shrink-0 text-muted-foreground" />
         <span className="font-semibold">@{agent.displayName}</span>
         {statusBadge(agent.status, agent.resolved.harness === 'bedrock', runnerPlace(runners, agent.resolved.harness))}
-        {customized && <Badge variant="outline">custom prompt</Badge>}
-        {overrideCount > 0 && <Badge variant="outline">{overrideCount} customized</Badge>}
-        <span className="ml-auto text-sm text-muted-foreground">
+        {(customized || overrideCount > 0) && (
+          // Phone: their own line under the name, after "for you"; desktop:
+          // `contents`, so they sit in the row as before.
+          <span className="contents mobile:order-last mobile:flex mobile:w-full mobile:gap-2 mobile:pl-12">
+            {customized && <Badge variant="outline">custom prompt</Badge>}
+            {overrideCount > 0 && <Badge variant="outline">{overrideCount} customized</Badge>}
+          </span>
+        )}
+        {/* Phone: under the name, not pushed right and wrapping. */}
+        <span className="ml-auto text-sm text-muted-foreground mobile:ml-0 mobile:w-full mobile:truncate mobile:pl-12 mobile:text-xs">
           for you: {agent.resolved.harness}
           {agent.resolved.model ? ` · ${agent.resolved.model}` : ''}
         </span>
@@ -225,7 +232,7 @@ export function AgentCard({ agent, runnersTab, runners }: { agent: AgentView; ru
       {open && (
       <div className="space-y-3 border-t p-3">
         <div>
-          <div className="flex items-baseline justify-between gap-2">
+          <div className="flex items-baseline justify-between gap-2 mobile:flex-col mobile:gap-0.5">
             <Label htmlFor={`persona-${agent.slug}`}>Prompt for @{agent.displayName}</Label>
             {customized ? (
               <button

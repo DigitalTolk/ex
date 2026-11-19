@@ -157,7 +157,7 @@ function ConnectorRow({ connector: c }: { connector: Connector }) {
               </Button>
             )}
             {!connecting && (
-              <div className="ml-auto flex items-center gap-1">
+              <div className="ml-auto flex items-center gap-1 mobile:ml-0 mobile:w-full mobile:justify-between">
                 {c.installed ? (
                   <>
                     <AgentUseControl connector={c} />

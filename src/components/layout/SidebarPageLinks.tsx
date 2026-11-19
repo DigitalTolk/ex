@@ -1,8 +1,9 @@
 import { NavLink, useLocation } from 'react-router-dom';
-import { BookUser, FilePenLine, MessagesSquare } from 'lucide-react';
+import { BookUser, FilePenLine, MessagesSquare, Workflow } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { useDrafts } from '@/hooks/useDrafts';
 import { useUserState } from '@/hooks/useUserState';
+import { AI_HUB_HOME, isAiHubPath } from '@/lib/ai-hub';
 
 // Same row geometry (px-2 py-1.5) as the channel rows below them, so the eye
 // doesn't catch on a height bump.
@@ -25,8 +26,8 @@ function useUnreadThreadCount(): number {
 }
 
 // The phone list's top-level pages, above its channels and DMs (the desktop
-// has them on the icon rail). Activity has its own tab on a phone, and the AI
-// hub isn't built for a phone yet, so it has no entry here.
+// has them on the icon rail). Activity has its own tab on a phone, so it has
+// no entry here; Agents & tools comes last, as on the rail.
 export function SidebarPageLinks({ onClose }: { onClose: () => void }) {
   const { pathname } = useLocation();
   const unreadThreads = useUnreadThreadCount();
@@ -61,6 +62,12 @@ export function SidebarPageLinks({ onClose }: { onClose: () => void }) {
             {draftCount > 99 ? '99+' : draftCount}
           </Badge>
         )}
+      </NavLink>
+
+      {/* Lit on every agents page (Skills, Connectors, …), as on the rail. */}
+      <NavLink to={AI_HUB_HOME} onClick={onClose} className={() => pageLinkClass(isAiHubPath(pathname))}>
+        <Workflow className="h-4 w-4 shrink-0" aria-hidden="true" />
+        <span>Agents &amp; tools</span>
       </NavLink>
     </>
   );
