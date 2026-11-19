@@ -9,6 +9,7 @@ package service
 import (
 	"context"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -30,7 +31,7 @@ import (
 // when the body contains @all/@here.
 type memberSnapshot struct {
 	memberIDs []string                              // every parent member except the author
-	muted     map[string]bool                       // userID → true if muted (channels only; empty for conversations)
+	muted     map[string]bool                       // userID → true if muted (a channel, or their chat with a bot)
 	prefs     map[string]model.NotificationSettings // userID → effective settings
 	machine   map[string]bool                       // userID → true for bot/agent accounts
 	deepLink  string
@@ -116,10 +117,22 @@ func (s *NotificationService) loadMemberSnapshot(ctx context.Context, msg *model
 				others = append(others, p)
 			}
 		}
-		accounts := s.accountsFor(ctx, others)
+		accounts := s.accountsFor(ctx, append(slices.Clone(others), excludeID))
 		ids := recipientIDs(others, excludeID, accounts)
 		prefs, machine := resolvePrefs(ids, accounts, nil)
-		return memberSnapshot{memberIDs: ids, muted: map[string]bool{}, prefs: prefs, machine: machine, deepLink: "/conversation/" + msg.ParentID, loaded: true}
+		// A person can mute their chat with a bot or a webhook (never one
+		// with a person). So only a machine's message reads its recipients'
+		// rows for the flag: a chat between people pays nothing for it. A
+		// failed read counts as not muted, toward the alert.
+		muted := map[string]bool{}
+		if accounts[excludeID].Machine {
+			for _, uid := range ids {
+				if on, err := s.conv.ConversationMuted(ctx, msg.ParentID, uid); err == nil && on {
+					muted[uid] = true
+				}
+			}
+		}
+		return memberSnapshot{memberIDs: ids, muted: muted, prefs: prefs, machine: machine, deepLink: "/conversation/" + msg.ParentID, loaded: true}
 	}
 	return memberSnapshot{}
 }
@@ -410,6 +423,8 @@ func (s *NotificationService) fanOut(ctx context.Context, msg *model.Message, pa
 		notif Notification
 	}
 	var mobilePending []pendingPush
+	// One clock reading for every recipient's Do Not Disturb check.
+	now := time.Now()
 
 	// Pass 1 — pure gating: decide who is alerted and how. No I/O.
 	type alertPlan struct {
@@ -417,6 +432,10 @@ func (s *NotificationService) fanOut(ctx context.Context, msg *model.Message, pa
 		mentioned bool
 		desktop   bool
 		mobile    bool
+		// silent: Do Not Disturb. The notification still reaches the
+		// recipient's clients, marked silent, so badges and Activity move;
+		// nothing pops, sounds or is pushed to a phone.
+		silent bool
 	}
 	var plans []alertPlan
 	// Thread replies: everyone the reply makes the thread unread for. That is
@@ -436,7 +455,9 @@ func (s *NotificationService) fanOut(ctx context.Context, msg *model.Message, pa
 		// DMs always notify their participants — "direct messages" is part
 		// of even the quiet "mentions, DMs & keywords" level — except for a
 		// thread they unfollowed, which goes by the levels like a channel's.
-		dm := parentType == ParentConversation && !unfollowed[uid]
+		// Nor for a bot's chat they muted: that goes by the levels with the
+		// mute applied, so only a direct @-mention gets through.
+		dm := parentType == ParentConversation && !unfollowed[uid] && !snap.muted[uid]
 		viaUserGroup := !explicitSet[uid] && userGroupOf[uid] != nil
 		r := recipientReasons{
 			explicitMention:   explicitSet[uid] || viaUserGroup,
@@ -511,7 +532,7 @@ func (s *NotificationService) fanOut(ctx context.Context, msg *model.Message, pa
 		if !alerted {
 			continue
 		}
-		plans = append(plans, alertPlan{uid: uid, mentioned: r.explicitMention || r.groupMention, desktop: desktop, mobile: mobile})
+		plans = append(plans, alertPlan{uid: uid, mentioned: r.explicitMention || r.groupMention, desktop: desktop, mobile: mobile, silent: eff.Snoozed(now)})
 	}
 
 	if s.activity != nil && len(activityItems) > 0 {
@@ -579,6 +600,12 @@ func (s *NotificationService) fanOut(ctx context.Context, msg *model.Message, pa
 		}
 		desktop := plan.desktop
 		mobile := plan.mobile
+		if plan.silent {
+			// Every client of theirs still hears of it (a phone-only level
+			// included), silently; the phone push is not sent at all.
+			notif.Silent = true
+			desktop, mobile = true, false
+		}
 
 		if desktop {
 			if evt, err := events.NewEvent(events.EventNotificationNew, notif); err == nil {
@@ -647,7 +674,7 @@ type recipientReasons struct {
 // mention kind to use for an @all/@here mention.
 func activityFor(parentType string, r recipientReasons, groupKind model.MentionKind) (model.ActivityType, model.MentionKind) {
 	// A DM thread its participant unfollowed is listed like a channel's.
-	if parentType == ParentConversation && !r.explicitMention && (!r.threadReply || r.threadParticipant) {
+	if parentType == ParentConversation && !r.muted && !r.explicitMention && (!r.threadReply || r.threadParticipant) {
 		if r.threadReply {
 			return model.ActivityThreadReply, ""
 		}

@@ -8,6 +8,7 @@ import {
   type ApprovalAlert,
 } from '@/context/NotificationContext';
 import { resetNotificationDedup } from '@/lib/notification-dedup';
+import { getNotificationTrace, resetNotificationTraceForTests } from '@/lib/notification-trace';
 import { markUserActivity, setHardAway } from '@/lib/user-activity';
 import { addInViewThread, resetThreadScopeForTests, setPanelThread } from '@/lib/thread-scope';
 import { setActiveParent } from '@/stores/active-parent';
@@ -1188,5 +1189,147 @@ describe('duplicate-copy ack gating', () => {
       dispatchSpy!(payload);
     });
     expect(sendWSMock).toHaveBeenCalledWith({ type: 'notification.ack', messageID: 'm-present-dup' });
+  });
+});
+
+// Do Not Disturb.
+// While the recipient has Do Not Disturb on, the server still sends
+// notification.new (the badge and the Activity row ride it) but marks it
+// `silent`, and sends no phone push for it. The client surfaces nothing for
+// such a copy, and treats it as never surfaced: no ack, and no dedup record
+// that could swallow a later, audible alert for the same message.
+describe('Do Not Disturb: a silent notification', () => {
+  let origNotification: PropertyDescriptor | undefined;
+  let notificationCtor: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    playMock.mockReset();
+    sendWSMock.mockReset();
+    toastMock.mockReset();
+    resetNotificationDedup();
+    resetNotificationTraceForTests();
+    localStorage.clear();
+    origNotification = Object.getOwnPropertyDescriptor(window, 'Notification');
+    notificationCtor = installNotification('granted');
+    // At the device, looking elsewhere: everything a normal alert needs to
+    // pop, sound AND ack.
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    markUserActivity();
+    setActiveParent(null);
+  });
+
+  afterEach(() => {
+    if (origNotification) Object.defineProperty(window, 'Notification', origNotification);
+  });
+
+  const lastTrace = () => getNotificationTrace().at(-1);
+
+  it('surfaces nothing: no popup, no sound, no toast, and no ack', () => {
+    renderProbe();
+    act(() => {
+      dispatchSpy!({ ...samplePayload, messageID: 'm-dnd', silent: true });
+    });
+    expect(notificationCtor).not.toHaveBeenCalled();
+    expect(playMock).not.toHaveBeenCalled();
+    expect(toastMock).not.toHaveBeenCalled();
+    expect(sendWSMock).not.toHaveBeenCalled();
+    expect(lastTrace()).toMatchObject({ step: 'silent', messageID: 'm-dnd' });
+    expect(getNotificationTrace()).toHaveLength(1);
+  });
+
+  it('the same notification without the silent mark still pops, sounds and acks', () => {
+    renderProbe();
+    act(() => {
+      dispatchSpy!({ ...samplePayload, messageID: 'm-loud', silent: false });
+    });
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    expect(notificationCtor.mock.calls[0][0]).toBe('Alice');
+    expect(playMock).toHaveBeenCalledTimes(1);
+    expect(sendWSMock).toHaveBeenCalledWith({ type: 'notification.ack', messageID: 'm-loud' });
+    expect(lastTrace()).toMatchObject({ step: 'surfaced', messageID: 'm-loud', detail: { acked: true } });
+  });
+
+  it.each(['mention', 'thread_reply', 'reminder', 'catchup'])('stays quiet whatever the kind (%s)', (kind) => {
+    renderProbe();
+    act(() => {
+      dispatchSpy!({ ...channelMessagePayload, kind, messageID: `m-dnd-${kind}`, silent: true });
+    });
+    expect(notificationCtor).not.toHaveBeenCalled();
+    expect(playMock).not.toHaveBeenCalled();
+    expect(sendWSMock).not.toHaveBeenCalled();
+    expect(lastTrace()).toMatchObject({ step: 'silent', messageID: `m-dnd-${kind}` });
+  });
+
+  it('is not recorded as alerted: a later audible alert for the same message still surfaces', () => {
+    renderProbe();
+    const payload = { ...samplePayload, messageID: 'm-dnd-then-loud' };
+    act(() => {
+      dispatchSpy!({ ...payload, silent: true });
+    });
+    expect(notificationCtor).not.toHaveBeenCalled();
+    act(() => {
+      dispatchSpy!(payload);
+    });
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    expect(playMock).toHaveBeenCalledTimes(1);
+    expect(sendWSMock).toHaveBeenCalledWith({ type: 'notification.ack', messageID: 'm-dnd-then-loud' });
+  });
+
+  it('does not ack as a duplicate when the message already alerted before Do Not Disturb came on', () => {
+    renderProbe();
+    const payload = { ...samplePayload, messageID: 'm-loud-then-dnd' };
+    act(() => {
+      dispatchSpy!(payload);
+    });
+    expect(sendWSMock).toHaveBeenCalledTimes(1);
+    act(() => {
+      dispatchSpy!({ ...payload, silent: true });
+    });
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    expect(playMock).toHaveBeenCalledTimes(1);
+    expect(sendWSMock).toHaveBeenCalledTimes(1);
+    expect(lastTrace()).toMatchObject({ step: 'silent', messageID: 'm-loud-then-dnd' });
+  });
+
+  it('a silent reminder is traced under its own alert id', () => {
+    renderProbe();
+    act(() => {
+      dispatchSpy!({ ...samplePayload, kind: 'reminder', messageID: 'm-1', alertID: 'rem-7', silent: true });
+    });
+    expect(notificationCtor).not.toHaveBeenCalled();
+    expect(lastTrace()).toMatchObject({ step: 'silent', messageID: 'rem-7' });
+  });
+
+  it('stays quiet with popups turned off too: no standalone ping', () => {
+    renderProbe();
+    act(() => setBrowserSpy!(false));
+    act(() => {
+      dispatchSpy!({ ...samplePayload, messageID: 'm-dnd-ping', silent: true });
+    });
+    expect(playMock).not.toHaveBeenCalled();
+    // Not silent, the standalone ping is what alerts here.
+    act(() => {
+      dispatchSpy!({ ...samplePayload, messageID: 'm-ping' });
+    });
+    expect(playMock).toHaveBeenCalledTimes(1);
+    expect(notificationCtor).not.toHaveBeenCalled();
+  });
+
+  it('shows no in-app toast where the toast is the popup (no Notification API)', () => {
+    delete (window as unknown as { Notification?: unknown }).Notification;
+    renderProbe();
+    act(() => {
+      dispatchSpy!({ ...samplePayload, messageID: 'm-dnd-toast', silent: true });
+    });
+    expect(toastMock).not.toHaveBeenCalled();
+    expect(playMock).not.toHaveBeenCalled();
+    expect(sendWSMock).not.toHaveBeenCalled();
+    // Not silent, that same client does toast, ping and ack.
+    act(() => {
+      dispatchSpy!({ ...samplePayload, messageID: 'm-toast' });
+    });
+    expect(toastMock).toHaveBeenCalledTimes(1);
+    expect(playMock).toHaveBeenCalledTimes(1);
+    expect(sendWSMock).toHaveBeenCalledWith({ type: 'notification.ack', messageID: 'm-toast' });
   });
 });

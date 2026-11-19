@@ -18,7 +18,10 @@ import {
   runProgressSchema,
   runUpdatedSchema,
   serverVersionSchema,
+  interactionNoticeSchema,
+  appViewEventSchema,
   sessionRenewedSchema,
+  sharePointChangedSchema,
   threadUpdatedSchema,
   typingSchema,
   userChannelUpdatedSchema,
@@ -55,6 +58,9 @@ export const wsEventSchemas = {
   [EventType.AttachmentDeleted]: attachmentDeletedSchema,
   [EventType.ChannelMuted]: nudge,
   [EventType.NotificationNew]: notificationSchema,
+  [EventType.InteractionNotice]: interactionNoticeSchema,
+  [EventType.ViewOpened]: appViewEventSchema,
+  [EventType.ViewUpdated]: appViewEventSchema,
   [EventType.NotificationSettingsUpdated]: notificationSettingsUpdatedSchema,
   [EventType.DraftUpdated]: nudge,
   [EventType.ForceLogout]: nudge,
@@ -78,6 +84,7 @@ export const wsEventSchemas = {
   [EventType.RunUpdated]: runUpdatedSchema,
   [EventType.RunProgress]: runProgressSchema,
   [EventType.RunApproval]: runApprovalSchema,
+  [EventType.SharePointChanged]: sharePointChangedSchema,
 } satisfies { [K in EventTypeName]: z.ZodType };
 
 export type WSEventPayloads = { [K in EventTypeName]: z.output<(typeof wsEventSchemas)[K]> };

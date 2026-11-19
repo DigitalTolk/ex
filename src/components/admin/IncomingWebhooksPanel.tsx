@@ -16,6 +16,8 @@ import {
 } from '@/hooks/useWebhooks';
 import type { IncomingWebhook } from '@/types';
 import { NativeSelect } from '@/components/ui/native-select';
+import { InteractivitySettings } from './InteractivitySettings';
+import { TemplatesSettings } from './TemplatesSettings';
 
 interface WebhookFormValues {
   title: string;
@@ -24,6 +26,8 @@ interface WebhookFormValues {
   lockToChannel: boolean;
   username: string;
   profileImageURL: string;
+  // '' is classic, 'rich' an app's; chosen at creation, fixed after.
+  kind: string;
 }
 
 const EMPTY_FORM: WebhookFormValues = {
@@ -33,6 +37,7 @@ const EMPTY_FORM: WebhookFormValues = {
   lockToChannel: true,
   username: '',
   profileImageURL: '',
+  kind: '',
 };
 
 interface ChannelOption {
@@ -85,7 +90,9 @@ export function IncomingWebhooksPanel() {
         submitLabel="Create webhook"
         pendingLabel="Creating..."
         mutation={create}
-        onSubmit={(input) => create.mutate(input, { onSuccess: () => setCreateKey((k) => k + 1) })}
+        onSubmit={({ kind, ...input }) =>
+          create.mutate(kind ? { ...input, kind } : input, { onSuccess: () => setCreateKey((k) => k + 1) })
+        }
       />
 
       <div className="space-y-2">
@@ -96,7 +103,12 @@ export function IncomingWebhooksPanel() {
             <div key={wh.id} className="space-y-2 rounded-md border p-3" data-testid={`webhook-${wh.id}`}>
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <p className="truncate text-sm font-medium">{wh.title}</p>
+                  <p className="flex min-w-0 items-center gap-2 text-sm font-medium">
+                    <span className="truncate">{wh.title}</span>
+                    {wh.kind === 'rich' && (
+                      <span className="shrink-0 rounded bg-muted px-1.5 text-xs font-medium leading-5 text-muted-foreground">Rich</span>
+                    )}
+                  </p>
                   <p className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-sm text-muted-foreground">
                     <span>~{wh.channelSlug || wh.channelName || wh.channelID}</span>
                     <span aria-hidden>·</span>
@@ -130,6 +142,12 @@ export function IncomingWebhooksPanel() {
                   <code className="min-w-0 flex-1 truncate rounded bg-muted px-2 py-1 text-sm text-muted-foreground">{wh.url}</code>
                   <CopyButton value={wh.url} label={`Copy ${wh.title} URL`} />
                 </div>
+              )}
+              {wh.kind === 'rich' && (
+                <>
+                  <InteractivitySettings webhook={wh} />
+                  <TemplatesSettings webhook={wh} />
+                </>
               )}
             </div>
           ),
@@ -176,12 +194,14 @@ function WebhookEditor({
           lockToChannel: webhook.lockToChannel,
           username: webhook.username ?? '',
           profileImageURL: webhook.profileImageURL ?? '',
+          kind: webhook.kind ?? '',
         }}
         channelOptions={channelOptions}
         submitLabel="Save changes"
         pendingLabel="Saving..."
         mutation={update}
-        onSubmit={(input) => update.mutate({ id: webhook.id, input }, { onSuccess: onDone })}
+        // The kind never changes, so it isn't sent.
+        onSubmit={(input) => update.mutate({ id: webhook.id, input: { ...input, kind: undefined } }, { onSuccess: onDone })}
         onCancel={onDone}
       />
     </div>
@@ -224,6 +244,7 @@ function WebhookForm({
       lockToChannel: form.lockToChannel,
       username: form.username.trim(),
       profileImageURL: form.profileImageURL.trim(),
+      kind: form.kind,
     });
   }
 
@@ -242,6 +263,20 @@ function WebhookForm({
                 {ch.name}
               </option>
             ))}
+          </NativeSelect>
+        </div>
+        <div className="space-y-2 md:col-span-2">
+          <Label htmlFor={`${idPrefix}-kind`}>Type</Label>
+          {/* Fixed at creation (an edit form has onCancel): an existing
+              webhook's senders keep posting exactly what they always did. */}
+          <NativeSelect
+            id={`${idPrefix}-kind`}
+            value={form.kind}
+            onChange={(e) => set('kind', e.target.value)}
+            disabled={!!onCancel}
+          >
+            <option value="">Classic — text and cards</option>
+            <option value="rich">Rich — an app's blocks, buttons and forms</option>
           </NativeSelect>
         </div>
         <div className="space-y-2 md:col-span-2">

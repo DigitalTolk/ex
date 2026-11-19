@@ -312,3 +312,48 @@ func TestMessageStore_ListParentMessagesConsistent(t *testing.T) {
 		t.Fatal("want query error")
 	}
 }
+
+func TestMessageStore_UpdateMessageIfVersion(t *testing.T) {
+	db := setupDynamoDB(t)
+	ctx := context.Background()
+	s := NewMessageStore(db)
+	msg := makeMessage("ch-ver", "m-ver", "u-a", "card")
+	if err := s.CreateMessage(ctx, msg); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	// A message never versioned reads as version 0.
+	msg.Version = 1
+	if err := s.UpdateMessageIfVersion(ctx, msg, 0); err != nil {
+		t.Fatalf("first change: %v", err)
+	}
+	// A change made on version 0 again lost the race: refused.
+	stale := *msg
+	stale.Body = "stale"
+	if err := s.UpdateMessageIfVersion(ctx, &stale, 0); !errors.Is(err, ErrVersionConflict) {
+		t.Fatalf("stale change: want ErrVersionConflict, got %v", err)
+	}
+	msg.Version = 2
+	msg.Body = "second"
+	if err := s.UpdateMessageIfVersion(ctx, msg, 1); err != nil {
+		t.Fatalf("second change: %v", err)
+	}
+	got, err := s.GetMessage(ctx, "ch-ver", "m-ver")
+	if err != nil || got.Version != 2 || got.Body != "second" {
+		t.Fatalf("stored: %+v err=%v", got, err)
+	}
+	// A message that isn't there is a conflict too: the caller re-reads it.
+	gone := makeMessage("ch-ver", "m-missing", "u-a", "x")
+	if err := s.UpdateMessageIfVersion(ctx, gone, 0); !errors.Is(err, ErrVersionConflict) {
+		t.Fatalf("missing message: want ErrVersionConflict, got %v", err)
+	}
+}
+
+func TestMessageStore_UpdateMessageIfVersion_PutItemError(t *testing.T) {
+	db := setupDynamoDB(t)
+	ctx := context.Background()
+	s := NewMessageStore(withFault(db, func(f *faultClient) { f.failPutItem = true }))
+	if err := s.UpdateMessageIfVersion(ctx, makeMessage("ch-ver", "m-e", "u-a", "x"), 0); !errors.Is(err, errInjected) {
+		t.Fatalf("want errInjected, got %v", err)
+	}
+}

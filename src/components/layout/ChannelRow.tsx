@@ -1,6 +1,6 @@
 import { Star, BellOff } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
-import { ChannelIcon } from '@/components/ChannelIcon';
+import { ChannelIcon, PrivateChannelMark } from '@/components/ChannelIcon';
 import { DropdownMenuItem } from '@/components/ui/dropdown-menu';
 import { slugify } from '@/lib/format';
 import { useFavoriteChannel, useSetCategory, useCategories } from '@/hooks/useSidebar';
@@ -90,11 +90,12 @@ export const ChannelRow = memo(function ChannelRow({
         onSuppressNavigationConsumed={onSuppressNavigationConsumed}
       >
         <span className="flex h-5 w-5 shrink-0 items-center justify-center">
-          <ChannelIcon type={channel.channelType} className="h-4 w-4" ariaLabel="" />
+          <ChannelIcon type={channel.channelType} icon={channel.icon} className="h-4 w-4" ariaLabel="" />
         </span>
         <span className={`truncate ${channel.muted ? 'text-gray-500' : ''}`}>
           {channel.channelName}
         </span>
+        <PrivateChannelMark type={channel.channelType} icon={channel.icon} />
         {/* Right-edge status, absolutely positioned so it sits flush to the edge
             and NEVER reflows. Three tiers, loudest first: the brand-pink
             NUMBER counts messages that actually ALERTED this user (mentions,

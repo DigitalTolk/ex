@@ -90,6 +90,9 @@ func (s *dataChannelStore) PatchChannel(_ context.Context, id string, p store.Ch
 	if p.Description != nil {
 		ch.Description = *p.Description
 	}
+	if p.Icon != nil {
+		ch.Icon = *p.Icon
+	}
 	if p.Archived != nil {
 		ch.Archived = *p.Archived
 	}
@@ -234,6 +237,14 @@ func (s *dataMessageStore) GetMessage(_ context.Context, parentID, msgID string)
 	return msg, nil
 }
 func (s *dataMessageStore) UpdateMessage(_ context.Context, msg *model.Message) error {
+	s.messages[msg.ParentID+"#"+msg.ID] = msg
+	return nil
+}
+func (s *dataMessageStore) UpdateMessageIfVersion(_ context.Context, msg *model.Message, prevVersion int) error {
+	cur, ok := s.messages[msg.ParentID+"#"+msg.ID]
+	if !ok || cur.Version != prevVersion {
+		return store.ErrVersionConflict
+	}
 	s.messages[msg.ParentID+"#"+msg.ID] = msg
 	return nil
 }
@@ -2496,5 +2507,55 @@ func TestChannelHandlerFull_MakePrivate(t *testing.T) {
 	var ch model.Channel
 	if err := json.NewDecoder(rec.Body).Decode(&ch); err != nil || ch.Type != model.ChannelTypePrivate {
 		t.Errorf("response = %+v (%v), want the private channel", ch, err)
+	}
+}
+
+func TestChannelHandlerFull_SetIcon(t *testing.T) {
+	env := setupChannelHandlerFull(t)
+	env.channels.channels["ch-i"] = &model.Channel{ID: "ch-i", Name: "launch", Slug: "launch", Type: model.ChannelTypePublic}
+	env.memberships.memberships["ch-i#u-adm"] = &model.ChannelMembership{ChannelID: "ch-i", UserID: "u-adm", Role: model.ChannelRoleAdmin}
+	env.memberships.memberships["ch-i#u-mem"] = &model.ChannelMembership{ChannelID: "ch-i", UserID: "u-mem", Role: model.ChannelRoleMember}
+	handler := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.SetIcon))
+	put := func(userID, id, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPut, "/api/v1/channels/"+id+"/icon", strings.NewReader(body))
+		req.SetPathValue("id", id)
+		req.Header.Set("Authorization", "Bearer "+makeTokenForUser(env.jwtMgr, &model.User{ID: userID, Email: userID + "@x.se", SystemRole: model.SystemRoleMember}))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	cases := []struct {
+		name     string
+		userID   string
+		id       string
+		body     string
+		wantCode int
+		wantIcon string
+	}{
+		{name: "a plain member", userID: "u-mem", id: "ch-i", body: `{"icon":"🚀"}`, wantCode: http.StatusForbidden},
+		{name: "a missing id", userID: "u-adm", id: "", body: `{"icon":"🚀"}`, wantCode: http.StatusBadRequest},
+		{name: "a bad body", userID: "u-adm", id: "ch-i", body: `{bad`, wantCode: http.StatusBadRequest},
+		{name: "plain text", userID: "u-adm", id: "ch-i", body: `{"icon":"launch day!"}`, wantCode: http.StatusBadRequest},
+		{name: "an emoji", userID: "u-adm", id: "ch-i", body: `{"icon":"🚀"}`, wantCode: http.StatusOK, wantIcon: "🚀"},
+		{name: "an emoji name", userID: "u-adm", id: "ch-i", body: `{"icon":":tada:"}`, wantCode: http.StatusOK, wantIcon: "tada"},
+		{name: "cleared", userID: "u-adm", id: "ch-i", body: `{"icon":""}`, wantCode: http.StatusOK, wantIcon: ""},
+	}
+	for _, tc := range cases {
+		rec := put(tc.userID, tc.id, tc.body)
+		if rec.Code != tc.wantCode {
+			t.Fatalf("%s: status = %d %s, want %d", tc.name, rec.Code, rec.Body.String(), tc.wantCode)
+		}
+		if stored := env.channels.channels["ch-i"].Icon; stored != tc.wantIcon {
+			t.Errorf("%s: stored icon = %q, want %q", tc.name, stored, tc.wantIcon)
+		}
+		if tc.wantCode != http.StatusOK {
+			continue
+		}
+		var ch model.Channel
+		if err := json.NewDecoder(rec.Body).Decode(&ch); err != nil || ch.ID != "ch-i" || ch.Icon != tc.wantIcon {
+			t.Errorf("%s: response = %+v (%v), want the channel with icon %q", tc.name, ch, err, tc.wantIcon)
+		}
 	}
 }

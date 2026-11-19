@@ -136,6 +136,28 @@ func TestSecurityHeadersFrameSrcAllowsOnlyThePreviewPath(t *testing.T) {
 	}
 }
 
+// SharePoint previews: the page may frame the configured SharePoint hosts,
+// over https, and nothing that isn't a plain host source.
+func TestSecurityHeadersFrameSrcAllowsSharePointHosts(t *testing.T) {
+	mw := SecurityHeadersWithOptions(CSPOptions{
+		FramePath:  "/api/v1/html-preview/",
+		FrameHosts: []string{"chat.example.com"},
+		FrameSrc: []string{
+			"https://contoso.sharepoint.com", "https://*.SharePoint.com", "https://contoso.sharepoint.com",
+			"http://insecure.example.com", "https://*", "https://a.example.com; script-src *", "https://x.example.com/path",
+		},
+	})
+	want := "chat.example.com/api/v1/html-preview/ https://contoso.sharepoint.com https://*.sharepoint.com"
+	if got := requestCSP(t, mw, "chat.example.com")["frame-src"]; got != want {
+		t.Errorf("frame-src = %q, want %q", got, want)
+	}
+	// Without the HTML preview route, only SharePoint.
+	only := SecurityHeadersWithOptions(CSPOptions{FrameSrc: []string{"https://*.sharepoint.com"}})
+	if got := requestCSP(t, only, "chat.example.com")["frame-src"]; got != "https://*.sharepoint.com" {
+		t.Errorf("frame-src = %q", got)
+	}
+}
+
 // Trusted Types, report-only: no first-party code writes a string into an
 // HTML or script sink, so the browser can flag one that appears (a library,
 // a regression) without breaking the page.

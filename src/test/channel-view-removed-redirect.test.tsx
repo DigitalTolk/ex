@@ -45,12 +45,15 @@ const mockChannel: Channel = {
 
 let mockMembersData: ChannelMembership[] = [];
 
-vi.mock('@/context/AuthContext', () => ({
+vi.mock('@/context/AuthContext', () => {
+  const auth = {
   useAuth: () => ({
     user: { id: 'u-current', displayName: 'Me', email: 'me@x.com', systemRole: 'member', status: 'active' },
     isAuthenticated: true,
   }),
-}));
+};
+  return { ...auth, useOptionalAuth: auth.useAuth };
+});
 
 vi.mock('@/context/UnreadContext', () => ({
   useUnread: () => ({

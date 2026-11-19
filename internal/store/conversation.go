@@ -399,6 +399,31 @@ func (s *ConversationStoreImpl) SetFavorite(ctx context.Context, convID, userID 
 	return s.setUserConversationAttribute(ctx, convID, userID, "favorite", favorite)
 }
 
+// SetMuted records whether userID muted the conversation, on their own row.
+func (s *ConversationStoreImpl) SetMuted(ctx context.Context, convID, userID string, muted bool) error {
+	return s.setUserConversationAttribute(ctx, convID, userID, "muted", muted)
+}
+
+// ConversationMuted reads whether userID muted the conversation: one item,
+// one attribute. A missing row reads as not muted.
+func (s *ConversationStoreImpl) ConversationMuted(ctx context.Context, convID, userID string) (bool, error) {
+	out, err := s.Client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName:            aws.String(s.Table),
+		Key:                  compositeKey(userPK(userID), convSK(convID)),
+		ProjectionExpression: aws.String("muted"),
+	})
+	if err != nil {
+		return false, fmt.Errorf("store: conversation muted: %w", err)
+	}
+	var row struct {
+		Muted bool `dynamodbav:"muted"`
+	}
+	if err := attributevalue.UnmarshalMap(out.Item, &row); err != nil {
+		return false, fmt.Errorf("store: conversation muted: %w", err)
+	}
+	return row.Muted, nil
+}
+
 // SetUserConversationCategory assigns the DM/group to a sidebar category
 // (or clears it when categoryID is empty).
 func (s *ConversationStoreImpl) SetCategory(ctx context.Context, convID, userID, categoryID string, sidebarPosition *int) error {

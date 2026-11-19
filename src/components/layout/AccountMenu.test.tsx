@@ -240,6 +240,30 @@ describe('AccountMenu', () => {
     });
   });
 
+  describe("as the foot of the desktop icon rail", () => {
+    it('shows the avatar alone, with no name and no fade above it, and opens the same menu', () => {
+      setOnline(['u-1']);
+      renderMenu(<AccountMenu variant="rail" />);
+      const trigger = screen.getByTestId('account-menu-trigger');
+      expect(within(trigger).getByText('AW')).toBeInTheDocument();
+      // Only the initials: the rail has no room for a name.
+      expect(trigger.textContent).toBe('AW');
+      expect(trigger.querySelector('[data-presence]')!.getAttribute('data-presence')).toBe('online');
+      expect(screen.queryByTestId('sidebar-account-fade')).not.toBeInTheDocument();
+      fireEvent.click(trigger);
+      expect(screen.getByTestId('user-menu-about')).toBeInTheDocument();
+      expect(screen.getByTestId('user-menu-signout')).toBeInTheDocument();
+    });
+
+    it('keeps the name and the fade on the sidebar footer', () => {
+      renderMenu();
+      const trigger = screen.getByTestId('account-menu-trigger');
+      expect(trigger.textContent).not.toBe('AW');
+      expect(trigger).toHaveTextContent('AW');
+      expect(screen.getByTestId('sidebar-account-fade')).toBeInTheDocument();
+    });
+  });
+
   describe('mobile account sheet', () => {
     beforeEach(() => {
       mockIsMobile = true;

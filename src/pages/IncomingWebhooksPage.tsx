@@ -1,5 +1,6 @@
 import { PageContainer } from '@/components/layout/PageContainer';
 import { IncomingWebhooksPanel } from '@/components/admin/IncomingWebhooksPanel';
+import { MessagePreview } from '@/components/admin/MessagePreview';
 import { useAuth } from '@/context/AuthContext';
 import { isGuest } from '@/lib/roles';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
@@ -20,7 +21,10 @@ export default function IncomingWebhooksPage() {
 
   return (
     <PageContainer title="Webhooks">
-      <IncomingWebhooksPanel />
+      <div className="space-y-4">
+        <IncomingWebhooksPanel />
+        <MessagePreview />
+      </div>
     </PageContainer>
   );
 }

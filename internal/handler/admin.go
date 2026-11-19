@@ -43,7 +43,14 @@ type AdminHandler struct {
 	mailer        email.Sender
 	emailProvider string
 	emailFrom     string
+	// sharePointHosts are the SharePoint hosts whose posted links are shared
+	// (SetSharePointHosts); empty when SharePoint sharing is off.
+	sharePointHosts []string
 }
+
+// SetSharePointHosts tells clients which links are SharePoint links: they
+// show those as file cards and open them for editing.
+func (h *AdminHandler) SetSharePointHosts(hosts []string) { h.sharePointHosts = hosts }
 
 // NewAdminHandler constructs an AdminHandler.
 func NewAdminHandler(settings *service.SettingsService) *AdminHandler {
@@ -159,15 +166,22 @@ type settingsResponse struct {
 	GiphyAPIKey       string   `json:"giphyAPIKey,omitempty"`
 	GiphyEnabled      bool     `json:"giphyEnabled"`
 	RunnersInApp      bool     `json:"runnersInApp"`
+	// SharePointHosts are the hosts whose links are shared SharePoint
+	// files; "*.example.com" matches every subdomain.
+	SharePointHosts []string `json:"sharePointHosts,omitempty"`
+	// AgentModels are the models agents may run on, per engine.
+	AgentModels []model.AgentModelOption `json:"agentModels"`
 }
 
-func newSettingsResponse(ws *model.WorkspaceSettings) settingsResponse {
+func (h *AdminHandler) newSettingsResponse(ws *model.WorkspaceSettings) settingsResponse {
 	return settingsResponse{
 		MaxUploadBytes:    ws.MaxUploadBytes,
 		AllowedExtensions: ws.AllowedExtensions,
 		GiphyAPIKey:       ws.GiphyAPIKey,
 		GiphyEnabled:      ws.GiphyAPIKey != "",
 		RunnersInApp:      ws.RunnersInApp,
+		SharePointHosts:   h.sharePointHosts,
+		AgentModels:       ws.AgentModels,
 	}
 }
 
@@ -181,7 +195,7 @@ func (h *AdminHandler) GetSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "unauthorized", "authentication required")
 		return
 	}
-	writeJSON(w, http.StatusOK, newSettingsResponse(h.settings.Effective(r.Context())))
+	writeJSON(w, http.StatusOK, h.newSettingsResponse(h.settings.Effective(r.Context())))
 }
 
 // PushStats returns this instance's mobile-push pipeline counters
@@ -306,6 +320,27 @@ type updateSettingsBody struct {
 	RunnersInApp *bool `json:"runnersInApp"`
 }
 
+// SetAgentModels replaces the models agents may run on. Admin-only.
+// PUT /api/v1/admin/agent-models {"models": [{harness, id, label}]}
+func (h *AdminHandler) SetAgentModels(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
+	var body struct {
+		Models []model.AgentModelOption `json:"models"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
+		return
+	}
+	out, err := h.settings.SetAgentModels(r.Context(), body.Models)
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, h.newSettingsResponse(out))
+}
+
 // UpdateSettings replaces the workspace settings. Admin-only.
 func (h *AdminHandler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 	if !requireAdmin(w, r) {
@@ -328,5 +363,5 @@ func (h *AdminHandler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 		writeServiceError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, newSettingsResponse(out))
+	writeJSON(w, http.StatusOK, h.newSettingsResponse(out))
 }

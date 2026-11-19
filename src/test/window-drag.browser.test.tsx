@@ -148,7 +148,7 @@ afterEach(() => {
 // by the strip at the top of the sidebar — wherever the lists under them are
 // scrolled to. (Only a desktop window has these.)
 describe.runIf(window.__EX_FORCE_DEVICE__ === 'desktop')('dragging the desktop window', () => {
-  it('drags by the top bar and the sidebar strip, over scrolled lists', async () => {
+  it('drags by the top bar, the rail mark and the sidebar header, over scrolled lists', async () => {
     await renderAt('/channel/general');
     await vi.waitFor(() => expect(document.querySelector('[data-message-id="m-79"]')).not.toBeNull(), { timeout: 5000 });
     const sidebarList = Array.from(document.querySelectorAll<HTMLElement>('[data-testid="app-sidebar"] *')).find(
@@ -162,19 +162,24 @@ describe.runIf(window.__EX_FORCE_DEVICE__ === 'desktop')('dragging the desktop w
     const bar = document.querySelector('[data-testid="app-shell-header"]')!.getBoundingClientRect();
     expect(firstRow.top).toBeLessThan(bar.bottom);
 
-    const strip = document.querySelector('[data-testid="sidebar-top-strip"]')!.getBoundingClientRect();
+    // The sidebar's share of the window frame: the workspace mark at the head
+    // of the icon rail, and the channel list's header beside it.
+    const mark = document.querySelector('[data-rail-mark="true"]')!.getBoundingClientRect();
+    const header = document.querySelector('[data-testid="sidebar-column-header"]')!.getBoundingClientRect();
     const search = document.querySelector('[data-testid="searchbar-input"]')!.getBoundingClientRect();
-    // Every few pixels of the strip, and of the bar beside the search field.
+    // Every few pixels of them, and of the bar beside the search field.
     const areas = [
-      ['the sidebar strip', strip.left, strip.right, strip.top, strip.bottom],
+      ['the rail mark', mark.left, mark.right, mark.top, mark.bottom],
+      ['the sidebar header', header.left, header.right, header.top, header.bottom],
       ['the bar left of the search field', bar.left, search.left, bar.top, bar.bottom],
       ['the bar right of the search field', search.right, bar.right, bar.top, bar.bottom],
     ] as const;
-    // The bar's own buttons (Back, Forward) are for clicking.
-    const controls = Array.from(document.querySelectorAll('[data-testid="app-shell-header"] button'))
+    // The bar's own buttons (Back, Forward) and the header's "+" are for
+    // clicking.
+    const controls = Array.from(document.querySelectorAll('[data-testid="app-shell-header"] button, [data-testid="sidebar-column-header"] button'))
       .map((b) => b.getBoundingClientRect())
       .filter((r) => r.width > 0);
-    expect(controls.length).toBeGreaterThanOrEqual(2);
+    expect(controls.length).toBeGreaterThanOrEqual(3);
     const onControl = (x: number, y: number) =>
       controls.some((r) => x >= r.left - 1 && x < r.right + 1 && y >= r.top - 1 && y < r.bottom + 1);
     const holes: string[] = [];

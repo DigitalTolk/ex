@@ -110,6 +110,12 @@ export function shortcodeToUnicode(shortcode: string): string {
   return NAME_TO_UNICODE[m[1]] ?? shortcode;
 }
 
+// isKnownEmoji reports whether :name: draws as an emoji — a Unicode one or
+// a custom one — rather than falling back to its text.
+export function isKnownEmoji(name: string, customMap?: Record<string, string>): boolean {
+  return !!customMap?.[name] || NAME_TO_UNICODE[name] !== undefined;
+}
+
 // Inverse map for normalizing user-typed unicode emoji back to the
 // generated `:shortcode:` form the API stores. The builder is exported for
 // tests: base entries always win over generated toned variants, which only

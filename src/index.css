@@ -44,7 +44,8 @@
 }
 
 /* Desktop app: the window is dragged by the top bar, behind the search field,
-   and by the box above Home in the sidebar. Whatever opens over them — a
+   by the workspace mark at the head of the icon rail, and by the channel
+   list's header. Whatever opens over them — a
    dialog, a menu, a notification banner, each rendered outside the app's
    root — is not part of the window's frame, and stays clickable. */
 body > :not(#root) {
@@ -72,6 +73,12 @@ body > :not(#root) {
 }
 .electron-mac.tier-compact {
   --top-bar-side: calc(5.5rem + 3 * 1.75rem + 2 * 0.25rem);
+}
+/* On the full tier the traffic lights sit over the top of the icon rail, so
+   the workspace mark drops below them. */
+.electron-mac.tier-full [data-rail-mark='true'] {
+  height: 5.25rem;
+  align-items: flex-end;
 }
 @custom-variant data-open {
   &:where([data-state="open"]),
@@ -123,6 +130,19 @@ body > :not(#root) {
   &:where([data-orientation="vertical"]) {
     @slot;
   }
+}
+
+:root {
+  /* Chart series, in their fixed order (charts never let an app pick): a
+   * categorical set validated for colour-blind separation on this surface.
+   * A plain :root block, not @theme — Tailwind only emits theme variables a
+   * utility uses, and charts read these through var() alone. html.dark
+   * redefines them for the dark surface. */
+  --color-series-1: #2A78D6;
+  --color-series-2: #EB6834;
+  --color-series-3: #1BAF7A;
+  --color-series-4: #EDA100;
+  --color-series-5: #6250D6;
 }
 
 @theme {
@@ -195,9 +215,36 @@ body > :not(#root) {
   /* Pinned-message affordance (amber accent bar + "Pinned" label). Tokenised
    * so the pin marker stops using raw `amber-*` palette classes. */
   --color-pinned: #D97706;
+  /* Rich text palette (an app's rich_text blocks): eight named colours for
+   * text, highlights and pills. Text shades meet WCAG AA on the base; the
+   * tints sit behind foreground text. No pink — that's the brand accent. */
+  --color-rt-gray: #6B6862;
+  --color-rt-brown: #8A5A44;
+  --color-rt-orange: #B4530A;
+  --color-rt-yellow: #8F6200;
+  --color-rt-green: #2F7A50;
+  --color-rt-blue: #1F6FA3;
+  --color-rt-purple: #7E4FA6;
+  --color-rt-red: #C2362F;
+  --color-rt-gray-bg: #EEEDEA;
+  --color-rt-brown-bg: #F3EAE5;
+  --color-rt-orange-bg: #FBE9D9;
+  --color-rt-yellow-bg: #FAF0D2;
+  --color-rt-green-bg: #E3F1E8;
+  --color-rt-blue-bg: #E1EEF7;
+  --color-rt-purple-bg: #F0E8F7;
+  --color-rt-red-bg: #FBE6E4;
   /* Caution accent (amber) — for "notify everyone" group mentions etc. Matches
      the amber the pinned-message affordance already uses. */
   --color-caution: #FEF3C7;
+  /* File-type tiles (SharePoint files): documents, spreadsheets,
+   * presentations and PDFs each on their own colour with a white glyph, the
+   * same in both themes (no dark override). */
+  --color-file-document: #2563EB;
+  --color-file-spreadsheet: #16A34A;
+  --color-file-presentation: #EA580C;
+  --color-file-pdf: #DC2626;
+  --color-file-foreground: #FFFFFF;
   --color-caution-foreground: #92400E;
   /* In-app notification banner (Toaster kind="notification"). It must never
    * blend into the surface it covers, so it gets its own distinct palette per
@@ -219,6 +266,8 @@ body > :not(#root) {
   --color-sidebar-accent: #EDECE9;
   --color-sidebar-accent-foreground: #0B0B0B;
   --color-sidebar-border: #E3E3E2;
+  /* The icon rail beside the channel list: a step darker than the list. */
+  --color-sidebar-rail: #EFEEEB;
   /* Hairline between rows inside a settings group — a step softer than
    * `border`, so lists read as one group rather than a stack of boxes. */
   --color-divider: #EFEEEC;
@@ -385,7 +434,10 @@ body > :not(#root) {
 }
 
 @layer base {
-  html.dark {
+  /* Also any subtree marked .dark: the desktop sidebar wears the dark
+     palette in both themes (see AppLayout). */
+  html.dark,
+  .dark {
     /* Dark theme — design system tokens (neutral greys, per the Figma
      * dark-mode frames; replaces the earlier warm charcoal #231F20 ladder)
      * bg/base #1A1A1A · bg/level1 (hover, floating) #232323
@@ -448,6 +500,31 @@ body > :not(#root) {
     --color-online: #34D399;
     /* Pinned amber, brighter gold for the dark surface. */
     --color-pinned: #FBBF24;
+    /* Rich text palette for the dark surface: lighter text shades (AA on
+     * the base), deep tints behind light foreground text. */
+    --color-rt-gray: #A7A5A6;
+    --color-rt-brown: #D39C82;
+    --color-rt-orange: #F0A15E;
+    --color-rt-yellow: #E8C26A;
+    --color-rt-green: #6CCB94;
+    --color-rt-blue: #6CB8EA;
+    --color-rt-purple: #C29CEB;
+    --color-rt-red: #F2837C;
+    --color-rt-gray-bg: #3A3637;
+    --color-rt-brown-bg: #45332B;
+    --color-rt-orange-bg: #4D3420;
+    --color-rt-yellow-bg: #463A1D;
+    --color-rt-green-bg: #1F3A2B;
+    --color-rt-blue-bg: #183447;
+    --color-rt-purple-bg: #362A45;
+    --color-rt-red-bg: #4A2624;
+    /* Chart series for the dark surface: their own steps, validated against
+     * it — not an automatic flip of the light set. */
+    --color-series-1: #3987E5;
+    --color-series-2: #D95926;
+    --color-series-3: #199E70;
+    --color-series-4: #C98500;
+    --color-series-5: #9085E9;
     /* Caution accent (amber), tuned for the dark surface. */
     --color-caution: #3B2F12;
     --color-caution-foreground: #FCD34D;
@@ -469,6 +546,7 @@ body > :not(#root) {
     --color-sidebar-accent: #2C2C2C;
     --color-sidebar-accent-foreground: #FFFFFF;
     --color-sidebar-border: #242424;
+    --color-sidebar-rail: #141414;
     /* Row hairline; #2C2C2C (not the #242424 border) so it stays visible on
        the #232323 dialog surface. */
     --color-divider: #2C2C2C;
@@ -479,6 +557,19 @@ body > :not(#root) {
     --color-chat-hover: #232323;
     /* Composer / typing field sits a step above bg/base so it reads as a field. */
     --color-typing-field: #212121;
+  }
+}
+
+@layer base {
+  /* In the light theme the dark sidebar is a soft, matte charcoal (the design
+     reference's warm tone, lifted a step): beside a light page it reads as a
+     charcoal panel, not a black one. (In the dark theme it has to sit close
+     to the neutral dark page next to it.) */
+  html:not(.dark) .dark {
+    --color-sidebar: #343233;
+    --color-sidebar-rail: #272526;
+    --color-sidebar-accent: #454344;
+    --color-sidebar-border: #3E3C3D;
   }
 }
 
@@ -559,6 +650,9 @@ body > :not(#root) {
  * Tailwind's later utility layer, which is why the previous
  * implementation needed `!important` to fight the cascade.
  *
+ * A chrome surface that is itself .dark (the desktop sidebar and its
+ * rail) keeps the dark palette as written, so the remap leaves it alone.
+ *
  * Browser tests in test/sidebar-chrome-colors.browser.test.tsx lock
  * the computed colors so a future cascade change can't silently
  * regress to white-on-white text.
@@ -616,43 +710,74 @@ body > :not(#root) {
     -webkit-touch-callout: default;
   }
 
-  html:not(.dark) [data-app-chrome="true"] .text-white,
-  html:not(.dark) [data-app-chrome="true"] .text-gray-200,
-  html:not(.dark) [data-app-chrome="true"] .text-gray-300 {
+  html:not(.dark) [data-app-chrome="true"]:not(.dark) .text-white,
+  html:not(.dark) [data-app-chrome="true"]:not(.dark) .text-gray-200,
+  html:not(.dark) [data-app-chrome="true"]:not(.dark) .text-gray-300 {
     color: var(--color-sidebar-foreground);
   }
 
-  html:not(.dark) [data-app-chrome="true"] .text-gray-400 {
+  html:not(.dark) [data-app-chrome="true"]:not(.dark) .text-gray-400 {
     color: var(--color-muted-foreground);
   }
 
-  html:not(.dark) [data-app-chrome="true"] .text-gray-500 {
+  html:not(.dark) [data-app-chrome="true"]:not(.dark) .text-gray-500 {
     color: #7B7B7B;
   }
 
-  html:not(.dark) [data-app-chrome="true"] .bg-white\/15,
-  html:not(.dark) [data-app-chrome="true"] .bg-white\/20 {
+  html:not(.dark) [data-app-chrome="true"]:not(.dark) .bg-white\/15,
+  html:not(.dark) [data-app-chrome="true"]:not(.dark) .bg-white\/20 {
     background-color: var(--color-sidebar-accent);
   }
 
   /* Gated like Tailwind's own hover: variant: a phone keeps :hover on the
      last element tapped, which lit a tapped sidebar row as if hovered. */
   @media (hover: hover) {
-    html:not(.dark) [data-app-chrome="true"] .hover\:bg-white\/10:hover,
-    html:not(.dark) [data-app-chrome="true"] .hover\:bg-white\/5:hover,
-    html:not(.dark) [data-app-chrome="true"] .hover\:bg-white\/20:hover {
+    html:not(.dark) [data-app-chrome="true"]:not(.dark) .hover\:bg-white\/10:hover,
+    html:not(.dark) [data-app-chrome="true"]:not(.dark) .hover\:bg-white\/5:hover,
+    html:not(.dark) [data-app-chrome="true"]:not(.dark) .hover\:bg-white\/20:hover {
       background-color: var(--color-sidebar-accent);
     }
 
-    html:not(.dark) [data-app-chrome="true"] .hover\:text-white:hover,
-    html:not(.dark) [data-app-chrome="true"] .hover\:text-gray-300:hover {
+    html:not(.dark) [data-app-chrome="true"]:not(.dark) .hover\:text-white:hover,
+    html:not(.dark) [data-app-chrome="true"]:not(.dark) .hover\:text-gray-300:hover {
       color: var(--color-sidebar-foreground);
     }
   }
 
-  html:not(.dark) [data-app-chrome="true"] .bg-white\/10 {
+  html:not(.dark) [data-app-chrome="true"]:not(.dark) .bg-white\/10 {
     background-color: #EEEEEE;
   }
+}
+
+/* The rail's icons move a little while their stop is hovered (SidebarRail):
+   the bubbles pop, the bell rings, the pencil writes, the directory nods,
+   the spark twinkles. */
+@keyframes rail-ring {
+  0%, 100% { transform: rotate(0); }
+  20% { transform: rotate(-14deg); }
+  40% { transform: rotate(11deg); }
+  60% { transform: rotate(-7deg); }
+  80% { transform: rotate(4deg); }
+}
+@keyframes rail-write {
+  0%, 100% { transform: translate(0, 0) rotate(0); }
+  30% { transform: translate(-1px, 1px) rotate(-6deg); }
+  60% { transform: translate(1px, -1px) rotate(5deg); }
+}
+@keyframes rail-nod {
+  0%, 100% { transform: translateY(0); }
+  35% { transform: translateY(-2px); }
+  65% { transform: translateY(1px); }
+}
+@keyframes rail-pop {
+  0%, 100% { transform: scale(1); }
+  40% { transform: scale(1.18) translateY(-1px); }
+  70% { transform: scale(0.95); }
+}
+@keyframes rail-twinkle {
+  0%, 100% { transform: scale(1) rotate(0); }
+  40% { transform: scale(1.15) rotate(12deg); }
+  70% { transform: scale(0.96) rotate(-4deg); }
 }
 
 /* The curve of the iOS keyboard's slide, for a surface that follows the

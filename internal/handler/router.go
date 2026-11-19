@@ -50,6 +50,7 @@ func NewRouter(d *Deps) http.Handler {
 	mattermostH := d.Mattermost
 	activityH := d.Activity
 	commandH := d.Command
+	sharePointH := d.SharePoint
 	jwtMgr := d.JWT
 	frontendFS := d.FrontendFS
 	appVersion := d.AppVersion
@@ -122,6 +123,7 @@ func NewRouter(d *Deps) http.Handler {
 	mux.Handle("PATCH /api/v1/users/me/status", middleware.WrapFunc(userH.SetMyUserStatus, authMW))
 	mux.Handle("DELETE /api/v1/users/me/status", middleware.WrapFunc(userH.ClearMyUserStatus, authMW))
 	mux.Handle("PUT /api/v1/users/me/notification-settings", middleware.WrapFunc(userH.SetMyNotificationSettings, authMW))
+	mux.Handle("PUT /api/v1/users/me/notification-snooze", middleware.WrapFunc(userH.SnoozeMyNotifications, authMW))
 	mux.Handle("POST /api/v1/users/me/avatar/upload-url", middleware.WrapFunc(userH.CreateAvatarUploadURL, authMW))
 	mux.Handle("POST /api/v1/users/batch", middleware.WrapFunc(userH.BatchGetUsers, authMW))
 	mux.Handle("GET /api/v1/users/{id}", middleware.WrapFunc(userH.GetUser, authMW))
@@ -153,6 +155,7 @@ func NewRouter(d *Deps) http.Handler {
 	mux.Handle("DELETE /api/v1/channels/{id}", middleware.WrapFunc(channelH.Archive, authMW))
 	mux.Handle("POST /api/v1/channels/{id}/unarchive", middleware.WrapFunc(channelH.Unarchive, authMW))
 	mux.Handle("POST /api/v1/channels/{id}/private", middleware.WrapFunc(channelH.MakePrivate, authMW))
+	mux.Handle("PUT /api/v1/channels/{id}/icon", middleware.WrapFunc(channelH.SetIcon, authMW))
 
 	mux.Handle("POST /api/v1/channels/{id}/join", middleware.WrapFunc(channelH.Join, authMW))
 	mux.Handle("POST /api/v1/channels/{id}/leave", middleware.WrapFunc(channelH.Leave, authMW))
@@ -173,6 +176,7 @@ func NewRouter(d *Deps) http.Handler {
 	mux.Handle("DELETE /api/v1/channels/{id}/messages/{msgId}", middleware.WrapFunc(channelH.DeleteMessage, authMW))
 	mux.Handle("GET /api/v1/channels/{id}/messages/{msgId}/thread", middleware.WrapFunc(channelH.GetThread, authMW))
 	mux.Handle("POST /api/v1/channels/{id}/messages/{msgId}/reactions", middleware.WrapFunc(channelH.ToggleReaction, authMW, writeLimit))
+	mux.Handle("POST /api/v1/channels/{id}/messages/{msgId}/actions", middleware.WrapFunc(channelH.Act, authMW, writeLimit))
 	mux.Handle("PUT /api/v1/channels/{id}/messages/{msgId}/pinned", middleware.WrapFunc(channelH.SetPinned, authMW))
 	mux.Handle("PUT /api/v1/channels/{id}/messages/{msgId}/no-unfurl", middleware.WrapFunc(channelH.SetNoUnfurl, authMW))
 	mux.Handle("PUT /api/v1/channels/{id}/messages/{msgId}/unread", middleware.WrapFunc(channelH.MarkUnread, authMW))
@@ -184,6 +188,7 @@ func NewRouter(d *Deps) http.Handler {
 	mux.Handle("GET /api/v1/conversations", middleware.WrapFunc(convH.List, authMW))
 	mux.Handle("GET /api/v1/conversations/{id}", middleware.WrapFunc(convH.Get, authMW))
 	mux.Handle("PUT /api/v1/conversations/{id}/read", middleware.WrapFunc(convH.MarkRead, authMW))
+	mux.Handle("PUT /api/v1/conversations/{id}/mute", middleware.WrapFunc(convH.SetMute, authMW))
 	mux.Handle("POST /api/v1/conversations/{id}/convert", middleware.WrapFunc(channelH.ConvertConversation, authMW, writeLimit))
 
 	mux.Handle("GET /api/v1/conversations/{id}/messages", middleware.WrapFunc(convH.ListMessages, authMW))
@@ -192,6 +197,7 @@ func NewRouter(d *Deps) http.Handler {
 	mux.Handle("DELETE /api/v1/conversations/{id}/messages/{msgId}", middleware.WrapFunc(convH.DeleteMessage, authMW))
 	mux.Handle("GET /api/v1/conversations/{id}/messages/{msgId}/thread", middleware.WrapFunc(convH.GetThread, authMW))
 	mux.Handle("POST /api/v1/conversations/{id}/messages/{msgId}/reactions", middleware.WrapFunc(convH.ToggleReaction, authMW, writeLimit))
+	mux.Handle("POST /api/v1/conversations/{id}/messages/{msgId}/actions", middleware.WrapFunc(convH.Act, authMW, writeLimit))
 	mux.Handle("PUT /api/v1/conversations/{id}/messages/{msgId}/pinned", middleware.WrapFunc(convH.SetPinned, authMW))
 	mux.Handle("PUT /api/v1/conversations/{id}/messages/{msgId}/no-unfurl", middleware.WrapFunc(convH.SetNoUnfurl, authMW))
 	mux.Handle("PUT /api/v1/conversations/{id}/messages/{msgId}/unread", middleware.WrapFunc(convH.MarkUnread, authMW))
@@ -221,6 +227,14 @@ func NewRouter(d *Deps) http.Handler {
 		mux.Handle("DELETE /api/v1/scheduled-messages/{id}", middleware.WrapFunc(sm.Delete, authMW))
 		mux.Handle("POST /api/v1/scheduled-messages/{id}/send", middleware.WrapFunc(sm.SendNow, authMW, writeLimit))
 	}
+	if sharePointH != nil {
+		mux.Handle("GET /api/v1/sharepoint/link", middleware.WrapFunc(sharePointH.Link, authMW))
+		mux.Handle("POST /api/v1/sharepoint/link/retry", middleware.WrapFunc(sharePointH.Retry, authMW, writeLimit))
+		mux.Handle("GET /api/v1/sharepoint/preview", middleware.WrapFunc(sharePointH.Preview, authMW))
+		mux.Handle("PUT /api/v1/channels/{id}/office-files", middleware.WrapFunc(sharePointH.UploadOfficeFile, authMW, writeLimit))
+		mux.Handle("PUT /api/v1/conversations/{id}/office-files", middleware.WrapFunc(sharePointH.UploadConversationOfficeFile, authMW, writeLimit))
+	}
+
 	if activityH != nil {
 		mux.Handle("GET /api/v1/activity", middleware.WrapFunc(activityH.Feed, authMW))
 		mux.Handle("PUT /api/v1/activity/read", middleware.WrapFunc(activityH.MarkRead, authMW))
@@ -308,6 +322,7 @@ func NewRouter(d *Deps) http.Handler {
 		// inside the handler.
 		mux.Handle("GET /api/v1/admin/settings", middleware.WrapFunc(adminH.GetSettings, authMW))
 		mux.Handle("PUT /api/v1/admin/settings", middleware.WrapFunc(adminH.UpdateSettings, authMW))
+		mux.Handle("PUT /api/v1/admin/agent-models", middleware.WrapFunc(adminH.SetAgentModels, authMW))
 		mux.Handle("GET /api/v1/admin/search/status", middleware.WrapFunc(adminH.SearchStatus, authMW))
 		mux.Handle("GET /api/v1/admin/push-stats", middleware.WrapFunc(adminH.PushStats, authMW))
 		// Mail diagnostics: read the effective transport, and send a real
@@ -322,12 +337,44 @@ func NewRouter(d *Deps) http.Handler {
 		// own webhooks, an admin everyone's (the service decides).
 		mux.Handle("GET /api/v1/admin/webhooks", middleware.WrapFunc(webhookH.List, authMW))
 		mux.Handle("POST /api/v1/admin/webhooks", middleware.WrapFunc(webhookH.Create, authMW, writeLimit))
+		mux.Handle("POST /api/v1/admin/webhooks/preview", middleware.WrapFunc(webhookH.Preview, authMW, writeLimit))
 		mux.Handle("PATCH /api/v1/admin/webhooks/{id}", middleware.WrapFunc(webhookH.Update, authMW, writeLimit))
 		mux.Handle("DELETE /api/v1/admin/webhooks/{id}", middleware.WrapFunc(webhookH.Delete, authMW, writeLimit))
+		mux.Handle("PUT /api/v1/admin/webhooks/{id}/templates/{key}", middleware.WrapFunc(webhookH.SaveTemplate, authMW, writeLimit))
+		mux.Handle("DELETE /api/v1/admin/webhooks/{id}/templates/{key}", middleware.WrapFunc(webhookH.DeleteTemplate, authMW, writeLimit))
 		// Public webhook ingress: throttle per IP to blunt ID-enumeration and
 		// spam amplification (a touch higher than the auth limit since busy
 		// integrations legitimately post more often).
 		mux.Handle("POST /hooks/{id}", middleware.WrapFunc(webhookH.Execute, middleware.RateLimit(d.RateLimiter, middleware.PerMinute("webhook", 60, 60))))
+		// Rich webhooks have their own URL, so the classic one above never
+		// runs anything but the classic path.
+		mux.Handle("POST /hooks/v2/{id}", middleware.WrapFunc(webhookH.ExecuteRich, middleware.RateLimit(d.RateLimiter, middleware.PerMinute("webhook", 60, 60))))
+	}
+	if ixH := d.Interaction; ixH != nil {
+		// App interactivity, set up by whoever manages the webhook.
+		mux.Handle("GET /api/v1/admin/webhooks/{id}/interactivity", middleware.WrapFunc(ixH.Status, authMW))
+		mux.Handle("PUT /api/v1/admin/webhooks/{id}/interactivity/request-url", middleware.WrapFunc(ixH.SetRequestURL, authMW, writeLimit))
+		mux.Handle("POST /api/v1/admin/webhooks/{id}/interactivity/bot-token", middleware.WrapFunc(ixH.RotateBotToken, authMW, writeLimit))
+		mux.Handle("POST /api/v1/admin/webhooks/{id}/interactivity/signing-secret", middleware.WrapFunc(ixH.RotateSigningSecret, authMW, writeLimit))
+		mux.Handle("PUT /api/v1/admin/webhooks/{id}/interactivity/email-sharing", middleware.WrapFunc(ixH.SetEmailSharing, authMW, writeLimit))
+		mux.Handle("PUT /api/v1/admin/webhooks/{id}/interactivity/paused", middleware.WrapFunc(ixH.SetPaused, authMW, writeLimit))
+		mux.Handle("POST /api/v1/admin/webhooks/{id}/interactivity/test", middleware.WrapFunc(ixH.SendTest, authMW, writeLimit))
+		// Apps' answers to clicks: no session, the URL's token is the
+		// credential; throttled per IP like the webhook ingress.
+		mux.Handle("POST /api/v1/apps/respond/{token}", middleware.WrapFunc(ixH.Respond, middleware.RateLimit(d.RateLimiter, middleware.PerMinute("respond", 60, 60))))
+		// Apps' calls: no session, the bot token is the credential, and each
+		// app has its own budget (InteractionService.AuthenticateApp).
+		// A per-IP limit in front keeps unauthenticated calls cheap.
+		appIP := middleware.RateLimit(d.RateLimiter, middleware.PerMinute("appapi-ip", 600, 120))
+		mux.Handle("POST /api/v1/apps/views.open", middleware.WrapFunc(ixH.ViewsOpen, appIP))
+		mux.Handle("POST /api/v1/apps/views.update", middleware.WrapFunc(ixH.ViewsUpdate, appIP))
+		mux.Handle("POST /api/v1/apps/views.push", middleware.WrapFunc(ixH.ViewsPush, appIP))
+		mux.Handle("POST /api/v1/apps/messages.update", middleware.WrapFunc(ixH.MessagesUpdate, appIP))
+		// A person's forms.
+		mux.Handle("POST /api/v1/views/{id}/submit", middleware.WrapFunc(ixH.SubmitView, authMW, writeLimit))
+		mux.Handle("POST /api/v1/views/{id}/close", middleware.WrapFunc(ixH.CloseView, authMW, writeLimit))
+		mux.Handle("POST /api/v1/views/{id}/actions", middleware.WrapFunc(ixH.ViewAction, authMW, writeLimit))
+		mux.Handle("POST /api/v1/admin/webhooks/preview-view", middleware.WrapFunc(ixH.PreviewView, authMW, writeLimit))
 	}
 	if userGroupH != nil {
 		// Every member reads groups; managing them is the service's call.

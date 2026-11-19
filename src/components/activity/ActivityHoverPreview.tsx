@@ -89,6 +89,9 @@ export function ActivityHoverPreview({ children }: ActivityHoverPreviewProps) {
         estimatedHeight={440}
         preferredSide="bottom"
         preferredAlign="start"
+        // Beside the rail's bell, over the page: under it, it covered the
+        // chat list.
+        beside
         role="dialog"
         ariaLabel="Recent activity"
         className="w-[368px] overflow-hidden rounded-lg border bg-popover shadow-lg"

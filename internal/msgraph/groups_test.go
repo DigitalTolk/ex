@@ -232,3 +232,15 @@ func TestWaitCtx(t *testing.T) {
 		t.Fatalf("waitCtx(cancelled) = %v", err)
 	}
 }
+
+// A request that never reaches Graph (a dead endpoint) reports a transport
+// error, for the shared request path the delegated and upload calls use.
+func TestCallReportsATransportError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	url := srv.URL
+	srv.Close()
+	err := call(context.Background(), http.DefaultClient, url, "tok", http.MethodGet, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "msgraph: request:") {
+		t.Fatalf("call to a dead endpoint = %v, want a transport error", err)
+	}
+}

@@ -14,15 +14,19 @@ interface ProbeProps {
   withContent?: boolean;
   attachTrigger?: boolean;
   estimatedHeight?: number;
+  estimatedWidth?: number;
+  beside?: boolean;
 }
 
-function Probe({ preferredSide, preferredAlign, triggerStyle, withContent, attachTrigger = true, estimatedHeight }: ProbeProps) {
+function Probe({ preferredSide, preferredAlign, triggerStyle, withContent, attachTrigger = true, estimatedHeight, estimatedWidth, beside }: ProbeProps) {
   const triggerRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const pos = usePopoverPosition(true, triggerRef, {
     preferredSide,
     preferredAlign,
     estimatedHeight,
+    estimatedWidth,
+    beside,
     contentRef: withContent ? contentRef : undefined,
   });
   return (
@@ -188,6 +192,25 @@ describe('usePopoverPosition (browser)', () => {
     await render(<ClosedProbe />);
     await new Promise((r) => setTimeout(r, 40));
     expect(posEl().getAttribute('data-measured')).toBe('false');
+  });
+
+  // `beside`: to the right of the trigger with their tops level (the rail's
+  // Activity bell), falling back to the usual placement without the room.
+  it('places a beside popover to the right of the trigger, tops level', async () => {
+    // A 50px trigger at left:10 ends at 60: 60 + 8 + 200 + 8 fits every viewport.
+    await render(<Probe beside estimatedWidth={200} triggerStyle={{ top: 100, left: 10 }} />);
+    await vi.waitFor(() => expect(posEl().getAttribute('data-measured')).toBe('true'));
+    expect(posEl().getAttribute('data-top')).toBe('100');
+    expect(posEl().getAttribute('data-left')).toBe('68');
+  });
+
+  it('places a beside popover under the trigger when there is no room to its right', async () => {
+    const left = window.innerWidth - 120;
+    await render(<Probe beside estimatedWidth={200} triggerStyle={{ top: 100, left }} />);
+    await vi.waitFor(() => expect(posEl().getAttribute('data-measured')).toBe('true'));
+    // Under the 30px-tall trigger, and inside the viewport.
+    expect(posEl().getAttribute('data-top')).toBe('134');
+    expect(Number(posEl().getAttribute('data-left'))).toBeLessThanOrEqual(window.innerWidth - 200 - 8);
   });
 
   it('clamps the left edge up to the margin when the trigger sits at the far left', async () => {

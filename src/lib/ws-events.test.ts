@@ -108,6 +108,19 @@ describe('notification.new schema (lenient)', () => {
     });
   });
 
+  // Do Not Disturb: the server's mark that this alert is taken in (badges,
+  // Activity) but not surfaced.
+  it('keeps the silent mark, and reads a mistyped one as absent rather than rejecting the alert', () => {
+    expect(parseNotification({ ...notificationMessage, silent: true })).toMatchObject({ silent: true });
+    expect(parseNotification({ ...notificationMessage, silent: false })).toMatchObject({ silent: false });
+    expect(parseNotification(notificationMessage)).not.toHaveProperty('silent');
+    for (const mistyped of ['yes', 1, null, {}]) {
+      const parsed = parseNotification({ ...notificationMessage, silent: mistyped });
+      expect(parsed).not.toBeNull();
+      expect(parsed?.silent).toBeUndefined();
+    }
+  });
+
   it('rejects only a payload with no kind or no parentID', () => {
     expect(parseNotification({ parentID: 'ch-1' })).toBeNull();
     expect(parseNotification({ kind: '', parentID: 'ch-1' })).toBeNull();

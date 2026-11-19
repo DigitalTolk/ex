@@ -45,6 +45,7 @@ type ChannelService struct {
 	activity    ChannelActivityRecorder
 	reminders   ChannelReminderSync
 	threadState ChannelThreadStateSync
+	sharePoint  ChannelSharePointSync
 	conversions ConversationConverter
 	// convertedDrafts moves a converted group's drafts to its channel.
 	convertedDrafts ConversationDraftMover
@@ -98,6 +99,13 @@ type ChannelThreadStateSync interface {
 	ParentLeft(ctx context.Context, userIDs []string, parentID string)
 }
 
+// ChannelSharePointSync keeps the access to SharePoint files shared in a
+// channel in step with its members (SharePointService).
+type ChannelSharePointSync interface {
+	MemberJoined(ctx context.Context, channelID, userID string)
+	ParentLeft(ctx context.Context, userIDs []string, parentID string)
+}
+
 // NewChannelService creates a ChannelService with the given dependencies.
 // messages may be nil; when it is, system messages are not persisted.
 func NewChannelService(channels ChannelStore, memberships MembershipStore, users UserStore, messages MessageStore, cache Cache, broker Broker, publisher Publisher) *ChannelService {
@@ -127,6 +135,10 @@ func (s *ChannelService) SetReminderSync(r ChannelReminderSync) { s.reminders = 
 // a channel.
 func (s *ChannelService) SetThreadStateSync(t ChannelThreadStateSync) { s.threadState = t }
 
+// SetSharePointSync wires SharePoint access into joining and leaving a
+// channel. Optional: only when SharePoint sharing is configured.
+func (s *ChannelService) SetSharePointSync(sp ChannelSharePointSync) { s.sharePoint = sp }
+
 // accessLost tells the activity stream and the reminders that these users can
 // no longer read channelID — they left or were removed — so neither keeps
 // showing its messages. Archiving is not a loss of access: members keep
@@ -140,6 +152,16 @@ func (s *ChannelService) accessLost(ctx context.Context, userIDs []string, chann
 	}
 	if s.threadState != nil {
 		s.threadState.ParentLeft(ctx, userIDs, channelID)
+	}
+	if s.sharePoint != nil {
+		s.sharePoint.ParentLeft(ctx, userIDs, channelID)
+	}
+}
+
+// accessGained gives a new member access to what the channel shared.
+func (s *ChannelService) accessGained(ctx context.Context, userID, channelID string) {
+	if s.sharePoint != nil {
+		s.sharePoint.MemberJoined(ctx, channelID, userID)
 	}
 }
 
@@ -234,6 +256,7 @@ func (s *ChannelService) addMemberWithEvents(ctx context.Context, ch *model.Chan
 		"action":      events.MemberActionJoined,
 	})
 
+	s.accessGained(ctx, userID, ch.ID)
 	s.postSystemMessage(ctx, ch.ID, displayName+" joined the channel")
 	return nil
 }
@@ -443,6 +466,44 @@ func (s *ChannelService) Update(ctx context.Context, actorID, channelID string, 
 		s.postSystemMessage(ctx, channelID, s.resolveDisplayName(ctx, actorID)+" renamed the channel from ~"+oldName+" to ~"+ch.Name)
 	}
 
+	return ch, nil
+}
+
+// SetIcon gives the channel an emoji shown in place of its globe or lock (the
+// emoji itself, or its name), or takes it away (""). Whether the channel is
+// public or private is still the channel's type: clients mark a private one
+// beside its icon.
+func (s *ChannelService) SetIcon(ctx context.Context, actorID, channelID, icon string) (*model.Channel, error) {
+	if err := s.checkPermission(ctx, actorID, channelID, model.ChannelRoleAdmin); err != nil {
+		return nil, err
+	}
+	icon, err := emojiIcon("icon", icon)
+	if err != nil {
+		return nil, apperr.Invalid("channel: an icon is an emoji like 🚀 or its name like rocket")
+	}
+	ch, err := s.channels.GetChannel(ctx, channelID)
+	if err != nil {
+		return nil, fmt.Errorf("channel: get: %w", err)
+	}
+	if ch.Archived {
+		return nil, ErrChannelArchived
+	}
+	if ch.Icon == icon {
+		return ch, nil
+	}
+	now := time.Now()
+	if err := s.channels.PatchChannel(ctx, channelID, store.ChannelPatch{Icon: &icon, UpdatedAt: now}); err != nil {
+		return nil, fmt.Errorf("channel: set icon: %w", err)
+	}
+	ch.Icon, ch.UpdatedAt = icon, now
+	// Members refetch their channel list and the open channel on this event.
+	events.Publish(ctx, s.publisher, pubsub.ChannelName(channelID), events.EventChannelUpdated, map[string]any{
+		"channelID":   channelID,
+		"name":        ch.Name,
+		"slug":        ch.Slug,
+		"description": ch.Description,
+		"icon":        ch.Icon,
+	})
 	return ch, nil
 }
 
@@ -847,6 +908,7 @@ func (s *ChannelService) AddMember(ctx context.Context, actorID, channelID, user
 		"action":      events.MemberActionAdded,
 	})
 
+	s.accessGained(ctx, userID, channelID)
 	s.postSystemMessage(ctx, channelID, displayName+" was added to the channel")
 	// A bot or agent has nobody to read its activity stream.
 	if s.activity != nil && !machine {
@@ -1069,7 +1131,7 @@ func (s *ChannelService) ListUserChannels(ctx context.Context, userID string) ([
 				if ch == nil {
 					continue // channel row missing: drop like the fan-out did
 				}
-				uc.Archived = ch.Archived
+				uc.Archived, uc.Icon = ch.Archived, ch.Icon
 				uc.ChannelName, uc.ChannelType = ch.Name, ch.Type
 				// Exact unread: messages added since this user last read.
 				// O(1) from the seq pair; survives reload and reconnect.
@@ -1097,7 +1159,7 @@ func (s *ChannelService) ListUserChannels(ctx context.Context, userID string) ([
 				return
 			}
 			keep[i] = true
-			uc.Archived = ch.Archived
+			uc.Archived, uc.Icon = ch.Archived, ch.Icon
 			uc.ChannelName, uc.ChannelType = ch.Name, ch.Type
 			// Exact unread: messages added since this user last read. O(1) from
 			// the seq pair — no per-channel count query. Survives reload and

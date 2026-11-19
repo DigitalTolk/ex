@@ -37,9 +37,12 @@ const bySlug: Record<string, Channel> = {
 let role: ChannelMembership['role'] = 'owner';
 let systemRole = 'member';
 
-vi.mock('@/context/AuthContext', () => ({
+vi.mock('@/context/AuthContext', () => {
+  const auth = {
   useAuth: () => ({ user: { id: 'u-1', displayName: 'Alice', email: 'a@a.com', systemRole, status: 'active' } }),
-}));
+};
+  return { ...auth, useOptionalAuth: auth.useAuth };
+});
 const unreadValue = {
   unreadChannels: new Set(),
   unreadChannelNotifications: new Set(),

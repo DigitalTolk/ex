@@ -32,12 +32,15 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ConversationView } from '@/components/chat/ConversationView';
 
-vi.mock('@/context/AuthContext', () => ({
+vi.mock('@/context/AuthContext', () => {
+  const auth = {
   useAuth: () => ({
     user: { id: 'u-me', email: 'me@x.com', displayName: 'Günter Self', avatarURL: 'http://x/me.png' },
     isAuthenticated: true,
   }),
-}));
+};
+  return { ...auth, useOptionalAuth: auth.useAuth };
+});
 
 vi.mock('@/context/UnreadContext', () => ({
   useUnread: () => ({

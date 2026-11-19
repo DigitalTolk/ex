@@ -393,8 +393,10 @@ describe('MessageList browser behavior', () => {
     it('keeps the newest message in view in a chat opened at it', async () => {
       const screen = await render(<ResizedList anchorMsgId="m-29" />);
       await vi.waitFor(() => expect(laidOutElement('[data-message-id="m-29"]')).not.toBeNull(), { timeout: 3000 });
-      await animationFrames(4);
-      expect(bottomEdge(scrollerOf())).toBe('m-29');
+      // The anchor scroll has settled when the newest message IS the bottom
+      // edge. Poll for that state: a frame count was not enough on a loaded
+      // CI box (the scroll landed late and the edge still read m-15).
+      await expect.poll(() => bottomEdge(scrollerOf())).toBe('m-29');
       await resize(screen, 'up');
       expect(bottomEdge(scrollerOf())).toBe('m-29');
     });

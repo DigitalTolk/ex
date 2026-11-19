@@ -55,7 +55,8 @@ let channelQuery: { data?: Channel; error?: Error; isLoading?: boolean };
 let userChannels: { channelID: string; channelName: string; channelType?: string }[] = [];
 const messagesFor = vi.fn();
 
-vi.mock('@/context/AuthContext', () => ({
+vi.mock('@/context/AuthContext', () => {
+  const auth = {
   useAuth: () => ({
     user: { id: 'u-1', displayName: 'Alice', email: 'a@a.com', systemRole: 'member', status: 'active' },
     isAuthenticated: true,
@@ -64,7 +65,9 @@ vi.mock('@/context/AuthContext', () => ({
     logout: vi.fn(),
     setAuth: vi.fn(),
   }),
-}));
+};
+  return { ...auth, useOptionalAuth: auth.useAuth };
+});
 
 vi.mock('@/context/UnreadContext', () => ({
   useUnread: () => ({
@@ -279,9 +282,14 @@ describe('ChannelView', () => {
     expect(screen.getByText('2')).toBeInTheDocument();
   });
 
-  it('renders public channel icon', () => {
+  // Who may edit the channel (the owner, here) changes its icon by clicking
+  // it: the globe is that button's face, drawn once and named by the button.
+  it('shows an owner the public channel icon as the button that changes it', () => {
     renderChannelView();
-    expect(screen.getByLabelText('Public channel')).toBeInTheDocument();
+    const button = screen.getByRole('button', { name: 'Change channel icon' });
+    expect(button.querySelector('svg.lucide-globe')).not.toBeNull();
+    expect(within(screen.getByTestId('channel-title-stack')).queryByLabelText('Public channel')).toBeNull();
+    expect(screen.getByTestId('channel-title-stack').querySelectorAll('svg.lucide-globe')).toHaveLength(1);
   });
 
   it('keeps the message list above the input as flat siblings of MessageDropZone', () => {

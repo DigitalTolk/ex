@@ -17,7 +17,7 @@ function laidOut(selector: string): DOMRect {
 
 async function openAt(seed: string) {
   await render(<ReminderDialog open initialValue={seed} onConfirm={vi.fn(() => Promise.resolve())} onOpenChange={vi.fn()} />);
-  await vi.waitFor(() => expect(document.querySelector('[data-slot="calendar"]')).not.toBeNull());
+  await expect.poll(() => document.querySelector('[data-slot="calendar"]')).not.toBeNull();
 }
 
 
@@ -28,13 +28,15 @@ const rowHeight = () => wheel('minute').querySelector<HTMLElement>('[data-row]')
 // Spins a wheel by `rows` (down the list for positive), as a fling that ends
 // there would, and waits for it to settle where that lands. One move: spread
 // over frames, WebKit settled (and re-homed) between them and lost rows.
+// The value changes only once the wheel has stopped, which on a busy WebKit
+// took over vi.waitFor's 1s, so it waits on expect.poll's shared budget.
 async function spin(part: string, rows: number) {
   const el = wheel(part);
   const value = el.getAttribute('aria-valuenow');
   el.scrollBy({ top: rows * rowHeight(), behavior: 'instant' });
   const n = Number(el.getAttribute('aria-valuemax')) + 1;
   const lands = String((((Number(value) + rows) % n) + n) % n);
-  await vi.waitFor(() => expect(el.getAttribute('aria-valuenow')).toBe(lands));
+  await expect.poll(() => el.getAttribute('aria-valuenow')).toBe(lands);
 }
 
 describe('the reminder picker layout', () => {
@@ -81,12 +83,12 @@ describe.skipIf(window.__EX_FORCE_DEVICE__ === 'desktop')('the reminder picker o
   it('picks the time by spinning the wheels, with no field to type into', async () => {
     const onConfirm = vi.fn((_when: Date, _people: string[]) => Promise.resolve());
     await render(<ReminderDialog open initialValue="2099-10-21T09:00" onConfirm={onConfirm} onOpenChange={vi.fn()} />);
-    await vi.waitFor(() => expect(document.querySelector('[data-testid="reminder-wheel"]')).not.toBeNull());
+    await expect.poll(() => document.querySelector('[data-testid="reminder-wheel"]')).not.toBeNull();
     expect(document.querySelector('input:not([type="hidden"])')).toBeNull();
     await spin('hour', -5); // 9 → 4
     await spin('minute', 22); // :00 → :22
     await userEvent.click(document.querySelector('[data-slot="dialog-mobile-action"]') as HTMLElement);
-    await vi.waitFor(() => expect(onConfirm).toHaveBeenCalled());
+    await expect.poll(() => onConfirm.mock.calls.length).toBeGreaterThan(0);
     const when = onConfirm.mock.calls[0][0];
     expect([when.getHours(), when.getMinutes()]).toEqual([4, 22]);
   });
@@ -139,7 +141,7 @@ describe('spinning the wheels', () => {
     await spin('minute', 3);
     expect(onChange).toHaveBeenLastCalledWith({ hour: 9, minute: 1 });
     // As far from either end as before: it can keep going round.
-    await vi.waitFor(() => expect(minutes.scrollTop).toBe(before - 57 * rowHeight()));
+    await expect.poll(() => minutes.scrollTop).toBe(before - 57 * rowHeight());
   });
 
   it('turns to a time set from outside, the short way', async () => {
@@ -150,7 +152,7 @@ describe('spinning the wheels', () => {
     minutes.addEventListener('scroll', () => tops.push(minutes.scrollTop));
     await rerender(<TimeWheel value={{ hour: 9, minute: 2 }} onChange={vi.fn()} testIdPrefix="reminder" />);
     // Four rows on, not 56 back — then, stopped, back to the middle copy.
-    await vi.waitFor(() => expect(minutes.scrollTop).toBe(before - 56 * rowHeight()));
+    await expect.poll(() => minutes.scrollTop).toBe(before - 56 * rowHeight());
     // (A smooth scroll may overshoot a few pixels before it snaps.)
     expect(Math.round((Math.max(...tops) - before) / rowHeight())).toBe(4);
   });

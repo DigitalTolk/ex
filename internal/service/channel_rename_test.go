@@ -106,7 +106,7 @@ func TestChannelService_RenameRefusals(t *testing.T) {
 	})
 	t.Run("an invalid description stops the rename too", func(t *testing.T) {
 		svc, channels, _, _ := renameEnv(t)
-		if _, err := svc.Update(ctx, "user-1", "ch-m", ptr("growth"), ptr(strings.Repeat("x", 1000))); err == nil {
+		if _, err := svc.Update(ctx, "user-1", "ch-m", ptr("growth"), ptr(strings.Repeat("x", MaxChannelDescriptionLen+1))); err == nil {
 			t.Fatal("expected a validation error")
 		}
 		if channels.channels["ch-m"].Name != "marketing" {

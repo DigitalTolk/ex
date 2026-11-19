@@ -178,6 +178,9 @@ func (handlerMessageStore) GetMessage(_ context.Context, parentID, msgID string)
 	return nil, store.ErrNotFound
 }
 func (handlerMessageStore) UpdateMessage(context.Context, *model.Message) error { return nil }
+func (handlerMessageStore) UpdateMessageIfVersion(context.Context, *model.Message, int) error {
+	return nil
+}
 func (handlerMessageStore) DeleteMessage(context.Context, string, string) error { return nil }
 func (handlerMessageStore) ListMessages(context.Context, string, string, int) ([]*model.Message, bool, error) {
 	return nil, false, nil
@@ -478,4 +481,9 @@ func TestDraftHandler_ErrorBranches(t *testing.T) {
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("failed delete status = %d, want 500; body=%s", rec.Code, rec.Body.String())
 	}
+}
+
+func (handlerConversationStore) SetMuted(context.Context, string, string, bool) error { return nil }
+func (handlerConversationStore) ConversationMuted(context.Context, string, string) (bool, error) {
+	return false, nil
 }

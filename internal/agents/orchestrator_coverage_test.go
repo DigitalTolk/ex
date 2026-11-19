@@ -174,11 +174,11 @@ func (m *orchCovMsgs) SendAsAgentRun(ctx context.Context, agentID, invokerID, pa
 	return m.fakeOrchMessages.SendAsAgentRun(ctx, agentID, invokerID, parentID, parentType, body, parentMessageID, runID)
 }
 
-func (m *orchCovMsgs) SetMachineReaction(ctx context.Context, actorID, parentID, parentType, msgID, state string) error {
+func (m *orchCovMsgs) SetMachineReaction(ctx context.Context, actorID, watchedFor, parentID, parentType, msgID, state string) error {
 	if m.failReaction != nil {
 		return m.failReaction
 	}
-	return m.fakeOrchMessages.SetMachineReaction(ctx, actorID, parentID, parentType, msgID, state)
+	return m.fakeOrchMessages.SetMachineReaction(ctx, actorID, watchedFor, parentID, parentType, msgID, state)
 }
 
 // CheckAccess is the membership rule behind run reads; the fakes allow

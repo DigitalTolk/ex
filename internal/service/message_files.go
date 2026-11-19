@@ -39,14 +39,20 @@ type FileQuery struct {
 }
 
 // FileEntry is one file shared in the parent: the attachment, ready to show,
-// and the latest message that shared it, so the client can link back to it.
+// or the SharePoint file a posted link shared, and the latest message that
+// shared it, so the client can link back to it.
 type FileEntry struct {
-	AttachmentID string            `json:"attachmentID"`
-	MessageID    string            `json:"messageID"`
-	AuthorID     string            `json:"authorID"`
-	CreatedAt    time.Time         `json:"createdAt"`
-	Attachment   *model.Attachment `json:"attachment"`
+	AttachmentID string                `json:"attachmentID"`
+	MessageID    string                `json:"messageID"`
+	AuthorID     string                `json:"authorID"`
+	CreatedAt    time.Time             `json:"createdAt"`
+	Attachment   *model.Attachment     `json:"attachment,omitempty"`
+	SharePoint   *model.SharePointFile `json:"sharePoint,omitempty"`
 }
+
+// sharePointFileKey prefixes a SharePoint file's id where the Files panel
+// keys rows by attachment ID.
+const sharePointFileKey = "sp:"
 
 // FilePage is one page of ListFiles. NextCursor is empty on the last page.
 type FilePage struct {
@@ -86,6 +92,18 @@ func (s *MessageService) ListFiles(ctx context.Context, userID, parentID, parent
 	rows, err := s.parentIndex.ListFileIndex(ctx, parentID)
 	if err != nil {
 		return nil, fmt.Errorf("message: list file index: %w", err)
+	}
+	if s.sharePoint != nil {
+		files, err := s.sharePoint.Files(ctx, parentID)
+		if err != nil {
+			return nil, fmt.Errorf("message: list sharepoint files: %w", err)
+		}
+		for _, f := range files {
+			rows = append(rows, FileIndexEntry{
+				AttachmentID: sharePointFileKey + f.File.ID, MessageID: f.MessageID, AuthorID: f.AuthorID,
+				CreatedAt: f.SharedAt, Filename: f.File.Name, SharePoint: f.File,
+			})
+		}
 	}
 	slices.SortFunc(rows, compareFileRows)
 	if term != "" {
@@ -204,21 +222,22 @@ func (s *MessageService) rememberFileNames(ctx context.Context, parentID string,
 // resolveFiles turns index rows into entries: rows whose message still carries
 // the file (the message is the truth; the index can trail an edit or a
 // delete), with the attachment ready for userID to read from that message.
+// SharePoint rows pass as they are: their records follow their messages.
 func (s *MessageService) resolveFiles(ctx context.Context, userID, parentID, parentType string, rows []FileIndexEntry) ([]*FileEntry, error) {
 	msgIDs := make([]string, 0, len(rows))
 	for _, r := range rows {
-		msgIDs = append(msgIDs, r.MessageID)
+		if r.SharePoint == nil {
+			msgIDs = append(msgIDs, r.MessageID)
+		}
 	}
 	slices.Sort(msgIDs)
 	msgs, err := s.messagesByID(ctx, parentID, slices.Compact(msgIDs))
 	if err != nil {
 		return nil, fmt.Errorf("message: read file messages: %w", err)
 	}
-	shared := make([]FileIndexEntry, 0, len(rows))
 	attIDs := make([]string, 0, len(rows))
 	for _, r := range rows {
-		if m := msgs[r.MessageID]; m != nil && slices.Contains(m.AttachmentIDs, r.AttachmentID) {
-			shared = append(shared, r)
+		if m := msgs[r.MessageID]; r.SharePoint == nil && m != nil && slices.Contains(m.AttachmentIDs, r.AttachmentID) {
 			attIDs = append(attIDs, r.AttachmentID)
 		}
 	}
@@ -226,20 +245,19 @@ func (s *MessageService) resolveFiles(ctx context.Context, userID, parentID, par
 	if err != nil {
 		return nil, fmt.Errorf("message: read shared files: %w", err)
 	}
-	out := make([]*FileEntry, 0, len(shared))
-	for _, r := range shared {
-		a := atts[r.AttachmentID]
-		if a == nil {
-			continue
+	out := make([]*FileEntry, 0, len(rows))
+	for _, r := range rows {
+		entry := &FileEntry{AttachmentID: r.AttachmentID, MessageID: r.MessageID, AuthorID: r.AuthorID, CreatedAt: r.CreatedAt, SharePoint: r.SharePoint}
+		if r.SharePoint == nil {
+			// Loaded only when its message still carries it.
+			a := atts[r.AttachmentID]
+			if a == nil {
+				continue
+			}
+			s.attachments.ReadyForReader(ctx, a, MediaGrant{UserID: userID, ParentID: parentID, ParentType: parentType, MessageID: r.MessageID})
+			entry.Attachment = a
 		}
-		s.attachments.ReadyForReader(ctx, a, MediaGrant{UserID: userID, ParentID: parentID, ParentType: parentType, MessageID: r.MessageID})
-		out = append(out, &FileEntry{
-			AttachmentID: r.AttachmentID,
-			MessageID:    r.MessageID,
-			AuthorID:     r.AuthorID,
-			CreatedAt:    r.CreatedAt,
-			Attachment:   a,
-		})
+		out = append(out, entry)
 	}
 	return out, nil
 }

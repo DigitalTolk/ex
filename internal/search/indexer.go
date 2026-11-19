@@ -258,13 +258,26 @@ func messageDoc(m *model.Message, parentType string) map[string]any {
 		"parentType":      parentType,
 		"parentMessageID": m.ParentMessageID,
 		"authorId":        m.AuthorID,
-		"body":            m.Body,
+		"body":            searchableBody(m),
 		"tags":            extractHashtags(m.Body),
 		"attachmentIds":   m.AttachmentIDs,
 		"hasFiles":        len(m.AttachmentIDs) > 0,
 		"reactions":       m.Reactions,
 		"createdAt":       m.CreatedAt,
 	}
+}
+
+// searchableBody is what search matches a message on: its text, plus the
+// text of its blocks that the text doesn't already carry (an app's text is
+// often a summary of its card; a card-only message's text is drawn from it).
+func searchableBody(m *model.Message) string {
+	body := m.Body
+	for _, t := range model.BlockTexts(m.Blocks, m.MessageAttachments) {
+		if t != "" && !strings.Contains(body, t) {
+			body += "\n" + t
+		}
+	}
+	return body
 }
 
 func extractHashtags(body string) []string {

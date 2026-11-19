@@ -231,7 +231,7 @@ describe('Header', () => {
     expect(screen.getByText('General discussion')).toBeInTheDocument();
   });
 
-  it('opens the inline description editor when an editor clicks the desktop description', () => {
+  it('opens the description in full when the desktop teaser is clicked, and the editor from there', async () => {
     render(
       <Header
         channel={makeChannel({ description: 'General discussion' })}
@@ -239,12 +239,16 @@ describe('Header', () => {
         onDescriptionSave={vi.fn()}
       />,
     );
-    // canEdit renders the description as a button; clicking it swaps in the
-    // inline textarea editor seeded with the current description.
+    // The header shows the description's first line; clicking it opens the
+    // whole of it, and an editor goes on to the editing dialog, seeded with
+    // the current text.
     fireEvent.click(screen.getByRole('button', { name: 'General discussion' }));
-    const editor = screen.getByPlaceholderText('Add a description...') as HTMLTextAreaElement;
-    expect(editor).toBeInTheDocument();
+    const view = await screen.findByTestId('channel-description-view');
+    expect(within(view).getByText('About ~general')).toBeInTheDocument();
+    fireEvent.click(within(view).getByTestId('channel-description-edit'));
+    const editor = (await screen.findByPlaceholderText('What is this channel for?')) as HTMLTextAreaElement;
     expect(editor.value).toBe('General discussion');
+    expect(screen.queryByTestId('channel-description-view')).not.toBeInTheDocument();
   });
 
   it('renders the subtitle inside the hover-card DM header', () => {
@@ -273,7 +277,7 @@ describe('Header', () => {
     expect(screen.queryByTestId('mobile-header-back')).not.toBeInTheDocument();
   });
 
-  it('cancels the mobile description editor when the dialog is dismissed', async () => {
+  it('cancels the description editor on a phone when the dialog is dismissed', async () => {
     setMobileMatch(true);
     const user = userEvent.setup();
     renderHeaderWithProviders(
@@ -282,12 +286,12 @@ describe('Header', () => {
     await user.click(screen.getByText('general').closest('button')!);
     const menu = within(document.getElementById('mobile-channel-menu')!);
     await user.click(menu.getByText('Edit description'));
-    const dialog = await screen.findByTestId('mobile-description-editor');
+    const dialog = await screen.findByTestId('channel-description-editor');
     // Dismissing the dialog via its Close button routes through
     // onOpenChange(false) → cancelDescriptionEdit, closing the editor.
     await user.click(within(dialog).getByRole('button', { name: 'Close' }));
     await waitFor(() =>
-      expect(screen.queryByTestId('mobile-description-editor')).not.toBeInTheDocument(),
+      expect(screen.queryByTestId('channel-description-editor')).not.toBeInTheDocument(),
     );
   });
 

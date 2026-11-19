@@ -11,15 +11,18 @@ import (
 
 func routerCSP(t *testing.T, sentry SentryFrontendConfig, uploadConnectSrc ...string) string {
 	t.Helper()
+	return routerCSPWith(t, &Deps{SentryFrontend: sentry, UploadConnectSrc: uploadConnectSrc})
+}
+
+func routerCSPWith(t *testing.T, d *Deps) string {
+	t.Helper()
 	var frontendFS fs.FS = fstest.MapFS{
 		"index.html": &fstest.MapFile{Data: []byte("<html><head></head>app</html>")},
 	}
-	router := NewRouter(&Deps{
-		Auth: &AuthHandler{}, User: &UserHandler{}, Channel: &ChannelHandler{},
-		Conversation: &ConversationHandler{}, WS: &WSHandler{},
-		JWT: setupJWTManager(), FrontendFS: frontendFS, AppVersion: "test", AllowOrigins: []string{"*"},
-		SentryFrontend: sentry, UploadConnectSrc: uploadConnectSrc,
-	})
+	d.Auth, d.User, d.Channel = &AuthHandler{}, &UserHandler{}, &ChannelHandler{}
+	d.Conversation, d.WS = &ConversationHandler{}, &WSHandler{}
+	d.JWT, d.FrontendFS, d.AppVersion, d.AllowOrigins = setupJWTManager(), frontendFS, "test", []string{"*"}
+	router := NewRouter(d)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 	if rec.Code != http.StatusOK {
@@ -65,5 +68,17 @@ func TestRouterCSPAllowsSentryReplayOnlyWhenSampled(t *testing.T) {
 				t.Errorf("script-src changed: %q", csp)
 			}
 		})
+	}
+}
+
+// With SharePoint sharing on, the page may frame its hosts: a shared file's
+// preview loads from there.
+func TestRouterCSPFramesSharePointHosts(t *testing.T) {
+	csp := routerCSPWith(t, &Deps{FrameSrc: []string{"https://*.sharepoint.com"}})
+	if !strings.Contains(csp, "frame-src https://*.sharepoint.com;") {
+		t.Errorf("frame-src lacks SharePoint: %q", csp)
+	}
+	if csp := routerCSP(t, SentryFrontendConfig{}); !strings.Contains(csp, "frame-src 'none';") {
+		t.Errorf("frame-src widened without SharePoint: %q", csp)
 	}
 }

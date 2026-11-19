@@ -1,12 +1,15 @@
-// Package msgraph is a minimal app-only (client-credentials) Microsoft Graph
-// client. It covers exactly the slices of Graph the app uses: directory
+// Package msgraph is a minimal Microsoft Graph client. The app-only
+// (client-credentials) Client covers exactly the slices of Graph the app uses
+// as itself: directory
 // profile reads (phone + manager, synced onto Ex profiles at SSO login) and
 // creating Teams online meetings on behalf of a user (the /mstmeetings slash
 // command). Because the workspace already authenticates through the same
 // Azure AD app registration, no per-user account linking or token storage is
 // needed — the app authenticates itself and acts via Graph application
 // permissions (User.Read.All; OnlineMeetings.ReadWrite.All via an application
-// access policy for meeting creation).
+// access policy for meeting creation). Delegated (delegated.go) acts as a
+// signed-in user instead, for what must never run with the app's rights:
+// sharing SharePoint files.
 package msgraph
 
 import (
@@ -46,6 +49,16 @@ const (
 // (user not in the tenant, or no manager assigned). Callers treat it as an
 // empty result, not a failure.
 var ErrNotFound = errors.New("msgraph: not found")
+
+// ErrSignInRequired marks a delegated call the user's own token can no longer
+// make: Graph refused it (401), or the token endpoint would not renew it
+// (consent revoked, password changed, refresh token expired). Only signing in
+// again fixes it.
+var ErrSignInRequired = errors.New("msgraph: sign-in required")
+
+// ErrForbidden marks a 403: the user may not do this, e.g. share an item they
+// can only read.
+var ErrForbidden = errors.New("msgraph: forbidden")
 
 // Config carries the Azure AD app registration the client authenticates as.
 // TokenURL/BaseURL/HTTPClient are injectable for tests (httptest servers).
@@ -463,8 +476,7 @@ const (
 )
 
 // doJSON authenticates, performs one Graph call, and decodes the JSON
-// response into dest. 404 maps to ErrNotFound; other non-2xx to a status
-// error (bodies are never echoed into errors — they can carry directory PII).
+// response into dest.
 func (c *Client) doJSON(ctx context.Context, method, path string, payload, dest any) error {
 	return c.do(ctx, method, path, nil, payload, dest)
 }
@@ -498,21 +510,10 @@ func (c *Client) once(ctx context.Context, method, path string, headers map[stri
 	if err != nil {
 		return 0, err
 	}
-
-	var body io.Reader
-	if payload != nil {
-		body = bytes.NewReader(mustJSON(json.Marshal(payload)))
-	}
-	req := mustRequest(http.NewRequestWithContext(ctx, method, c.baseURL+path, body))
-	req.Header.Set("Authorization", "Bearer "+tok)
-	req.Header.Set("Accept", "application/json")
-	if payload != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
+	req := newRequest(ctx, c.baseURL+path, tok, method, payload)
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-
 	res, err := c.client.Do(req)
 	if err != nil {
 		return 0, fmt.Errorf("msgraph: request: %w", err)
@@ -524,25 +525,84 @@ func (c *Client) once(ctx context.Context, method, path string, headers map[stri
 	return 0, decodeResponse(res, dest)
 }
 
+// StatusError is a non-2xx Graph response other than 404. It carries Graph's
+// machine-readable error code but never its message: bodies are not echoed
+// into errors, since they can carry directory PII.
+type StatusError struct {
+	Status int
+	Code   string
+}
+
+func (e *StatusError) Error() string {
+	if e.Code != "" {
+		return fmt.Sprintf("msgraph: request failed with status %d (code %s)", e.Status, e.Code)
+	}
+	return fmt.Sprintf("msgraph: request failed with status %d", e.Status)
+}
+
+// Is lets callers test a refusal by kind: a 401 is ErrSignInRequired (the
+// token was refused), a 403 ErrForbidden.
+func (e *StatusError) Is(target error) bool {
+	switch target {
+	case ErrSignInRequired:
+		return e.Status == http.StatusUnauthorized
+	case ErrForbidden:
+		return e.Status == http.StatusForbidden
+	}
+	return false
+}
+
+// call performs one authenticated Graph request and decodes the JSON
+// response into dest (nil for a response without a body). 404 maps to
+// ErrNotFound, any other non-2xx to a *StatusError.
+func call(ctx context.Context, client *http.Client, rawURL, token, method string, payload, dest any) error {
+	return respond(client, newRequest(ctx, rawURL, token, method, payload), dest)
+}
+
+// newRequest builds an authenticated Graph request with a JSON body when
+// payload is set.
+func newRequest(ctx context.Context, rawURL, token, method string, payload any) *http.Request {
+	var body io.Reader
+	if payload != nil {
+		body = bytes.NewReader(mustJSON(json.Marshal(payload)))
+	}
+	req := mustRequest(http.NewRequestWithContext(ctx, method, rawURL, body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/json")
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	return req
+}
+
+// respond sends req and reads Graph's answer into dest (nil to ignore it).
+func respond(client *http.Client, req *http.Request, dest any) error {
+	res, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("msgraph: request: %w", err)
+	}
+	defer drainClose(res.Body)
+	return decodeResponse(res, dest)
+}
+
 // decodeResponse maps a Graph response to dest or an error.
 func decodeResponse(res *http.Response, dest any) error {
 	if res.StatusCode == http.StatusNotFound {
 		return ErrNotFound
 	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		// Surface Graph's machine-readable error code (never the message —
-		// it can carry directory PII) so ops can tell a consent problem from
-		// a malformed request.
+		// Surface Graph's machine-readable error code so ops can tell a
+		// consent problem from a malformed request.
 		var ge struct {
 			Error struct {
 				Code string `json:"code"`
 			} `json:"error"`
 		}
 		_ = json.NewDecoder(io.LimitReader(res.Body, responseLimit)).Decode(&ge)
-		if ge.Error.Code != "" {
-			return fmt.Errorf("msgraph: request failed with status %d (code %s)", res.StatusCode, ge.Error.Code)
-		}
-		return fmt.Errorf("msgraph: request failed with status %d", res.StatusCode)
+		return &StatusError{Status: res.StatusCode, Code: ge.Error.Code}
+	}
+	if dest == nil {
+		return nil
 	}
 	if err := json.NewDecoder(io.LimitReader(res.Body, responseLimit)).Decode(dest); err != nil {
 		return fmt.Errorf("msgraph: parse response: %w", err)

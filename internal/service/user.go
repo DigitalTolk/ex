@@ -330,6 +330,49 @@ func (s *UserService) SetNotificationSettings(ctx context.Context, userID string
 	}
 	settings.Keywords = normalizeKeywords(settings.Keywords)
 
+	user, err := s.notificationUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	// Do Not Disturb has its own endpoint (SnoozeNotifications): saving the
+	// other settings keeps whatever it set.
+	settings.SnoozeUntil = nil
+	if user.NotificationSettings != nil {
+		settings.SnoozeUntil = user.NotificationSettings.SnoozeUntil
+	}
+	return s.saveNotificationSettings(ctx, user, settings)
+}
+
+// MaxSnooze is the longest Do Not Disturb: what "until I turn it back on"
+// asks for.
+const MaxSnooze = 10 * 365 * 24 * time.Hour
+
+// SnoozeNotifications turns Do Not Disturb on for d, or off when d is zero.
+// While it is on the notifier alerts the user for nothing (no popup, sound or
+// phone push), yet still lists everything in Activity and counts it on
+// badges, so nothing is lost: it is only held back.
+func (s *UserService) SnoozeNotifications(ctx context.Context, userID string, d time.Duration) (*model.User, error) {
+	if d < 0 || d > MaxSnooze {
+		return nil, apperr.Invalid("user: invalid snooze duration")
+	}
+	user, err := s.notificationUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	settings := model.DefaultNotificationSettings()
+	if user.NotificationSettings != nil {
+		settings = *user.NotificationSettings
+	}
+	settings.SnoozeUntil = nil
+	if d > 0 {
+		until := time.Now().Add(d)
+		settings.SnoozeUntil = &until
+	}
+	return s.saveNotificationSettings(ctx, user, settings)
+}
+
+// notificationUser loads the user whose notification settings are changing.
+func (s *UserService) notificationUser(ctx context.Context, userID string) (*model.User, error) {
 	user, err := s.users.GetUser(ctx, userID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -337,11 +380,18 @@ func (s *UserService) SetNotificationSettings(ctx context.Context, userID string
 		}
 		return nil, fmt.Errorf("user: get: %w", err)
 	}
+	return user, nil
+}
+
+// saveNotificationSettings writes user's notification settings, moves the
+// notifier's cached audience on, and tells the user's own clients.
+func (s *UserService) saveNotificationSettings(ctx context.Context, user *model.User, settings model.NotificationSettings) (*model.User, error) {
+	userID := user.ID
 	cp := settings
 	user.NotificationSettings = &cp
 	user.UpdatedAt = time.Now()
 
-	err = s.users.UpdateUser(ctx, user)
+	err := s.users.UpdateUser(ctx, user)
 	// Even a failed write may have committed: move the audience on either way.
 	if s.audience != nil {
 		s.audience.UserAudienceChanged(ctx, userID)

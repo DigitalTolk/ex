@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -394,6 +395,7 @@ func (s *ConversationService) enrichDMProfiles(ctx context.Context, userID strin
 				continue
 			}
 			row.ProfileResolved = true
+			row.Bot = u.IsBot
 			row.UserStatus = u.UserStatus
 			// GetBatch already resolved the avatar URL (media cache or
 			// presigned fallback) — no per-row cache reads needed here.
@@ -445,6 +447,7 @@ func (s *ConversationService) enrichDMProfile(ctx context.Context, userID string
 		return
 	}
 	c.ProfileResolved = true
+	c.Bot = u.IsBot
 	c.UserStatus = u.UserStatus
 	if u.AvatarURL != "" {
 		c.AvatarURL = u.AvatarURL
@@ -638,6 +641,46 @@ func (s *ConversationService) SetFavorite(ctx context.Context, userID, convID st
 		"favorite":       favorite,
 	})
 	return nil
+}
+
+// SetMuted mutes or unmutes the caller's direct chat with a bot or a webhook:
+// while muted, its messages alert them for nothing but a direct @-mention
+// (the notifier reads the flag). Refused for a chat with a person and for a
+// group, so nobody goes quiet on a colleague by accident.
+func (s *ConversationService) SetMuted(ctx context.Context, userID, convID string, muted bool) error {
+	conv, err := s.conversations.GetConversation(ctx, convID)
+	if err != nil {
+		return fmt.Errorf("conversation: get: %w", err)
+	}
+	if !slices.Contains(conv.ParticipantIDs, userID) {
+		return apperr.Forbidden("conversation: not a participant")
+	}
+	if !s.isBotChat(ctx, conv, userID) {
+		return apperr.Invalid("conversation: only a chat with a bot or a webhook can be muted")
+	}
+	if err := s.conversations.SetMuted(ctx, convID, userID, muted); err != nil {
+		return fmt.Errorf("conversation: set muted: %w", err)
+	}
+	// The user's other tabs and devices refetch the row.
+	events.Publish(ctx, s.publisher, pubsub.UserChannel(userID), events.EventUserChannelUpdated, map[string]any{
+		"conversationID":    convID,
+		"userID":            userID,
+		"notificationPrefs": true,
+	})
+	return nil
+}
+
+// isBotChat reports whether conv is userID's one-to-one chat with a bot.
+func (s *ConversationService) isBotChat(ctx context.Context, conv *model.Conversation, userID string) bool {
+	if conv.Type != model.ConversationTypeDM || len(conv.ParticipantIDs) != 2 {
+		return false
+	}
+	otherID := conv.ParticipantIDs[0]
+	if otherID == userID {
+		otherID = conv.ParticipantIDs[1]
+	}
+	other, err := s.users.GetUser(ctx, otherID)
+	return err == nil && other != nil && other.IsBot
 }
 
 // SetCategory places the user's DM/group in one of their sidebar categories

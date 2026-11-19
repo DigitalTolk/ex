@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { Message, NotificationSettings, UserStatus } from '@/types';
+import type { AppViewEvent, Message, NotificationSettings, UserStatus } from '@/types';
 import type * as wire from '@/types/generated';
 
 // Zod schemas for WebSocket payloads, one per event (the registry that maps
@@ -141,6 +141,18 @@ export const sessionRenewedSchema = z.object({ expiresIn: z.number() });
 
 export const serverVersionSchema = z.object({ version: id });
 
+// interaction.notice: an app's note to the person whose click it answered
+// (through a response_url), shown to them alone.
+export const interactionNoticeSchema = z.looseObject({ text: z.string().min(1) });
+// An app's form for this person: the server normalized the view, so only
+// what the dialog keys on is checked here.
+const appViewEventObject = z.looseObject({
+  view: z.looseObject({ id: z.string().min(1), title: z.looseObject({ text: z.string() }), blocks: z.array(z.unknown()), hash: z.string() }),
+  app: z.looseObject({ name: z.string() }),
+  clickID: z.string().optional(),
+});
+export const appViewEventSchema = appViewEventObject as unknown as z.ZodType<AppViewEvent>;
+
 // emoji.added carries the model.CustomEmoji.
 export const customEmojiSchema = z.looseObject({
   name: id,
@@ -161,6 +173,7 @@ const notificationSettingsSchema: z.ZodType<NotificationSettings> = z.looseObjec
   ignoreGroupMentions: z.boolean(),
   followAllThreads: z.boolean(),
   keywords: z.array(z.string()).optional(),
+  snoozeUntil: z.string().optional(),
 });
 // notification.settings_updated (a map carrying model.NotificationSettings).
 export const notificationSettingsUpdatedSchema = z.looseObject({ settings: notificationSettingsSchema });
@@ -213,6 +226,9 @@ export const notificationSchema = z.looseObject({
   // from the own-author echo suppression. Whether to notify at all is the
   // backend's level-gated decision, same as any other message.
   webhook: z.boolean().optional().catch(undefined),
+  // The recipient has Do Not Disturb on: taken in (badges, Activity) but not
+  // surfaced. The server's decision, like every other part of whether to alert.
+  silent: z.boolean().optional().catch(undefined),
   // Authoritative alerted-unread badge for the parent AFTER this alert
   // (top-level messages only). Clients SET the sidebar row to this value —
   // never increment locally — so duplicate/replayed events can't drift it.
@@ -252,6 +268,16 @@ export const activityChangedSchema = z.looseObject({
   updated: z.array(z.string()).optional(),
   parentID: z.string().optional(),
   threadRootID: z.string().optional(),
+});
+
+// --- SharePoint links (model.SharePointChangedEvent) -------------------------
+
+// sharepoint.changed: links in a parent changed state; an empty list means
+// every link there.
+export const sharePointChangedSchema = z.object({
+  parentID: id,
+  parentType: z.enum(['channel', 'conversation']),
+  urls: z.array(z.string()),
 });
 
 // --- agent runs (model.Run / model.Approval) --------------------------------
@@ -360,4 +386,5 @@ export type WSWireChecks = [
   Expect<FitsWire<typeof runApprovalSchema, RunApprovalWire>>,
   Expect<FitsWire<typeof conversationConvertedSchema, { conversationID: string; channelID: wire.Channel['id']; slug: wire.Channel['slug'] }>>,
   Expect<FitsWire<typeof notificationSettingsUpdatedSchema, { settings: wire.NotificationSettings }>>,
+  Expect<FitsWire<typeof sharePointChangedSchema, wire.SharePointChangedEvent>>,
 ];

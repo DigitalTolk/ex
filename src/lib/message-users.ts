@@ -18,7 +18,7 @@ export function isOwnMessage(
 
 // collectMessageUserIDs walks a sequence of messages and returns the set of
 // every user ID referenced by them: authors, recent thread-reply authors,
-// and reactors. Used by ChannelView and ConversationView to size a single
+// reactors, and whoever acknowledged or voted on an app's buttons. Used by ChannelView and ConversationView to size a single
 // /users/batch fetch that covers everything the page can render — thread
 // action bars and reaction tooltips both read display names through it.
 export function collectMessageUserIDs(messages: Iterable<Message>): string[] {
@@ -31,6 +31,7 @@ export function collectMessageUserIDs(messages: Iterable<Message>): string[] {
         users.forEach((id) => ids.add(id));
       }
     }
+    msg.actionTallies?.forEach((tally) => tally.userIDs.forEach((id) => ids.add(id)));
   }
   return Array.from(ids);
 }

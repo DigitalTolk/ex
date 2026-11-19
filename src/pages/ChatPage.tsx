@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { showToast } from '@/lib/toast';
 import { Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
@@ -19,6 +20,8 @@ import {
   refetchActivity,
 } from '@/hooks/useActivity';
 import { applyEmojiAddedEvent, applyEmojiRemovedEvent, invalidateEmojis } from '@/hooks/useEmoji';
+import { applySharePointChangedEvent } from '@/hooks/useSharePoint';
+import { invalidateParentFiles } from '@/lib/files-cache';
 import { EventType } from '@/lib/event-types';
 import type { WSEventHandlers } from '@/lib/ws-events';
 import { sendWS } from '@/lib/ws-sender';
@@ -46,6 +49,8 @@ import {
 } from '@/stores/agent-runs';
 import { onRunApproval as onAgentRunApproval } from '@/stores/agent-approvals';
 import { RunActivityDrawer } from '@/components/chat/RunActivityDrawer';
+import { AppViewHost } from '@/components/apps/AppViewHost';
+import { openAppView, updateAppView } from '@/stores/app-view';
 import { DesktopRunnerAutostart } from '@/components/runners/DesktopRunnerAutostart';
 import { hasDesktopRunner } from '@/lib/desktop-runner';
 import { markParentRead } from '@/lib/mark-read';
@@ -218,6 +223,8 @@ export default function ChatPage() {
       // up to 6s for the expiry to tick. Pass parentMessageID so a
       // thread reply clears the thread bucket (not the main one).
       clearTyping(parentID, authorID, parentMessageID ?? '');
+      // An upload lists in the Files panel at once.
+      if (msg.attachmentIDs?.length) invalidateParentFiles(queryClient, parentID, msg.parentType);
       const userChannels = queryClient.getQueryData<{ channelID: string }[]>(queryKeys.userChannels()) ?? [];
       const userConversations = queryClient.getQueryData<{ conversationID: string }[]>(queryKeys.userConversations()) ?? [];
       const parentKind = resolveParentKind(
@@ -351,6 +358,8 @@ export default function ChatPage() {
       markMessageDeletedInCache(queryClient, parentID, id, parentMessageID, msg);
       invalidateThreadBothScopes(queryClient, parentID, parentMessageID || id, msg.parentType);
       invalidateUnfurlsForMessage(queryClient, id);
+      // Its files leave the Files panel.
+      invalidateParentFiles(queryClient, parentID, msg.parentType);
     },
     [EventType.MembersChanged]: ({ channelID }) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.channelMembers(channelID) });
@@ -437,6 +446,13 @@ export default function ChatPage() {
     // A reminder was set or cancelled (here or on another device), fired, or
     // went with its message or channel — refetch the pending list.
     [EventType.RemindersChanged]: () => applyRemindersChangedEvent(queryClient),
+    // An app answered this person's click with a note for them alone.
+    [EventType.InteractionNotice]: (n) => showToast(n.text, 'success'),
+    [EventType.ViewOpened]: openAppView,
+    [EventType.ViewUpdated]: updateAppView,
+    // A posted SharePoint link was shared, failed, or a member was given or
+    // denied access — its card and the Files panel refetch.
+    [EventType.SharePointChanged]: (change) => applySharePointChangedEvent(queryClient, change),
     [EventType.ScheduledMessagesChanged]: () => {
       // Scheduled, edited, sent or failed on another tab/device (or by the
       // server at send time) — refetch the Scheduled list.
@@ -706,6 +722,8 @@ export default function ChatPage() {
       {/* Run Activity Drawer: mounted once at the chat root; opened from the
           agent activity chip via the run-drawer store. */}
       <RunActivityDrawer />
+      {/* An app's form, opened in answer to a click in this tab. */}
+      <AppViewHost />
       {hasDesktopRunner() && <DesktopRunnerAutostart />}
     </AppLayout>
   );

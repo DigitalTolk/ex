@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type FocusEvent, type PointerEvent, type ReactNode } from 'react';
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type FocusEvent, type PointerEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { SmilePlus, MoreHorizontal, AlarmClock, Eye, Pin, Zap, type LucideIcon, Users } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -29,8 +29,8 @@ import { UserHoverCard } from '@/components/UserHoverCard';
 import { UserGroupMentionCard } from '@/components/UserGroupMentionCard';
 import { UserAvatar } from '@/components/UserAvatar';
 import { useEditMessage, useToggleReaction } from '@/hooks/useMessages';
-import { renderMarkdown } from '@/lib/markdown';
-import { isEmojiOnlyMessage } from '@/lib/emoji-shortcodes';
+import { renderMarkdown, type RenderOpts } from '@/lib/markdown';
+import { isEmojiOnlyMessage, isKnownEmoji } from '@/lib/emoji-shortcodes';
 import { recordEmojiUse } from '@/lib/emoji-frequency';
 import { padQuickReactions } from '@/lib/quick-reactions';
 import { triggerReactionHaptic } from '@/lib/haptics';
@@ -42,7 +42,12 @@ import { EmojiGlyph } from '@/components/EmojiGlyph';
 import { MessageAttachments } from '@/components/chat/MessageAttachments';
 import { ThreadActionBar } from '@/components/chat/ThreadActionBar';
 import { UnfurlCard } from '@/components/chat/UnfurlCard';
+import { SharePointAnchor, SharePointCard } from '@/components/chat/SharePointCard';
+import { useSharePointHosts } from '@/hooks/useSharePoint';
+import { isSharePointURL, sharePointURLs } from '@/lib/sharepoint';
 import { MessageRichAttachments } from '@/components/chat/MessageRichAttachments';
+import { BlockList, MessageBlockScope } from '@/components/chat/blocks/MessageBlocks';
+import { hasBlocks } from '@/lib/block-text';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { extractURLs, formatLongDateTime, formatRelative } from '@/lib/format';
 import { registerEditMessageHandler } from '@/lib/window-events';
@@ -294,6 +299,7 @@ function ReactionChip({
   onToggle,
   disabled,
   tooltipContent,
+  interactive,
   children,
 }: {
   reactedByMe: boolean;
@@ -306,6 +312,9 @@ function ReactionChip({
   // doesn't toggle.
   disabled?: boolean;
   tooltipContent: ReactNode;
+  // The tooltip holds something to hover (a watcher agent's name), so the
+  // pointer may move into it. Tooltips are otherwise click-through.
+  interactive?: boolean;
   children: ReactNode;
 }) {
   const longPress = useLongPress({
@@ -354,7 +363,7 @@ function ReactionChip({
       </TooltipTrigger>
       <TooltipContent
         data-testid="reaction-tooltip"
-        className="flex w-[16rem] flex-col items-center gap-1.5 px-4 py-3 text-center"
+        className={`flex w-[16rem] flex-col items-center gap-1.5 px-4 py-3 text-center${interactive ? ' pointer-events-auto' : ''}`}
       >
         {tooltipContent}
       </TooltipContent>
@@ -639,6 +648,27 @@ function MessageItemImpl({
   // The unfurl scan walks the whole body; memoize so it only runs when the
   // body changes, not on unrelated re-renders.
   const bodyURLs = useMemo(() => extractURLs(message.body), [message.body]);
+  // SharePoint links show as their files (one card each) instead of a link
+  // preview, and open for editing — only once the message has a parent to
+  // ask about them in.
+  const sharePointHosts = useSharePointHosts();
+  const hasParent = !!(channelId || conversationId);
+  const sharePointLinks = useMemo(
+    () => (hasParent ? sharePointURLs(message.body, sharePointHosts) : []),
+    [hasParent, message.body, sharePointHosts],
+  );
+  const sharePointParent = useMemo(() => ({ channelId, conversationId }), [channelId, conversationId]);
+  // The lightbox header's "where": its files and SharePoint cards.
+  const postedIn = channelSlug ? `~${channelSlug}` : conversationId ? 'Direct message' : undefined;
+  const renderLink = useCallback(
+    (href: string, children: ReactNode) =>
+      hasParent && isSharePointURL(href, sharePointHosts) ? (
+        <SharePointAnchor href={href} parent={{ channelId, conversationId }} className="text-link transition-colors hover:text-link/80">
+          {children}
+        </SharePointAnchor>
+      ) : undefined,
+    [hasParent, sharePointHosts, channelId, conversationId],
+  );
 
   // Recomputed only when the reactions map changes, not on every re-render
   // (presence/hover ticks would otherwise re-filter on each paint).
@@ -659,14 +689,67 @@ function MessageItemImpl({
   }
 
   const REACTOR_LIST_MAX = 20;
+  function reactorName(id: string): string {
+    if (id === currentUserId) return 'You';
+    return userMap?.get(id)?.displayName ?? 'Unknown';
+  }
   function formatReactors(userIDs: string[]): string {
     const head = userIDs.slice(0, REACTOR_LIST_MAX);
-    const names = head.map((id) => {
-      if (id === currentUserId) return 'You';
-      return userMap?.get(id)?.displayName ?? 'Unknown';
-    });
+    const names = head.map(reactorName);
     const extra = userIDs.length - head.length;
     return extra > 0 ? `${names.join(', ')} and ${extra} more` : names.join(', ');
+  }
+  // An agent a watcher brought here reacts like one somebody mentioned, so
+  // the reaction looks unexplained unless we say whose watcher it was.
+  function watchedReactors(userIDs: string[]): Array<{ id: string; name: string; by: string }> {
+    return userIDs.slice(0, REACTOR_LIST_MAX).flatMap((id) => {
+      const watcherID = message.agentWatchers?.[id];
+      if (!watcherID) return [];
+      const by = watcherID === currentUserId ? 'you' : (userMap?.get(watcherID)?.displayName ?? 'someone');
+      return [{ id, name: reactorName(id), by }];
+    });
+  }
+  // The tooltip's names. An agent a watcher brought is highlighted, and
+  // hovering it says whose watcher it is.
+  function renderReactorNames(userIDs: string[]): ReactNode {
+    const head = userIDs.slice(0, REACTOR_LIST_MAX);
+    const extra = userIDs.length - head.length;
+    const watcherOf = new Map(watchedReactors(userIDs).map((w) => [w.id, w.by]));
+    return (
+      <span className="font-medium">
+        {head.map((id, i) => {
+          const by = watcherOf.get(id);
+          return (
+            <Fragment key={id}>
+              {i > 0 && ', '}
+              {by ? (
+                <span
+                  data-testid="reaction-watcher-agent"
+                  className="group/agent relative cursor-help text-link underline decoration-dotted underline-offset-2"
+                >
+                  {reactorName(id)}
+                  <span
+                    data-testid="reaction-watcher-owner"
+                    className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 hidden -translate-x-1/2 whitespace-nowrap rounded-md border bg-popover px-2 py-1 font-normal text-popover-foreground shadow-md group-hover/agent:block"
+                  >
+                    {by === 'you' ? 'Your' : by === 'someone' ? 'Someone’s' : `${by}’s`} watcher
+                  </span>
+                </span>
+              ) : (
+                reactorName(id)
+              )}
+            </Fragment>
+          );
+        })}
+        {extra > 0 && ` and ${extra} more`}
+      </span>
+    );
+  }
+  // The touch toast is one line of text, so the watcher note rides inline.
+  function reactorsToastText(userIDs: string[], emoji: string): string {
+    const base = `${formatReactors(userIDs)} reacted with ${renderReactionLabel(emoji)}`;
+    const watched = watchedReactors(userIDs).map((w) => `${w.name} for ${w.by}`);
+    return watched.length > 0 ? `${base} · ${watched.join(', ')}` : base;
   }
 
   const mobileActionsOverlay = !isEditing && !message.deleted && (mobileActionsOpen || mobileReactionPickerOpen) ? (
@@ -867,7 +950,8 @@ function MessageItemImpl({
           // the name line's.
           triggerClassName="inline-flex w-9 shrink-0 cursor-pointer items-center justify-center"
         >
-          {message.webhookIconEmoji ? (
+          {/* An icon ex can't draw (e.g. a Slack-only name) falls back to initials. */}
+          {message.webhookIconEmoji && isKnownEmoji(message.webhookIconEmoji, emojiMap) ? (
             <div
               className="flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-full bg-muted"
               aria-label={`:${message.webhookIconEmoji}:`}
@@ -1064,85 +1148,125 @@ function MessageItemImpl({
                 Sending
               </span>
             )}
-            {/* Sending: the text is greyed until the server confirms it. */}
-            <div
-              className={`text-sm prose-message transition-colors duration-150 ${
-                pendingState === 'sending' ? 'text-muted-foreground' : ''
-              }`}
-            >
-              <MessageBody
-                message={message}
-                emojiMap={emojiMap}
-                pickTokens={pickTokens}
-                currentUserId={currentUserId}
-                onContentHeightChange={onContentHeightChange}
-                openTag={openTag}
-                // Grouped rows have no header (that's where the header rows
-                // show "(edited)"), so the marker rides the end of the text's
-                // last line instead, Slack-style.
-                trailing={
-                  !firstInGroup && (message.editedAt || reminder) ? (
-                    <>
-                      {message.editedAt && (
-                        <span data-testid="grouped-edited-marker" className="ml-1 text-xs text-muted-foreground">
-                          (edited)
-                        </span>
-                      )}
-                      {reminder && (
-                        <span className="ml-1 inline-flex align-middle">
-                          <ReminderMark reminder={reminder} />
-                        </span>
-                      )}
-                    </>
-                  ) : undefined
-                }
-              />
-            </div>
             {(() => {
-              if (message.noUnfurl) return null;
-              // First URL in the body (skipping code) gets a preview
-              // card. Capped at one to keep messages compact.
-              const urls = bodyURLs;
-              return urls[0] ? (
-                <UnfurlCard
-                  url={urls[0]}
-                  messageId={message.id}
-                  channelId={channelId}
-                  conversationId={conversationId}
-                  isAuthor={isOwn}
-                  onContentHeightChange={onContentHeightChange}
-                />
-              ) : null;
+              // Drawn from `current`: a message with blocks shows a click's
+              // answer before its broadcast arrives (MessageBlockScope).
+              const content = (current: Message) => (
+                <>
+                  {current.blocks?.length ? (
+                    // An app's layout: its text is the fallback for notifications,
+                    // search and clients without blocks, so it isn't shown too.
+                    <BlockList blocks={current.blocks} className="mt-0.5" />
+                  ) : (
+                    <>
+                      {/* Sending: the text is greyed until the server confirms it. */}
+                      <div
+                        className={`text-sm prose-message transition-colors duration-150 ${
+                          pendingState === 'sending' ? 'text-muted-foreground' : ''
+                        }`}
+                      >
+                        <MessageBody
+                          message={message}
+                          emojiMap={emojiMap}
+                          pickTokens={pickTokens}
+                          currentUserId={currentUserId}
+                          onContentHeightChange={onContentHeightChange}
+                          openTag={openTag}
+                          renderLink={renderLink}
+                          // Grouped rows have no header (that's where the header rows
+                          // show "(edited)"), so the marker rides the end of the text's
+                          // last line instead, Slack-style.
+                          trailing={
+                            !firstInGroup && (message.editedAt || reminder) ? (
+                              <>
+                                {message.editedAt && (
+                                  <span data-testid="grouped-edited-marker" className="ml-1 text-xs text-muted-foreground">
+                                    (edited)
+                                  </span>
+                                )}
+                                {reminder && (
+                                  <span className="ml-1 inline-flex align-middle">
+                                    <ReminderMark reminder={reminder} />
+                                  </span>
+                                )}
+                              </>
+                            ) : undefined
+                          }
+                        />
+                      </div>
+                    </>
+                  )}
+                  {!current.blocks?.length &&
+                    sharePointLinks.map((url) => (
+                      <SharePointCard
+                        key={url}
+                        url={url}
+                        parent={sharePointParent}
+                        currentUserId={currentUserId}
+                        nameOf={(id) => userMap?.get(id)?.displayName ?? 'Unknown'}
+                        authorName={displayAuthorName}
+                        authorAvatarURL={displayAuthorAvatarURL}
+                        postedIn={postedIn}
+                        postedAt={message.createdAt}
+                        onContentHeightChange={onContentHeightChange}
+                      />
+                    ))}
+                  {(() => {
+                    if (message.noUnfurl || current.blocks?.length) return null;
+                    // First URL in the body (skipping code) that isn't a SharePoint
+                    // file gets a preview card. Capped at one to keep messages
+                    // compact.
+                    const url = bodyURLs.find((u) => !isSharePointURL(u, sharePointHosts));
+                    return url ? (
+                      <UnfurlCard
+                        url={url}
+                        messageId={message.id}
+                        channelId={channelId}
+                        conversationId={conversationId}
+                        isAuthor={isOwn}
+                        onContentHeightChange={onContentHeightChange}
+                      />
+                    ) : null;
+                  })()}
+                  {message.attachmentIDs && message.attachmentIDs.length > 0 && (
+      	              <MessageAttachments
+      	                ids={message.attachmentIDs}
+      	                parentID={channelId ?? conversationId}
+      	                parentType={channelId ? 'channel' : conversationId ? 'conversation' : undefined}
+      	                messageID={message.id}
+      	                authorName={displayAuthorName}
+                      authorAvatarURL={displayAuthorAvatarURL}
+                      postedIn={postedIn}
+                      postedAt={message.createdAt}
+                      onContentHeightChange={onContentHeightChange}
+                    />
+                  )}
+                  {hasDesignMarkers(message.body) && (
+                    <DesignMarkers
+                      body={message.body}
+                      attachmentIDs={message.attachmentIDs}
+                      channelId={channelId}
+                      conversationId={conversationId}
+                      messageID={message.id}
+                    />
+                  )}
+                  <MessageRichAttachments attachments={current.messageAttachments} onContentHeightChange={onContentHeightChange} />
+                </>
+              );
+              if (!hasBlocks(message)) return content(message);
+              return (
+                <MessageBlockScope
+                  message={message}
+                  parentType={channelId ? 'channel' : conversationId ? 'conversation' : undefined}
+                  parentID={channelId ?? conversationId}
+                  interactive={!readOnly && !pendingState}
+                  currentUserId={currentUserId}
+                  userMap={userMap}
+                >
+                  {content}
+                </MessageBlockScope>
+              );
             })()}
-            {message.attachmentIDs && message.attachmentIDs.length > 0 && (
-	              <MessageAttachments
-	                ids={message.attachmentIDs}
-	                parentID={channelId ?? conversationId}
-	                parentType={channelId ? 'channel' : conversationId ? 'conversation' : undefined}
-	                messageID={message.id}
-	                authorName={displayAuthorName}
-                authorAvatarURL={displayAuthorAvatarURL}
-                postedIn={
-                  channelSlug
-                    ? `~${channelSlug}`
-                    : conversationId
-                      ? 'Direct message'
-                      : undefined
-                }
-                postedAt={message.createdAt}
-                onContentHeightChange={onContentHeightChange}
-              />
-            )}
-            {hasDesignMarkers(message.body) && (
-              <DesignMarkers
-                body={message.body}
-                attachmentIDs={message.attachmentIDs}
-                channelId={channelId}
-                conversationId={conversationId}
-                messageID={message.id}
-              />
-            )}
-            <MessageRichAttachments attachments={message.messageAttachments} onContentHeightChange={onContentHeightChange} />
             {reactionEntries.length > 0 && (
               <div className="mt-1 flex flex-wrap items-center gap-1" role="list" aria-label="Reactions">
                 {reactionEntries.map(([emoji, users]) => {
@@ -1152,15 +1276,16 @@ function MessageItemImpl({
                       key={emoji}
                       reactedByMe={reactedByMe}
                       ariaLabel={`${renderReactionLabel(emoji)} ${users.length}, ${reactedByMe ? 'reacted' : 'react'}`}
-                      reactorsText={`${formatReactors(users)} reacted with ${renderReactionLabel(emoji)}`}
+                      reactorsText={reactorsToastText(users, emoji)}
                       isTouch={isTouch}
                       disabled={!canModify}
                       onToggle={() => handleReact(emoji)}
+                      interactive={!!message.agentWatchers && users.some((id) => message.agentWatchers?.[id])}
                       tooltipContent={
                         <>
                           <EmojiGlyph emoji={emoji} customMap={emojiMap} size="xl" />
                           <span className="text-xs leading-snug">
-                            <span className="font-medium">{formatReactors(users)}</span>
+                            {renderReactorNames(users)}
                             <span className="text-muted-foreground"> reacted with </span>
                             <span className="font-medium">{renderReactionLabel(emoji)}</span>
                           </span>
@@ -1444,6 +1569,7 @@ interface MessageBodyProps {
   openTag: (tag: string) => void;
   // Rendered at the end of the body's last line (see RenderOpts.trailing).
   trailing?: ReactNode;
+  renderLink?: RenderOpts['renderLink'];
 }
 
 const MessageBody = memo(function MessageBody({
@@ -1454,6 +1580,7 @@ const MessageBody = memo(function MessageBody({
   onContentHeightChange,
   openTag,
   trailing,
+  renderLink,
 }: MessageBodyProps) {
   // Marker syntax is plain text anyone can type, so a card renders only for
   // a post an agent run made (agentRunID is stamped by the server, never
@@ -1482,6 +1609,7 @@ const MessageBody = memo(function MessageBody({
         onMediaLoad: onContentHeightChange,
         onTagClick: openTag,
         trailing,
+        renderLink,
         renderUserMention: (userId, displayName, _isSelf, pill) => (
           <UserHoverCard
             key={`mention-${userId}-${message.id}`}

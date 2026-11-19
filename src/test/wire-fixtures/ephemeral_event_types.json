@@ -4,6 +4,7 @@
   "auth.force_logout",
   "broker.subscribe",
   "broker.unsubscribe",
+  "interaction.notice",
   "notification.new",
   "ping",
   "presence.changed",
@@ -15,5 +16,7 @@
   "server.version",
   "session.renewed",
   "thread.updated",
-  "typing"
+  "typing",
+  "view.opened",
+  "view.updated"
 ]

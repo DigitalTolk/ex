@@ -133,6 +133,22 @@ const (
 	// message or with their access to its channel — so the Scheduled
 	// reminders list refetches. Sent on the user's own topic; no payload.
 	EventRemindersChanged = "reminders.changed"
+	// EventInteractionNotice shows one person a note an app left in answer
+	// to their click ("A1 isn't assigned to you"), sent through a
+	// response_url. Sent on the clicker's own topic; ephemeral: a stale
+	// note replayed after a reconnect would only confuse.
+	EventInteractionNotice = "interaction.notice"
+	// EventViewOpened / EventViewUpdated open an app's form for one person,
+	// or change it while open; the event names the tab that clicked, which
+	// alone shows it. Sent on that person's topic; ephemeral: a form belongs
+	// to the moment of the click.
+	EventViewOpened  = "view.opened"
+	EventViewUpdated = "view.updated"
+	// EventSharePointChanged tells a channel's or conversation's members that
+	// SharePoint links posted there changed state (shared, failed, a member
+	// given or denied access), so their link cards and Files panel refetch.
+	// data is model.SharePointChangedEvent. Sent to the parent's topic.
+	EventSharePointChanged = "sharepoint.changed"
 )
 
 // ephemeralTypes are events that exist only for the live socket — they
@@ -159,6 +175,11 @@ var ephemeralTypes = map[string]struct{}{
 	// lifetime that no longer applies.
 	EventSessionRenewed:  {},
 	EventNotificationNew: {},
+	// An app's note to a clicker belongs to the moment of the click.
+	EventInteractionNotice: {},
+	// A form opens in answer to a click, then and there.
+	EventViewOpened:  {},
+	EventViewUpdated: {},
 	// activity.new / activity.read are "your activity changed" deltas; the
 	// durable Redis activity store is the source of truth and the client
 	// refetches the list on reconnect, so replaying them would be pure noise.

@@ -55,8 +55,18 @@ function agents(): AgentView[] {
 
 let overrideCounts: Record<string, number | Error>;
 
+// The models the workspace offers (Admin › Agents › Models).
+const agentModels = [
+  { harness: 'claude', id: 'claude-opus-5', label: 'Claude Opus 5' },
+  { harness: 'bedrock', id: 'eu.anthropic.claude-opus-5', label: 'Claude Opus 5 (EU)' },
+  { harness: 'bedrock', id: 'eu.anthropic.claude-sonnet-5', label: 'Claude Sonnet 5 (EU)' },
+];
+
 function setup(list: AgentView[] | Error = agents()) {
   mockApiFetch.mockImplementation((path, init) => {
+    if (path === '/api/v1/admin/settings') {
+      return Promise.resolve({ maxUploadBytes: 0, allowedExtensions: [], agentModels });
+    }
     if (path === '/api/v1/agents') {
       // Fresh objects each fetch: returning the same references would let
       // react-query's structural sharing conclude nothing changed after a
@@ -143,10 +153,19 @@ describe('AgentsAdminPanel', () => {
     fireEvent.change(persona, { target: { value: 'Be brief.' } });
     expect(save).toBeEnabled();
 
+    // The model on the list for Claude Code is picked.
+    expect(screen.getByLabelText('Model')).toHaveValue('claude-opus-5');
     fireEvent.change(screen.getByLabelText('Backend'), { target: { value: 'bedrock' } });
-    // Switching to bedrock explains the id is unvalidated.
-    expect(screen.getByText(/Bedrock ids are not validated here/)).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText('Model'), { target: { value: ' eu.anthropic.x ' } });
+    // Bedrock runs on the server, on Claude in the EU: its own list, starting
+    // on the default.
+    expect(screen.getByText(/on Claude in the EU/)).toBeInTheDocument();
+    expect(screen.getByLabelText('Model')).toHaveValue('');
+    await waitFor(() =>
+      expect(
+        Array.from((screen.getByLabelText('Model') as HTMLSelectElement).options).map((o) => o.textContent),
+      ).toEqual(['Default (Claude Opus 5, EU)', 'Claude Opus 5 (EU)', 'Claude Sonnet 5 (EU)']),
+    );
+    fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'eu.anthropic.claude-sonnet-5' } });
 
     fireEvent.click(save);
     await waitFor(() => {
@@ -156,7 +175,7 @@ describe('AgentsAdminPanel', () => {
       // model and prompt are trimmed; bedrock forces server execution.
       expect(JSON.parse(call![1]!.body!)).toEqual({
         harness: 'bedrock',
-        model: 'eu.anthropic.x',
+        model: 'eu.anthropic.claude-sonnet-5',
         executionMode: 'server',
         persona: 'Be brief.',
       });

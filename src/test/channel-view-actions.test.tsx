@@ -58,7 +58,8 @@ const mockMembersMember: ChannelMembership[] = [
 
 let currentMembers = mockMembersOwner;
 
-vi.mock('@/context/AuthContext', () => ({
+vi.mock('@/context/AuthContext', () => {
+  const auth = {
   useAuth: () => ({
     user: { id: 'u-1', displayName: 'Alice', email: 'a@a.com', systemRole: 'member', status: 'active' },
     isAuthenticated: true,
@@ -67,7 +68,9 @@ vi.mock('@/context/AuthContext', () => ({
     logout: vi.fn(),
     setAuth: vi.fn(),
   }),
-}));
+};
+  return { ...auth, useOptionalAuth: auth.useAuth };
+});
 
 // ONE stable object: ChannelView's mount effect lists setActiveChannel /
 // setActiveParent in its deps, so a mock that mints fresh vi.fn()s per render

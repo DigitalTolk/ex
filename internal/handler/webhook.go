@@ -63,6 +63,51 @@ func (h *WebhookHandler) Create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, webhookResponse{IncomingWebhook: wh, URL: h.svc.URL(wh)})
 }
 
+// Preview answers with the message a payload would post (see
+// IncomingWebhookService.PreviewMessage), for the webhooks panel's live
+// preview. The body is a webhook payload.
+func (h *WebhookHandler) Preview(w http.ResponseWriter, r *http.Request) {
+	payload, err := readWebhookPayload(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_payload", err.Error())
+		return
+	}
+	msg, err := h.svc.PreviewMessage(r.Context(), webhookActor(r), payload)
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, msg)
+}
+
+// SaveTemplate adds or replaces a rich webhook's template.
+// Body: {"payload": {…a webhook payload with {{placeholders}}…}}.
+func (h *WebhookHandler) SaveTemplate(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Payload json.RawMessage `json:"payload"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
+		return
+	}
+	wh, err := h.svc.SaveTemplate(r.Context(), webhookActor(r), pathParam(r, "id"), pathParam(r, "key"), body.Payload)
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, webhookResponse{IncomingWebhook: wh, URL: h.svc.URL(wh)})
+}
+
+// DeleteTemplate removes a rich webhook's template.
+func (h *WebhookHandler) DeleteTemplate(w http.ResponseWriter, r *http.Request) {
+	wh, err := h.svc.DeleteTemplate(r.Context(), webhookActor(r), pathParam(r, "id"), pathParam(r, "key"))
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, webhookResponse{IncomingWebhook: wh, URL: h.svc.URL(wh)})
+}
+
 func (h *WebhookHandler) Update(w http.ResponseWriter, r *http.Request) {
 	var body model.IncomingWebhook
 	if err := readJSON(r, &body); err != nil {
@@ -85,14 +130,30 @@ func (h *WebhookHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// Execute is a classic webhook's URL, /hooks/{id}. It answers exactly as it
+// always has; a rich webhook posts to ExecuteRich instead.
 func (h *WebhookHandler) Execute(w http.ResponseWriter, r *http.Request) {
+	h.execute(w, r, false)
+}
+
+// ExecuteRich is a rich webhook's URL, /hooks/v2/{id}.
+func (h *WebhookHandler) ExecuteRich(w http.ResponseWriter, r *http.Request) {
+	h.execute(w, r, true)
+}
+
+func (h *WebhookHandler) execute(w http.ResponseWriter, r *http.Request, rich bool) {
 	id := pathParam(r, "id")
 	payload, err := readWebhookPayload(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_payload", err.Error())
 		return
 	}
-	msg, err := h.svc.ExecuteMessage(r.Context(), id, payload)
+	payload.BotToken = bearerToken(r)
+	run := h.svc.ExecuteClassic
+	if rich {
+		run = h.svc.ExecuteRich
+	}
+	msg, err := run(r.Context(), id, payload)
 	if err != nil {
 		// This is an UNAUTHENTICATED ingress: internal error text never goes
 		// to the caller — the table answers with fixed or user-facing texts
@@ -106,6 +167,12 @@ func (h *WebhookHandler) Execute(w http.ResponseWriter, r *http.Request) {
 	// JSON gets the message id, which it can send back as root_id to reply in
 	// this message's thread.
 	if strings.Contains(strings.ToLower(r.Header.Get("Accept")), "application/json") {
+		// A classic webhook answers exactly as it always has; channel_id is
+		// a rich webhook's addition.
+		if rich {
+			writeJSON(w, http.StatusOK, map[string]string{"id": msg.ID, "channel_id": msg.ParentID})
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]string{"id": msg.ID})
 		return
 	}
@@ -157,4 +224,13 @@ func readWebhookPayload(r *http.Request) (service.IncomingWebhookPayload, error)
 func readBodyString(r *http.Request) (string, error) {
 	body, err := io.ReadAll(r.Body)
 	return string(body), err
+}
+
+// bearerToken is the token of an "Authorization: Bearer <token>" header.
+func bearerToken(r *http.Request) string {
+	scheme, token, ok := strings.Cut(r.Header.Get("Authorization"), " ")
+	if !ok || !strings.EqualFold(scheme, "Bearer") {
+		return ""
+	}
+	return strings.TrimSpace(token)
 }

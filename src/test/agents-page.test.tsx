@@ -127,9 +127,21 @@ interface Routes {
   mutate?: (path: string, init?: ApiInit) => Promise<unknown> | undefined;
 }
 
+// The models the workspace offers (Admin › Agents › Models).
+const agentModels = [
+  { harness: 'claude', id: 'claude-opus-5-5', label: 'Claude Opus 5.5' },
+  { harness: 'claude', id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5' },
+  { harness: 'bedrock', id: 'eu.anthropic.claude-opus-5', label: 'Claude Opus 5 (EU)' },
+  { harness: 'bedrock', id: 'eu.anthropic.claude-sonnet-5', label: 'Claude Sonnet 5 (EU)' },
+];
+const optionsOf = (el: HTMLElement) => Array.from((el as HTMLSelectElement).options).map((o) => o.textContent);
+
 function installRoutes(over: Routes = {}) {
   mockApiFetch.mockImplementation((path, init) => {
     if (!init?.method) {
+      if (path === '/api/v1/admin/settings') {
+        return over.mutate?.(path, init) ?? Promise.resolve({ maxUploadBytes: 0, allowedExtensions: [], agentModels });
+      }
       if (path === '/api/v1/agents') {
         return (over.agents ?? (async () => ({ agents: agentFixtures() })))();
       }
@@ -243,7 +255,11 @@ describe('AgentsPage', () => {
     expect(gg.getByText(/workspace default — edit to make it yours/)).toBeInTheDocument();
     expect(gg.queryByLabelText('Model')).not.toBeInTheDocument();
     fireEvent.click(gg.getByRole('button', { name: 'Advanced' }));
-    expect(gg.getByLabelText('Model')).toHaveAttribute('placeholder', 'harness default');
+    // Claude Code picks from the models the workspace offers for it.
+    expect(gg.getByLabelText('Model')).toHaveValue('');
+    await waitFor(() =>
+      expect(optionsOf(gg.getByLabelText('Model'))).toEqual(['default (the backend’s)', 'Claude Opus 5.5', 'Claude Sonnet 5.5']),
+    );
     expect(gg.getByLabelText('Discussion rounds')).toHaveAttribute('placeholder', '12');
     expect(gg.getByLabelText('Token budget')).toHaveAttribute('placeholder', '200000');
     expect(gg.getByLabelText('Thread follow-ups')).toHaveValue('');
@@ -267,7 +283,16 @@ describe('AgentsPage', () => {
     // Overrides exist → Advanced opens itself and says how many.
     expect(qib.getByText(/customized/)).toBeInTheDocument();
     expect(qib.getByLabelText('Prompt for @qib')).toHaveValue('My qib persona');
-    expect(qib.getByLabelText('Model')).toHaveAttribute('placeholder', 'anthropic.claude-3-5');
+    // A model saved before the list, or since removed from it, still shows.
+    expect(qib.getByLabelText('Model')).toHaveValue('my-bedrock-model');
+    await waitFor(() =>
+      expect(optionsOf(qib.getByLabelText('Model'))).toEqual([
+        'default (anthropic.claude-3-5)',
+        'Claude Opus 5 (EU)',
+        'Claude Sonnet 5 (EU)',
+        'my-bedrock-model (no longer offered)',
+      ]),
+    );
     expect(qib.getByLabelText('Discussion rounds')).toHaveValue('5');
     expect(qib.getByLabelText('Discussion rounds')).toHaveAttribute('placeholder', '8');
     expect(qib.getByLabelText('Thread follow-ups')).toHaveValue('window:30');
@@ -343,13 +368,17 @@ describe('AgentsPage', () => {
     expect(form.queryByText(/Runs on the server/)).not.toBeInTheDocument();
     fireEvent.change(form.getByLabelText('Backend'), { target: { value: 'bedrock' } });
     expect(form.getByText(/Runs on the server/)).toBeInTheDocument();
-    fireEvent.change(form.getByLabelText('Model'), { target: { value: 'bed-model' } });
+    expect(optionsOf(form.getByLabelText('Model'))).toEqual(['Backend default', 'Claude Opus 5 (EU)', 'Claude Sonnet 5 (EU)']);
+    fireEvent.change(form.getByLabelText('Model'), { target: { value: 'eu.anthropic.claude-sonnet-5' } });
 
     createResult = () => Promise.reject(new Error('slug taken'));
     fireEvent.click(createBtn);
     expect(await screen.findByText('Create failed: slug taken.')).toBeInTheDocument();
 
+    // Another engine has other models: the pick starts over on its default.
     fireEvent.change(form.getByLabelText('Backend'), { target: { value: 'claude' } });
+    expect(form.getByLabelText('Model')).toHaveValue('');
+    fireEvent.change(form.getByLabelText('Model'), { target: { value: 'claude-sonnet-5-5' } });
     createResult = async () => ({});
     fireEvent.click(createBtn);
     await waitFor(() => expect(screen.queryByTestId('new-agent-form')).not.toBeInTheDocument());
@@ -358,12 +387,12 @@ describe('AgentsPage', () => {
       ([p, i]) => p === '/api/v1/agents' && i?.method === 'POST',
     );
     expect(posts).toHaveLength(2);
-    expect(JSON.parse(posts[0][1]!.body!)).toMatchObject({ harness: 'bedrock', executionMode: '' });
+    expect(JSON.parse(posts[0][1]!.body!)).toMatchObject({ harness: 'bedrock', model: 'eu.anthropic.claude-sonnet-5', executionMode: '' });
     expect(JSON.parse(posts[1][1]!.body!)).toEqual({
       slug: 'res-1',
       displayName: 'Res',
       harness: 'claude',
-      model: 'bed-model',
+      model: 'claude-sonnet-5-5',
       executionMode: '',
       persona: 'Be helpful.',
     });
@@ -482,14 +511,14 @@ describe('AgentsPage', () => {
     renderPage();
 
     const qib = await openCard('qib');
-    fireEvent.change(qib.getByLabelText('Model'), { target: { value: 'new-model' } });
+    fireEvent.change(qib.getByLabelText('Model'), { target: { value: 'eu.anthropic.claude-sonnet-5' } });
     fireEvent.click(qib.getByRole('button', { name: 'Save' }));
 
     await waitFor(() =>
       expect(patchBody).toEqual({
         persona: 'My qib persona',
         harness: 'bedrock',
-        model: 'new-model',
+        model: 'eu.anthropic.claude-sonnet-5',
         executionMode: '',
         offlinePolicy: 'queue',
         followUpMode: 'window',
@@ -590,7 +619,10 @@ describe('AgentsPage', () => {
     const gg = await openCard('gg');
     fireEvent.click(gg.getByRole('button', { name: 'Advanced' }));
     fireEvent.change(gg.getByLabelText('Backend'), { target: { value: 'bedrock' } });
-    expect(gg.getByLabelText('Model')).toHaveAttribute('placeholder', 'eu.anthropic.claude-opus-5');
+    // Bedrock's models are Claude in the EU.
+    expect(gg.getByLabelText('Model')).toHaveValue('');
+    // Its default is Bedrock's own, not the Claude Code model in effect.
+    expect(optionsOf(gg.getByLabelText('Model'))).toEqual(['default', 'Claude Opus 5 (EU)', 'Claude Sonnet 5 (EU)']);
     // Bedrock is server-only: no Runs-on choice exists, and the copy says so.
     expect(gg.queryByLabelText('Runs on')).not.toBeInTheDocument();
     expect(gg.getByText(/Runs via AWS Bedrock on the server/)).toBeInTheDocument();

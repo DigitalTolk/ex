@@ -278,6 +278,26 @@ func getItem[T any](ctx context.Context, db *DB, pk, sk, what string) (*T, error
 	return &item, nil
 }
 
+// putRow writes one row, replacing any row under the same key — the
+// write-side counterpart to getItem.
+func putRow(ctx context.Context, db *DB, item map[string]types.AttributeValue, what string) error {
+	if _, err := db.Client.PutItem(ctx, &dynamodb.PutItemInput{TableName: aws.String(db.Table), Item: item}); err != nil {
+		return fmt.Errorf("store: put %s: %w", what, err)
+	}
+	return nil
+}
+
+// deleteRow removes one row by key; a missing row is not an error.
+func deleteRow(ctx context.Context, db *DB, pk, sk, what string) error {
+	if _, err := db.Client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName: aws.String(db.Table),
+		Key:       compositeKey(pk, sk),
+	}); err != nil {
+		return fmt.Errorf("store: delete %s: %w", what, err)
+	}
+	return nil
+}
+
 // queryAllOf drains every page of a query and unmarshals each row into T — the
 // list-shaped counterpart to getItem, and the reason individual list methods
 // no longer hand-roll the drain-and-unmarshal loop.

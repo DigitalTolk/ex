@@ -697,6 +697,9 @@ func (m *mockChannelStore) PatchChannel(_ context.Context, id string, p store.Ch
 	if p.Description != nil {
 		ch.Description = *p.Description
 	}
+	if p.Icon != nil {
+		ch.Icon = *p.Icon
+	}
 	if p.Archived != nil {
 		ch.Archived = *p.Archived
 	}
@@ -912,6 +915,10 @@ func (m *mockPublisher) Publish(_ context.Context, channel string, event *events
 // --- Mock ConversationStore ---
 
 type mockConversationStore struct {
+	// muted is convID#userID → muted; setMutedErr / mutedErr fail the write / the read.
+	muted         map[string]bool
+	setMutedErr   error
+	mutedErr      error
 	conversations map[string]*model.Conversation
 	userConvs     map[string][]*model.UserConversation // userID -> conversations
 	createErr     error
@@ -1015,6 +1022,24 @@ func (m *mockConversationStore) SetConversationLastRead(_ context.Context, convI
 	return store.ErrNotFound
 }
 
+func (m *mockConversationStore) SetMuted(_ context.Context, convID, userID string, muted bool) error {
+	if m.setMutedErr != nil {
+		return m.setMutedErr
+	}
+	if m.muted == nil {
+		m.muted = map[string]bool{}
+	}
+	m.muted[convID+"#"+userID] = muted
+	return nil
+}
+
+func (m *mockConversationStore) ConversationMuted(_ context.Context, convID, userID string) (bool, error) {
+	if m.mutedErr != nil {
+		return false, m.mutedErr
+	}
+	return m.muted[convID+"#"+userID], nil
+}
+
 func (m *mockConversationStore) SetFavorite(_ context.Context, convID, userID string, favorite bool) error {
 	for _, uc := range m.userConvs[userID] {
 		if uc.ConversationID == convID {
@@ -1050,13 +1075,16 @@ type mockMessageStore struct {
 	updateErr      error
 	updateErrID    string // when set, UpdateMessage fails only for this msg ID
 	updateErrForID error  // error returned for updateErrID (defaults to a generic error)
-	deleteErr      error
-	listErr        error
-	listAfterErr   error
-	listCalls      atomic.Int64 // ListMessages invocations (thread-index tests assert the fast path skips scans)
-	listHasMore    bool         // when true, ListMessages always reports more pages
-	threadReplyErr error        // when set, ListThreadReplies returns this error
-	noThreadIndex  bool         // when true, ListThreadReplies returns nothing
+	// forcedConflicts makes the next N UpdateMessageIfVersion calls lose
+	// the race (store.ErrVersionConflict).
+	forcedConflicts int
+	deleteErr       error
+	listErr         error
+	listAfterErr    error
+	listCalls       atomic.Int64 // ListMessages invocations (thread-index tests assert the fast path skips scans)
+	listHasMore     bool         // when true, ListMessages always reports more pages
+	threadReplyErr  error        // when set, ListThreadReplies returns this error
+	noThreadIndex   bool         // when true, ListThreadReplies returns nothing
 	// Read counters for the cost tests (atomic: the notify path reads from
 	// detached goroutines).
 	getMessageCalls  atomic.Int64
@@ -1107,6 +1135,29 @@ func (m *mockMessageStore) UpdateMessage(_ context.Context, msg *model.Message) 
 	}
 	key := msg.ParentID + "#" + msg.ID
 	m.messages[key] = msg
+	return nil
+}
+
+// UpdateMessageIfVersion mirrors the store: the write lands only over the
+// stored version (a missing message is a conflict). forcedConflicts makes the
+// next N calls lose the race regardless, as if someone else wrote first.
+func (m *mockMessageStore) UpdateMessageIfVersion(_ context.Context, msg *model.Message, prevVersion int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.updateErr != nil {
+		return m.updateErr
+	}
+	if m.forcedConflicts > 0 {
+		m.forcedConflicts--
+		return store.ErrVersionConflict
+	}
+	key := msg.ParentID + "#" + msg.ID
+	cur, ok := m.messages[key]
+	if !ok || cur.Version != prevVersion {
+		return store.ErrVersionConflict
+	}
+	cp := *msg
+	m.messages[key] = &cp
 	return nil
 }
 

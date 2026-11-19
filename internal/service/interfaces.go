@@ -7,6 +7,7 @@ import (
 	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/store"
+	"golang.org/x/oauth2"
 )
 
 // UserStore defines persistence operations for users.
@@ -75,6 +76,10 @@ type ConversationStore interface {
 	SetConversationLastRead(ctx context.Context, convID, userID string, seq int64) error
 	SetFavorite(ctx context.Context, convID, userID string, favorite bool) error
 	SetCategory(ctx context.Context, convID, userID, categoryID string, sidebarPosition *int) error
+	// SetMuted / ConversationMuted: a user's mute of a chat with a bot, on
+	// their own row.
+	SetMuted(ctx context.Context, convID, userID string, muted bool) error
+	ConversationMuted(ctx context.Context, convID, userID string) (bool, error)
 }
 
 // MessageStore defines persistence operations for messages.
@@ -82,6 +87,9 @@ type MessageStore interface {
 	CreateMessage(ctx context.Context, msg *model.Message) error
 	GetMessage(ctx context.Context, parentID, msgID string) (*model.Message, error)
 	UpdateMessage(ctx context.Context, msg *model.Message) error
+	// UpdateMessageIfVersion writes msg only over the stored Version
+	// prevVersion; otherwise store.ErrVersionConflict.
+	UpdateMessageIfVersion(ctx context.Context, msg *model.Message, prevVersion int) error
 	DeleteMessage(ctx context.Context, parentID, msgID string) error
 	ListMessages(ctx context.Context, parentID string, before string, limit int) ([]*model.Message, bool, error)
 	// ListThreadReplies returns every reply to a thread root via the GSI1
@@ -145,6 +153,9 @@ type FileIndexEntry struct {
 	CreatedAt    time.Time
 	// Filename is empty until a search in the parent has filled it in.
 	Filename string
+	// SharePoint is set on the rows ListFiles adds for SharePoint files
+	// (AttachmentID is then "sp:" and the file's id).
+	SharePoint *model.SharePointFile
 }
 
 // ThreadFollowStore defines per-user follow/unfollow overrides for threads.
@@ -255,4 +266,7 @@ type OIDCUserInfo struct {
 	// EmailVerified is the `email_verified` claim; nil when the provider
 	// omits it (Entra ID does), which is accepted. An explicit false is not.
 	EmailVerified *bool
+	// Token is the provider's token response; with SharePoint sharing on it
+	// carries the user's delegated Microsoft Graph tokens.
+	Token *oauth2.Token
 }

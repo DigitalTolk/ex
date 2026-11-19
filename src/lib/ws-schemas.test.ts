@@ -266,6 +266,23 @@ describe('activity, emoji, settings and agent-run payloads', () => {
     expect(parseSettings({ settings: { ...settings, desktopLevel: 'loud' } })).toBeNull();
   });
 
+  // Do Not Disturb rides the settings as the time it runs until.
+  it('notification.settings_updated carries Do Not Disturb as snoozeUntil, when it is on', () => {
+    const settings = {
+      desktopLevel: 'all',
+      mobileLevel: 'default',
+      threadReplies: true,
+      ignoreGroupMentions: false,
+      followAllThreads: false,
+    };
+    expect(parseSettings({ settings: { ...settings, snoozeUntil: '2026-11-18T17:00:00Z' } })?.settings.snoozeUntil).toBe(
+      '2026-11-18T17:00:00Z',
+    );
+    expect(parseSettings({ settings })?.settings).not.toHaveProperty('snoozeUntil');
+    // A time that is not a string is a frame the client cannot act on.
+    expect(parseSettings({ settings: { ...settings, snoozeUntil: 1763485200 } })).toBeNull();
+  });
+
   it('run frames need the run, its agent and its parent', () => {
     expect(parseRunUpdated({ id: 'r1', agentID: 'a', parentID: 'ch-1', state: 'running', round: 2 })).toMatchObject({
       id: 'r1',
@@ -281,5 +298,37 @@ describe('activity, emoji, settings and agent-run payloads', () => {
     expect(parseRunApproval({ approvalID: 'ap-1', parentID: 'ch-1', options: ['a', 'b'] })?.options).toEqual(['a', 'b']);
     expect(parseRunApproval({ approvalID: 'ap-1' })).toBeNull();
     expect(parseRunApproval({ parentID: 'ch-1' })).toBeNull();
+  });
+});
+
+describe('view.opened / view.updated', () => {
+  const parseView = payloadParser('view.opened');
+  const parseViewUpdate = payloadParser('view.updated');
+  const valid = {
+    view: { id: 'V1', type: 'modal', title: { type: 'plain_text', text: 'Reschedule' }, blocks: [{ type: 'divider', block_id: 'd' }], hash: 'h1', callback_id: 'resched' },
+    app: { name: 'MeetingMind', iconEmoji: 'calendar' },
+    clickID: 'abc',
+  };
+
+  it('accepts a form for this person, keeping every field the dialog may draw', () => {
+    expect(parseView(valid)).toEqual(valid);
+    const noClick = { view: valid.view, app: valid.app };
+    expect(parseViewUpdate(noClick)).toEqual(noClick);
+  });
+
+  it('drops a form the dialog could not key on', () => {
+    expect(parseView({ ...valid, view: { ...valid.view, id: '' } })).toBeNull();
+    expect(parseView({ ...valid, view: { ...valid.view, hash: undefined } })).toBeNull();
+    expect(parseView({ ...valid, view: { ...valid.view, blocks: 'none' } })).toBeNull();
+    expect(parseView({ ...valid, app: {} })).toBeNull();
+    expect(parseView({ ...valid, clickID: 7 })).toBeNull();
+  });
+});
+
+describe('interaction.notice', () => {
+  const parseNotice = payloadParser('interaction.notice');
+  it("accepts an app's note, and drops an empty one", () => {
+    expect(parseNotice({ text: 'Saved' })).toEqual({ text: 'Saved' });
+    expect(parseNotice({ text: '' })).toBeNull();
   });
 });

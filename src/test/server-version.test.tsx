@@ -142,7 +142,7 @@ describe('useServerVersion', () => {
   });
 
   it('checks the server once when mounted without a poller, and records the reply', async () => {
-    vi.mocked(globalThis.fetch).mockResolvedValue(versionResponse('v5', 'etag-5'));
+    vi.mocked(globalThis.fetch).mockImplementation(async () => versionResponse('v5', 'etag-5'));
     renderWith(<Probe />);
     await waitFor(() => expect(probe()).toHaveAttribute('data-version', 'v5'));
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
@@ -276,13 +276,20 @@ describe('useServerVersionPoller', () => {
   });
 
   it('checks again when the page becomes visible, and when it is back online', async () => {
-    vi.mocked(globalThis.fetch).mockResolvedValue(versionResponse('v10', 'etag-10'));
+    // A fresh reply per check: a body reads only once, and a second check
+    // stuck on a spent one never finishes.
+    vi.mocked(globalThis.fetch).mockImplementation(async () => versionResponse('v10', 'etag-10'));
     renderWith(<Poller />);
+    // Each event comes once the check before it has finished reading its
+    // answer: one still running takes the event in instead of starting
+    // another, so on a slow runner the count would never move.
     await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(client.isFetching()).toBe(0));
     act(() => {
       document.dispatchEvent(new Event('visibilitychange', { bubbles: true }));
     });
     await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(client.isFetching()).toBe(0));
     act(() => {
       window.dispatchEvent(new Event('offline'));
       window.dispatchEvent(new Event('online'));
@@ -291,7 +298,7 @@ describe('useServerVersionPoller', () => {
   });
 
   it('checks again on a back/forward-cache restore, not on an ordinary page show', async () => {
-    vi.mocked(globalThis.fetch).mockResolvedValue(versionResponse('v11', 'etag-11'));
+    vi.mocked(globalThis.fetch).mockImplementation(async () => versionResponse('v11', 'etag-11'));
     renderWith(<Poller />);
     await waitFor(() => expect(client.getQueryState(queryKeys.serverVersion())?.status).toBe('success'));
     act(() => {
@@ -314,7 +321,7 @@ describe('useServerVersionPoller', () => {
 
   it('stops checking once unmounted', async () => {
     vi.useFakeTimers();
-    vi.mocked(globalThis.fetch).mockResolvedValue(versionResponse('v12'));
+    vi.mocked(globalThis.fetch).mockImplementation(async () => versionResponse('v12'));
     const view = renderWith(<Poller />);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);

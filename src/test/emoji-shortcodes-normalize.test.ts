@@ -3,6 +3,7 @@ import {
   COMMON_EMOJI_SHORTCODES,
   EMOJI_SKIN_TONES,
   applyEmojiSkinTone,
+  isKnownEmoji,
   emoticonEmoji,
   normalizeEmojiInBody,
   shortcodeToUnicode,
@@ -178,6 +179,16 @@ describe('normalizeEmojiInBody', () => {
     expect(normalizeEmojiInBody('path/to/file')).toBe('path/to/file');
     expect(normalizeEmojiInBody('abc:)')).toBe('abc:)');
     expect(normalizeEmojiInBody('indexD')).toBe('indexD');
+  });
+});
+
+describe('isKnownEmoji', () => {
+  it('knows the catalog and custom emoji, not other names', () => {
+    expect(isKnownEmoji('tada')).toBe(true);
+    expect(isKnownEmoji('police_car_light')).toBe(true);
+    expect(isKnownEmoji('rotating_light')).toBe(false);
+    expect(isKnownEmoji('partyparrot', { partyparrot: '/emoji/partyparrot.gif' })).toBe(true);
+    expect(isKnownEmoji('partyparrot', {})).toBe(false);
   });
 });
 

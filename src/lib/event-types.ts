@@ -27,6 +27,9 @@ export const EventType = {
   AttachmentDeleted: wire.EventAttachmentDeleted,
   ChannelMuted: wire.EventChannelMuted,
   NotificationNew: wire.EventNotificationNew,
+  InteractionNotice: wire.EventInteractionNotice,
+  ViewOpened: wire.EventViewOpened,
+  ViewUpdated: wire.EventViewUpdated,
   NotificationSettingsUpdated: wire.EventNotificationSettingsUpdated,
   DraftUpdated: wire.EventDraftUpdated,
   ForceLogout: wire.EventForceLogout,
@@ -50,6 +53,7 @@ export const EventType = {
   RunUpdated: wire.EventRunUpdated,
   RunProgress: wire.EventRunProgress,
   RunApproval: wire.EventRunApproval,
+  SharePointChanged: wire.EventSharePointChanged,
 } as const;
 
 export type EventTypeName = (typeof EventType)[keyof typeof EventType];
@@ -76,6 +80,9 @@ export type WireEventCoverage = AssertNever<UnmappedWireEvent>;
 export const EPHEMERAL_EVENT_TYPES: ReadonlySet<string> = new Set<EventTypeName>([
   EventType.PresenceChanged,
   EventType.NotificationNew,
+  EventType.InteractionNotice,
+  EventType.ViewOpened,
+  EventType.ViewUpdated,
   EventType.ServerVersion,
   EventType.Ping,
   EventType.ForceLogout,

@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type WheelEvent } from 'react';
 import { matchPath, useLocation } from 'react-router-dom';
+import { ArrowLeft } from 'lucide-react';
 import { requestOpenChannels, takeOpenChannelsRequest, useOpenChannelsRequest } from '@/lib/mobile-nav';
 import { isNativePlatform } from '@/lib/capacitor';
 import { hasOpenBackOverlay } from '@/hooks/useMobileBackClose';
@@ -10,12 +11,13 @@ import { usePanelWidth } from '@/hooks/usePanelWidth';
 import { useLayoutTier } from '@/hooks/useLayoutTier';
 import { SIDEBAR_WIDTH } from '@/lib/panel-width';
 import { AppTopBar } from './AppTopBar';
-import { AccountMenu } from './AccountMenu';
+import { SidebarRail } from './SidebarRail';
+import { SidebarColumnHeader } from './SidebarColumnHeader';
+import { useSidebarThemeClass } from '@/stores/sidebar-theme';
 import { MobileTabBar } from './MobileTabBar';
 import { useTextFieldFocused } from '@/hooks/useTextFieldFocused';
-import { ActivityModeSwitch } from '@/components/activity/ActivityModeSwitch';
 import { ActivityPanel } from '@/components/activity/ActivityPanel';
-import { useSidebarModeStore } from '@/stores/sidebar-mode';
+import { setSidebarMode, useSidebarModeStore } from '@/stores/sidebar-mode';
 import { TagSearchProvider } from '@/context/TagSearchContext';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useMobileBackClose } from '@/hooks/useMobileBackClose';
@@ -34,25 +36,8 @@ interface AppLayoutProps {
   children: ReactNode;
 }
 
-// The top of every sidebar surface. On the full tier the sidebar runs the
-// whole window height, but its top strip (the top bar's height) stays empty:
-// breathing room, a window-drag area, and where macOS traffic lights sit in
-// the desktop app. The Home / Activity switch comes just below it.
-function SidebarHeader({ topStrip = false }: { topStrip?: boolean }) {
-  return (
-    <div className="shrink-0" data-sidebar-header="true">
-      {topStrip && <div className="h-12 [-webkit-app-region:drag]" data-testid="sidebar-top-strip" aria-hidden="true" />}
-      {/* No bottom padding: the list below scrolls right up to the switch
-          (fading under it), and carries the gap at rest itself. */}
-      <div className={`px-3 ${topStrip ? '' : 'pt-3'}`}>
-        <ActivityModeSwitch />
-      </div>
-    </div>
-  );
-}
-
-// On a phone the Home / Activity switch moves to the bottom tab bar; the
-// drawer just names the screen it shows. Home's list starts at the top of the
+// On a phone Home and Activity are tabs on the bottom bar; the drawer just
+// names the screen it shows. Home's list starts at the top of the
 // screen instead, its name only read out.
 function MobileSidebarTitle() {
   const mode = useSidebarModeStore((s) => s.mode);
@@ -76,6 +61,9 @@ function MobileSidebarTitle() {
 // re-render the whole list.
 const SidebarBody = memo(function SidebarBody({ onClose }: { onClose: () => void }) {
   const mode = useSidebarModeStore((s) => s.mode);
+  // Off a phone each list has a header row (SidebarColumnHeader): the
+  // channel list draws its own, Activity's is drawn here.
+  const isMobile = useIsMobile();
   const [scrolled, setScrolled] = useState(false);
   // Switching lists starts the new one at its top, unfaded.
   const [shownMode, setShownMode] = useState(mode);
@@ -87,12 +75,35 @@ const SidebarBody = memo(function SidebarBody({ onClose }: { onClose: () => void
     // isolate: the fades' z-index stays inside the list, never above the
     // phone tab bar or other chrome.
     <div className="relative isolate min-h-0 flex-1" onScrollCapture={trackScrolledOffTop(setScrolled)}>
-      {mode === 'activity' ? <ActivityPanel onNavigate={onClose} /> : <Sidebar onClose={onClose} />}
+      {mode !== 'activity' ? (
+        <Sidebar onClose={onClose} />
+      ) : isMobile ? (
+        <ActivityPanel onNavigate={onClose} />
+      ) : (
+        <div className="flex h-full min-h-0 flex-col">
+          <SidebarColumnHeader onNavigate={onClose}>
+            <button
+              type="button"
+              onClick={() => setSidebarMode('home')}
+              aria-label="Back to chats"
+              title="Back to chats"
+              data-testid="sidebar-activity-back"
+              className="-ml-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground outline-none hover:bg-sidebar-foreground/10 hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+            >
+              <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+            </button>
+            <h2 className="truncate text-lg leading-[150%] font-semibold text-sidebar-foreground">Activity</h2>
+          </SidebarColumnHeader>
+          <div className="min-h-0 flex-1">
+            <ActivityPanel onNavigate={onClose} />
+          </div>
+        </div>
+      )}
       {/* Once scrolled, channels fade softly under the header. (Activity
           fades below its own filters instead.) */}
       {mode === 'home' && (
         <div
-          className={`${SCROLL_FADE_TOP} top-0 ${scrolled ? 'opacity-100' : 'opacity-0'}`}
+          className={`${SCROLL_FADE_TOP} ${isMobile ? 'top-0' : 'top-12'} ${scrolled ? 'opacity-100' : 'opacity-0'}`}
           aria-hidden="true"
           data-testid="sidebar-top-fade"
         />
@@ -363,27 +374,32 @@ export function AppLayout({ children }: AppLayoutProps) {
   // while the keyboard is up. While it shows it covers the home indicator,
   // so the list above it drops its own bottom safe-area padding.
   const textFieldFocused = useTextFieldFocused(isMobile);
+  const sidebarThemeClass = useSidebarThemeClass();
 
   return (
     <TagSearchProvider>
       <div className="flex h-full overflow-hidden bg-sidebar">
         {/* Persistent sidebar (full tier): runs the full window height, with
-            the Home / Activity switch level with the top bar. Mounted only on
+            the list's header level with the top bar. Mounted only on
             that tier, so narrower layouts don't keep a hidden copy of the list
             (and its queries) alive. */}
         {tier === 'full' && (
-          <aside
-            className="relative flex shrink-0 flex-col bg-sidebar text-sidebar-foreground border-r border-sidebar-border"
-            style={{ width: sidebarWidth }}
-            data-app-chrome="true"
-            data-keyboard-surface="sidebar"
-            data-testid="app-sidebar"
-          >
-            <SidebarHeader topStrip />
-            <SidebarBody onClose={keepOpen} />
-            <AccountMenu />
-            <PanelResizeHandle edge="right" testID="sidebar-resize-handle" {...sidebarHandleProps} />
-          </aside>
+          <>
+            {/* The icon rail, then the channel list beside it. By default
+                both wear the dark palette in either theme (.dark scopes it,
+                index.css); Appearance settings can let them follow the theme. */}
+            <SidebarRail />
+            <aside
+              className={`${sidebarThemeClass} relative flex shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground`}
+              style={{ width: sidebarWidth }}
+              data-app-chrome="true"
+              data-keyboard-surface="sidebar"
+              data-testid="app-sidebar"
+            >
+              <SidebarBody onClose={keepOpen} />
+              <PanelResizeHandle edge="right" testID="sidebar-resize-handle" {...sidebarHandleProps} />
+            </aside>
+          </>
         )}
 
         <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
@@ -427,14 +443,15 @@ export function AppLayout({ children }: AppLayoutProps) {
                   onClick={() => setCompactSidebarToggled(false)}
                 />
                 <aside
-                  className="absolute inset-y-0 left-0 z-50 flex w-72 flex-col border-r border-border bg-sidebar text-sidebar-foreground shadow-xl"
+                  className={`${sidebarThemeClass} absolute inset-y-0 left-0 z-50 flex border-r border-sidebar-border bg-sidebar text-sidebar-foreground shadow-xl`}
                   data-testid="compact-sidebar"
                   data-app-chrome="true"
                   data-keyboard-surface="sidebar"
                 >
-                  <SidebarHeader />
-                  <SidebarBody onClose={closeCompactSidebar} />
-                  <AccountMenu />
+                  <SidebarRail onNavigate={closeCompactSidebar} />
+                  <div className="flex w-72 min-w-0 flex-col">
+                    <SidebarBody onClose={closeCompactSidebar} />
+                  </div>
                 </aside>
               </>
             )}

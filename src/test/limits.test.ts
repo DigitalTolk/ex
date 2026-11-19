@@ -61,9 +61,16 @@ describe('validateChannelDescription', () => {
     expect(validateChannelDescription('a'.repeat(MAX_CHANNEL_DESCRIPTION_LEN))).toBeNull();
   });
 
+  // A description holds several lines and links now: 1000 characters, the
+  // same number the server enforces (internal/limits).
+  it('allows a description of 1000 characters', () => {
+    expect(MAX_CHANNEL_DESCRIPTION_LEN).toBe(1000);
+    expect(validateChannelDescription('a'.repeat(1000))).toBeNull();
+  });
+
   it('rejects descriptions above the cap', () => {
-    expect(
-      validateChannelDescription('a'.repeat(MAX_CHANNEL_DESCRIPTION_LEN + 1)),
-    ).toMatch(/255/);
+    expect(validateChannelDescription('a'.repeat(MAX_CHANNEL_DESCRIPTION_LEN + 1))).toBe(
+      'Description must be 1000 characters or fewer.',
+    );
   });
 });

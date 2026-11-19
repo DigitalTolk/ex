@@ -676,6 +676,65 @@ describe('conversation route (full route, real browser)', () => {
     }, { timeout: 15000 });
   });
 
+  // Regression: the thread kept the right-hand slot, so a #tag clicked while
+  // a thread was open (in the thread itself, or in the list beside it) did
+  // nothing the user could see.
+  it('opening a tag while a thread is open closes the thread and shows the tag panel', async () => {
+    const tagged = aliceMessage(DM_ID, { body: 'ship it #urgent' });
+    teardown = installFetchStub({
+      messagesByConv: { [DM_ID]: [tagged] },
+      threadReplies: { 'm-1': [tagged] },
+    });
+    const screen = await renderBare(`/conversation/${DM_ID}?thread=m-1`);
+    const thread = screen.getByRole('complementary', { name: 'Thread' });
+    await expect.element(thread).toBeVisible();
+    expect(screen.getByRole('complementary', { name: 'Messages tagged urgent' }).query()).toBeNull();
+
+    // The tag on the thread's own root message: on a phone the thread covers
+    // the list, so it is the one within reach at every width.
+    await thread.getByRole('button', { name: '#urgent' }).click();
+
+    await expect.element(screen.getByRole('complementary', { name: 'Messages tagged urgent' })).toBeVisible();
+    await expect.element(screen.getByRole('heading', { name: 'Tagged: urgent' })).toBeVisible();
+    await expect.element(thread).not.toBeInTheDocument();
+    // The chat itself stays where it was.
+    await expect.element(headerHeading(screen, 'Alice')).toBeInTheDocument();
+  });
+
+  // The other half of the same rule: only a tag OPENED here takes the slot.
+  // One left open from the last chat must not close a thread a link opened.
+  it('keeps a link-opened thread when a tag was already open on arrival', async () => {
+    teardown = installFetchStub({
+      messagesByConv: { [DM_ID]: [aliceMessage(DM_ID)] },
+      threadReplies: { 'm-1': [aliceMessage(DM_ID)] },
+    });
+    const screen = await renderBare(`/conversation/${DM_ID}?thread=m-1`, { initialTag: 'urgent' });
+    const thread = screen.getByRole('complementary', { name: 'Thread' });
+    await expect.element(thread).toBeVisible();
+    await expect.element(thread.getByText('hello from alice')).toBeVisible();
+    await expect.element(thread).toBeVisible();
+    expect(screen.getByRole('complementary', { name: 'Messages tagged urgent' }).query()).toBeNull();
+  });
+
+  // A tag takes the slot from the other panels too.
+  it('opening a tag while the pinned panel is open swaps the pinned panel for the tag panel', async () => {
+    teardown = installFetchStub({
+      messagesByConv: { [DM_ID]: [aliceMessage(DM_ID, { body: 'ship it #urgent' })] },
+    });
+    // The full chat page: the tag sits in the message list, which takes its
+    // height from the app shell. Mounted bare at phone width the list has
+    // none of its own, and could measure 0 tall and draw no messages at all.
+    const screen = await renderRoute(`/conversation/${DM_ID}`);
+    await expect.element(screen.getByRole('button', { name: '#urgent' })).toBeVisible();
+    await screen.getByTestId('pinned-toggle').click();
+    await expect.element(screen.getByTestId('pinned-toggle')).toHaveAttribute('aria-pressed', 'true');
+    // On a phone the open panel covers the list, so the tag is pressed where
+    // it sits rather than through the pointer.
+    (screen.getByRole('button', { name: '#urgent' }).element() as HTMLElement).click();
+    await expect.element(screen.getByRole('complementary', { name: 'Messages tagged urgent' })).toBeVisible();
+    await expect.element(screen.getByTestId('pinned-toggle')).toHaveAttribute('aria-pressed', 'false');
+  });
+
   it('keeps a message sent with an image in view at the bottom', async () => {
     const messages = Array.from({ length: 40 }, (_, i) =>
       aliceMessage(DM_ID, {
@@ -1002,14 +1061,17 @@ describe('mobile inline editing (conversation composer)', () => {
     await expect.element(screen.getByText('text to clear')).toBeVisible();
     dispatchEditMessage({ messageId: 'own-blank' });
     await expect.element(screen.getByRole('button', { name: 'Save' })).toBeVisible();
-    await vi.waitFor(() => {
-      expect(document.body.textContent ?? '').toContain('keeper.png');
-    }, { timeout: 15000 });
+    // The attachment's chip in the COMPOSER: the name alone also shows on the
+    // message in the list, and a Save before the chip is there has nothing to
+    // keep the emptied message alive, so it does nothing.
+    await expect.poll(() => document.querySelector('[data-testid="attachment-chip"]')?.textContent ?? '').toContain('keeper.png');
     // Clearing the text is a real change (the attachment keeps the message
     // non-empty, so this is NOT the blank-edit close path) → PATCH fires.
     const editor = screen.getByLabelText('Message input');
     await editor.click();
     await editor.fill('');
+    // Save once the text is gone from the editor, as the person would see it.
+    await expect.poll(() => (editor.element().textContent ?? '').trim()).toBe('');
     await screen.getByRole('button', { name: 'Save' }).click();
     await vi.waitFor(() => {
       expect(fetchCalls().some((u) => u.startsWith('PATCH') && u.includes(`/conversations/${DM_ID}/messages/own-blank`))).toBe(true);

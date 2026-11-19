@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DigitalTolk/ex/internal/auth"
 	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/service"
@@ -115,8 +116,13 @@ func TestWebhookHandlerAdminCRUDAndExecute(t *testing.T) {
 		"attachments":[{"title":"Result","text":"passed","image_url":"https://cdn.example/result.png"}],
 		"type":"ignored",
 		"props":{"ignored":true},
-		"priority":{"priority":"important"}
+		"priority":{"priority":"important"},
+		"blocks":[{"type":"actions","elements":[{"type":"button","action_id":"go","text":{"type":"plain_text","text":"Go"}}]}]
 	}`))
+	// A classic webhook (the default) posts as it always did: blocks — even a
+	// button that would call an app — and a sender's own Authorization header
+	// are ignored, never a reason to refuse the post.
+	executeReq.Header.Set("Authorization", "Bearer some-other-services-token")
 	executeReq.SetPathValue("id", created.ID)
 	executeRes := httptest.NewRecorder()
 	h.Execute(executeRes, executeReq)
@@ -138,6 +144,9 @@ func TestWebhookHandlerAdminCRUDAndExecute(t *testing.T) {
 		}
 		if len(msg.MessageAttachments) != 1 || msg.MessageAttachments[0].ImageURL != "proxied:https://cdn.example/result.png" {
 			t.Fatalf("message attachments = %#v", msg.MessageAttachments)
+		}
+		if len(msg.Blocks) != 0 || msg.AppButtons {
+			t.Fatalf("classic webhook kept blocks %#v / appButtons %v", msg.Blocks, msg.AppButtons)
 		}
 	}
 
@@ -554,6 +563,16 @@ func (s *handlerWebhookMessageStore) UpdateMessage(_ context.Context, msg *model
 	return nil
 }
 
+func (s *handlerWebhookMessageStore) UpdateMessageIfVersion(_ context.Context, msg *model.Message, prevVersion int) error {
+	cur, ok := s.messages[msg.ParentID+"#"+msg.ID]
+	if !ok || cur.Version != prevVersion {
+		return store.ErrVersionConflict
+	}
+	cp := *msg
+	s.messages[msg.ParentID+"#"+msg.ID] = &cp
+	return nil
+}
+
 func (s *handlerWebhookMessageStore) DeleteMessage(_ context.Context, parentID, msgID string) error {
 	delete(s.messages, parentID+"#"+msgID)
 	return nil
@@ -721,13 +740,17 @@ func TestWebhookHandlerExecute_TransientFailureIsRetryable(t *testing.T) {
 }
 
 func newHandlerWebhookThreadFixture() (*WebhookHandler, *handlerWebhookMessageStore) {
+	return newHandlerWebhookThreadFixtureKind("")
+}
+
+func newHandlerWebhookThreadFixtureKind(kind string) (*WebhookHandler, *handlerWebhookMessageStore) {
 	general := &model.Channel{ID: "ch-general", Name: "General", Slug: "general"}
 	channels := handlerWebhookChannels{
 		byID:   map[string]*model.Channel{general.ID: general},
 		bySlug: map[string]*model.Channel{general.Slug: general},
 	}
 	webhooks := &handlerWebhookStore{items: map[string]*model.IncomingWebhook{
-		"wh": {ID: "wh", Title: "Alerts", ChannelID: general.ID, ChannelName: general.Name, ChannelSlug: general.Slug, Username: "event-radar"},
+		"wh": {ID: "wh", Title: "Alerts", ChannelID: general.ID, ChannelName: general.Name, ChannelSlug: general.Slug, Username: "event-radar", Kind: kind},
 	}}
 	messages := &handlerWebhookMessageStore{messages: map[string]*model.Message{}}
 	msgSvc := service.NewMessageService(messages, nil, nil, nil, nil)
@@ -735,14 +758,18 @@ func newHandlerWebhookThreadFixture() (*WebhookHandler, *handlerWebhookMessageSt
 }
 
 func executeWebhook(h *WebhookHandler, body, accept string) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(http.MethodPost, "/hooks/wh", strings.NewReader(body))
+	return executeWebhookAt(h.Execute, "/hooks/wh", body, accept)
+}
+
+func executeWebhookAt(handle http.HandlerFunc, path, body, accept string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	if accept != "" {
 		req.Header.Set("Accept", accept)
 	}
 	req.SetPathValue("id", "wh")
 	res := httptest.NewRecorder()
-	h.Execute(res, req)
+	handle(res, req)
 	return res
 }
 
@@ -753,14 +780,16 @@ func TestWebhookHandlerExecute_JSONResponseReturnsIDForThreading(t *testing.T) {
 	if res.Code != http.StatusOK {
 		t.Fatalf("root status = %d body=%s", res.Code, res.Body.String())
 	}
-	var root struct {
-		ID string `json:"id"`
-	}
-	if err := json.Unmarshal(res.Body.Bytes(), &root); err != nil || root.ID == "" {
+	var root map[string]string
+	if err := json.Unmarshal(res.Body.Bytes(), &root); err != nil || root["id"] == "" {
 		t.Fatalf("root response = %q (err %v), want JSON with id", res.Body.String(), err)
 	}
+	// A classic webhook answers exactly as it always has: the id alone.
+	if len(root) != 1 {
+		t.Fatalf("classic response = %v, want only the id", root)
+	}
 
-	res = executeWebhook(h, `{"text":"still failing","root_id":"`+root.ID+`"}`, "application/json")
+	res = executeWebhook(h, `{"text":"still failing","root_id":"`+root["id"]+`"}`, "application/json")
 	if res.Code != http.StatusOK {
 		t.Fatalf("reply status = %d body=%s", res.Code, res.Body.String())
 	}
@@ -771,10 +800,10 @@ func TestWebhookHandlerExecute_JSONResponseReturnsIDForThreading(t *testing.T) {
 		t.Fatalf("reply response = %q (err %v), want JSON with id", res.Body.String(), err)
 	}
 	stored := messages.messages["ch-general#"+reply.ID]
-	if stored == nil || stored.ParentMessageID != root.ID {
-		t.Fatalf("stored reply = %#v, want parentMessageID %s", stored, root.ID)
+	if stored == nil || stored.ParentMessageID != root["id"] {
+		t.Fatalf("stored reply = %#v, want parentMessageID %s", stored, root["id"])
 	}
-	if messages.messages["ch-general#"+root.ID].ReplyCount != 1 {
+	if messages.messages["ch-general#"+root["id"]].ReplyCount != 1 {
 		t.Fatal("root reply count was not incremented")
 	}
 }
@@ -808,6 +837,121 @@ func TestWebhookHandlerExecute_RootErrors(t *testing.T) {
 		res := executeWebhook(h, `{"text":"reply","root_id":"`+tc.rootID+`"}`, "application/json")
 		if res.Code != tc.status || !strings.Contains(res.Body.String(), tc.code) {
 			t.Fatalf("root %q: status = %d body = %s, want %d %s", tc.rootID, res.Code, res.Body.String(), tc.status, tc.code)
+		}
+	}
+}
+
+// Templates are saved and removed over the admin API; the webhook comes back
+// with them, and the service's refusals keep their status codes.
+func TestWebhookHandlerTemplates(t *testing.T) {
+	ctx := middleware.ContextWithClaims(context.Background(), &model.TokenClaims{UserID: "admin-1", SystemRole: model.SystemRoleAdmin})
+	general := &model.Channel{ID: "ch-general", Name: "General", Slug: "general"}
+	webhooks := &handlerWebhookStore{items: map[string]*model.IncomingWebhook{
+		"rich":    {ID: "rich", ChannelID: general.ID, CreatedBy: "admin-1", Kind: model.WebhookKindRich},
+		"classic": {ID: "classic", ChannelID: general.ID, CreatedBy: "admin-1"},
+	}}
+	msgSvc := service.NewMessageService(&handlerWebhookMessageStore{messages: map[string]*model.Message{}}, nil, nil, nil, nil)
+	svc := service.NewIncomingWebhookService(webhooks, handlerWebhookChannels{byID: map[string]*model.Channel{general.ID: general}}, msgSvc, handlerWebhookImageProxy{}, "https://chat.example")
+	h := NewWebhookHandler(svc)
+	call := func(method, id, key, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, "/api/v1/admin/webhooks/"+id+"/templates/"+key, strings.NewReader(body)).WithContext(ctx)
+		req.SetPathValue("id", id)
+		req.SetPathValue("key", key)
+		res := httptest.NewRecorder()
+		if method == http.MethodPut {
+			h.SaveTemplate(res, req)
+		} else {
+			h.DeleteTemplate(res, req)
+		}
+		return res
+	}
+
+	res := call(http.MethodPut, "rich", "deploy", `{"payload": {"text": "Deployed {{version}}"}}`)
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"key":"deploy"`) || !strings.Contains(res.Body.String(), `"url":"https://chat.example/hooks/v2/rich"`) {
+		t.Fatalf("save = %d %s", res.Code, res.Body.String())
+	}
+	if res := call(http.MethodPut, "rich", "deploy", `{`); res.Code != http.StatusBadRequest {
+		t.Fatalf("bad body = %d", res.Code)
+	}
+	if res := call(http.MethodPut, "classic", "deploy", `{"payload": {"text": "x"}}`); res.Code != http.StatusConflict {
+		t.Fatalf("classic = %d %s, want 409 not_rich_webhook", res.Code, res.Body.String())
+	}
+	if res := call(http.MethodDelete, "rich", "deploy", ""); res.Code != http.StatusOK || strings.Contains(res.Body.String(), `"key":"deploy"`) {
+		t.Fatalf("delete = %d %s", res.Code, res.Body.String())
+	}
+	if res := call(http.MethodDelete, "rich", "deploy", ""); res.Code != http.StatusNotFound {
+		t.Fatalf("delete missing = %d, want 404", res.Code)
+	}
+}
+
+// A rich webhook's JSON answer also names the channel: an app needs both to
+// update the post later (messages.update).
+func TestWebhookHandlerExecute_RichJSONResponseNamesTheChannel(t *testing.T) {
+	h, _ := newHandlerWebhookThreadFixtureKind(model.WebhookKindRich)
+	res := executeWebhookAt(h.ExecuteRich, "/hooks/v2/wh", `{"text":"service api is failing"}`, "application/json")
+	var got map[string]string
+	if err := json.Unmarshal(res.Body.Bytes(), &got); err != nil || got["id"] == "" || got["channel_id"] != "ch-general" {
+		t.Fatalf("rich response = %d %s, want id and channel_id", res.Code, res.Body.String())
+	}
+}
+
+// A preview body that isn't JSON at all is refused before anything else.
+func TestWebhookHandler_PreviewRefusesBrokenJSON(t *testing.T) {
+	h, _ := newHandlerWebhookThreadFixtureKind(model.WebhookKindRich)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/webhooks/preview", strings.NewReader(`{`))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(middleware.ContextWithClaims(req.Context(), &model.TokenClaims{UserID: "u-1", SystemRole: model.SystemRoleMember}))
+	res := httptest.NewRecorder()
+	h.Preview(res, req)
+	if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), `"invalid_payload"`) {
+		t.Fatalf("broken preview = %d %s", res.Code, res.Body.String())
+	}
+}
+
+// Each kind of webhook has its own URL: classic /hooks/{id}, rich
+// /hooks/v2/{id}. Through the real router, each posts at its own URL and is
+// refused at the other's, so the classic URL never runs the rich path.
+func TestWebhookURLs_EachKindPostsOnlyAtItsOwn(t *testing.T) {
+	general := &model.Channel{ID: "ch-general", Name: "General", Slug: "general"}
+	channels := handlerWebhookChannels{
+		byID:   map[string]*model.Channel{general.ID: general},
+		bySlug: map[string]*model.Channel{general.Slug: general},
+	}
+	webhooks := &handlerWebhookStore{items: map[string]*model.IncomingWebhook{
+		"classic": {ID: "classic", ChannelID: general.ID, ChannelSlug: general.Slug},
+		"rich":    {ID: "rich", ChannelID: general.ID, ChannelSlug: general.Slug, Kind: model.WebhookKindRich},
+	}}
+	messages := &handlerWebhookMessageStore{messages: map[string]*model.Message{}}
+	svc := service.NewIncomingWebhookService(webhooks, channels, service.NewMessageService(messages, nil, nil, nil, nil), nil, "https://chat.example")
+	router := NewRouter(&Deps{
+		Auth: &AuthHandler{}, User: &UserHandler{}, Channel: &ChannelHandler{},
+		Conversation: &ConversationHandler{}, WS: &WSHandler{}, Webhook: NewWebhookHandler(svc),
+		JWT: auth.NewJWTManager("test-secret", 15*time.Minute, 24*time.Hour), AppVersion: "test", AllowOrigins: []string{"*"},
+	})
+	post := func(path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"text":"deployed"}`))
+		req.Header.Set("Content-Type", "application/json")
+		res := httptest.NewRecorder()
+		router.ServeHTTP(res, req)
+		return res
+	}
+	for path, want := range map[string]string{
+		"/hooks/classic":    "ok",
+		"/hooks/v2/rich":    "ok",
+		"/hooks/rich":       `{"error":{"code":"wrong_webhook_url","message":"this is a rich webhook: post to its /hooks/v2/ URL"}}`,
+		"/hooks/v2/classic": `{"error":{"code":"wrong_webhook_url","message":"this is a classic webhook: post to its /hooks/ URL"}}`,
+	} {
+		res := post(path)
+		if got := strings.TrimSpace(res.Body.String()); got != want {
+			t.Errorf("POST %s = %d %s, want %s", path, res.Code, got, want)
+		}
+	}
+	if len(messages.messages) != 2 {
+		t.Fatalf("posted %d messages, want 2 (one per right URL)", len(messages.messages))
+	}
+	for _, wh := range []*model.IncomingWebhook{webhooks.items["classic"], webhooks.items["rich"]} {
+		if got, want := svc.URL(wh), map[string]string{"classic": "https://chat.example/hooks/classic", "rich": "https://chat.example/hooks/v2/rich"}[wh.ID]; got != want {
+			t.Errorf("URL(%s) = %s, want %s", wh.ID, got, want)
 		}
 	}
 }

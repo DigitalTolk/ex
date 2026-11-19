@@ -85,6 +85,9 @@ async function renderHome() {
   await expect.poll(() => server.userStateLoads).toBeGreaterThan(0);
 }
 
+// A phone's list marks the entry by its bold label; the desktop rail's stop
+// keeps its label as it is and carries the count alone.
+const phone = () => window.innerWidth < 768;
 const bold = () => document.querySelector('[data-testid="threads-nav-label"]')!.classList.contains('font-bold');
 const count = () => document.querySelector('[data-testid="threads-unread-badge"]')?.textContent ?? null;
 
@@ -126,8 +129,8 @@ describe('the Threads entry', () => {
     await renderHome();
     server.markers = ['msg-root'];
     threadReply();
-    await expect.poll(bold).toBe(true);
-    expect(count()).toBe('1');
+    await expect.poll(count).toBe('1');
+    expect(bold()).toBe(phone());
 
     // A reply in a second thread counts threads, not replies.
     server.markers = ['msg-root', 'msg-other'];
