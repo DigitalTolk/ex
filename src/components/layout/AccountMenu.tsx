@@ -36,10 +36,7 @@ import { UserStatusIndicator } from '@/components/UserStatusIndicator';
 import { PresenceDot } from '@/components/PresenceDot';
 import { presenceNotchStyle } from '@/lib/presence';
 import { activeStatus, formatStatusUntilShort } from '@/lib/user-status';
-import { localTimeZone } from '@/lib/user-time';
-import { apiFetch, getAccessToken } from '@/lib/api';
-import { showToast } from '@/lib/toast';
-import type { User } from '@/types';
+import { useClearStatus } from '@/hooks/useClearStatus';
 import { AboutDialog } from '@/components/AboutDialog';
 import { InviteDialog } from '@/components/InviteDialog';
 import { MOBILE_TAB_CLASS } from './mobile-tab';
@@ -68,11 +65,13 @@ interface MenuAction {
 interface AccountMenuProps {
   // 'footer' (default): the avatar + name row at the bottom of the sidebar.
   // 'tab': the "You" button in the mobile bottom tab bar — same sheet.
-  variant?: 'footer' | 'tab';
+  // 'rail': the avatar alone, at the foot of the desktop icon rail; its menu
+  // opens beside it.
+  variant?: 'footer' | 'tab' | 'rail';
 }
 
 export function AccountMenu({ variant = 'footer' }: AccountMenuProps) {
-  const { user, logout, setAuth } = useAuth();
+  const { user, logout } = useAuth();
   const navigate = useNavigate();
   const isMobile = useIsMobile();
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -102,18 +101,7 @@ export function AccountMenu({ variant = 'footer' }: AccountMenuProps) {
 
   // The ✕ on the menu's status row: clear the custom status in place, without
   // opening the status dialog.
-  async function clearStatus() {
-    try {
-      const updated = await apiFetch<User>('/api/v1/users/me/status', {
-        method: 'DELETE',
-        body: JSON.stringify({ timeZone: localTimeZone() }),
-      });
-      const token = getAccessToken();
-      if (token) setAuth(token, updated);
-    } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Failed to clear status', 'error');
-    }
-  }
+  const clearStatus = useClearStatus();
 
   async function handleLogout() {
     await logout();
@@ -254,6 +242,19 @@ export function AccountMenu({ variant = 'footer' }: AccountMenuProps) {
     </>
   );
 
+  const rail = variant === 'rail';
+  const railTriggerClass =
+    'relative flex h-10 w-10 items-center justify-center rounded-lg outline-none hover:bg-sidebar-foreground/10 focus-visible:ring-2 focus-visible:ring-sidebar-ring data-[popup-open]:bg-sidebar-foreground/15';
+  const railTriggerContent = (
+    <span className="relative inline-flex shrink-0">
+      <Avatar className="size-8" style={presenceNotchStyle(10)}>
+        <AvatarImage src={user?.avatarURL} alt="" />
+        <AvatarFallback className="bg-foreground/10 text-foreground text-xs">{initials}</AvatarFallback>
+      </Avatar>
+      <PresenceDot online={userOnline} size={10} inset={0} />
+    </span>
+  );
+
   const trigger =
     variant === 'tab' ? (
       <button
@@ -278,15 +279,21 @@ export function AccountMenu({ variant = 'footer' }: AccountMenuProps) {
     <>
       {trigger ?? (
       <div
-        className="relative shrink-0 border-t border-sidebar-border p-2 mobile:pb-[calc(env(safe-area-inset-bottom)+0.5rem)]"
+        className={
+          rail
+            ? 'relative flex shrink-0 justify-center pt-2 pb-3'
+            : 'relative shrink-0 border-t border-sidebar-border p-2 mobile:pb-[calc(env(safe-area-inset-bottom)+0.5rem)]'
+        }
         data-testid="sidebar-account"
       >
         {/* The list fades as it scrolls under the account. */}
-        <div
-          className={`${SCROLL_FADE_BOTTOM} bottom-full`}
-          aria-hidden="true"
-          data-testid="sidebar-account-fade"
-        />
+        {!rail && (
+          <div
+            className={`${SCROLL_FADE_BOTTOM} bottom-full`}
+            aria-hidden="true"
+            data-testid="sidebar-account-fade"
+          />
+        )}
         {isMobile ? (
           <button
             type="button"
@@ -299,13 +306,17 @@ export function AccountMenu({ variant = 'footer' }: AccountMenuProps) {
           </button>
         ) : (
           <DropdownMenu modal={false}>
-            <DropdownMenuTrigger aria-label="Account menu" data-testid="account-menu-trigger" className={triggerClass}>
-              {triggerContent}
+            <DropdownMenuTrigger
+              aria-label="Account menu"
+              data-testid="account-menu-trigger"
+              className={rail ? railTriggerClass : triggerClass}
+            >
+              {rail ? railTriggerContent : triggerContent}
             </DropdownMenuTrigger>
             <DropdownMenuContent
-              side="top"
-              align="start"
-              sideOffset={6}
+              side={rail ? 'right' : 'top'}
+              align={rail ? 'end' : 'start'}
+              sideOffset={rail ? 10 : 6}
               // As wide as the account row (the sidebar less its 8px
               // insets), so it scales with the sidebar and never spills past
               // it; the floor is the narrowest sidebar (256px) less those.
@@ -314,7 +325,11 @@ export function AccountMenu({ variant = 'footer' }: AccountMenuProps) {
               // open menu's top edge. It tucks under the menu's
               // rounded top (painted behind it) so no sliver of the list shows
               // between them.
-              positionerClassName="before:pointer-events-none before:absolute before:-z-10 before:inset-x-0 before:bottom-full before:-mb-3 before:h-13 before:bg-gradient-to-t before:from-sidebar before:to-transparent before:[mask-image:linear-gradient(to_top,black,transparent)] before:content-['']"
+              positionerClassName={
+                rail
+                  ? undefined
+                  : "before:pointer-events-none before:absolute before:-z-10 before:inset-x-0 before:bottom-full before:-mb-3 before:h-13 before:bg-gradient-to-t before:from-sidebar before:to-transparent before:[mask-image:linear-gradient(to_top,black,transparent)] before:content-['']"
+              }
             >
               {status && (
                 <>

@@ -42,15 +42,18 @@ func ParseChannelRole(s string) ChannelRole {
 }
 
 type Channel struct {
-	ID          string      `json:"id" dynamodbav:"id"`
-	Name        string      `json:"name" dynamodbav:"name"`
-	Slug        string      `json:"slug" dynamodbav:"slug"`
-	Description string      `json:"description,omitempty" dynamodbav:"description,omitempty"`
-	Type        ChannelType `json:"type" dynamodbav:"type"`
-	CreatedBy   string      `json:"createdBy" dynamodbav:"createdBy"`
-	Archived    bool        `json:"archived" dynamodbav:"archived"`
-	CreatedAt   time.Time   `json:"createdAt" dynamodbav:"createdAt"`
-	UpdatedAt   time.Time   `json:"updatedAt" dynamodbav:"updatedAt"`
+	ID          string `json:"id" dynamodbav:"id"`
+	Name        string `json:"name" dynamodbav:"name"`
+	Slug        string `json:"slug" dynamodbav:"slug"`
+	Description string `json:"description,omitempty" dynamodbav:"description,omitempty"`
+	// Icon is an emoji (the glyph, or its name) shown in place of the
+	// channel's globe or lock; empty keeps those.
+	Icon      string      `json:"icon,omitempty" dynamodbav:"icon,omitempty"`
+	Type      ChannelType `json:"type" dynamodbav:"type"`
+	CreatedBy string      `json:"createdBy" dynamodbav:"createdBy"`
+	Archived  bool        `json:"archived" dynamodbav:"archived"`
+	CreatedAt time.Time   `json:"createdAt" dynamodbav:"createdAt"`
+	UpdatedAt time.Time   `json:"updatedAt" dynamodbav:"updatedAt"`
 	// MessageSeq is a monotonic counter bumped once per top-level human
 	// message (not thread replies, not system events). Paired with each
 	// member's UserChannel.LastReadSeq it yields an exact, O(1) unread count

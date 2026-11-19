@@ -610,7 +610,7 @@ func (f *hrunnerCovOrchMsgs) SendAsAgentRun(_ context.Context, agentID, _, paren
 	}, nil
 }
 
-func (f *hrunnerCovOrchMsgs) SetMachineReaction(context.Context, string, string, string, string, string) error {
+func (f *hrunnerCovOrchMsgs) SetMachineReaction(context.Context, string, string, string, string, string, string) error {
 	return nil
 }
 
@@ -1862,4 +1862,9 @@ func TestHrunnerCovLinkMessage(t *testing.T) {
 			t.Errorf("url = %v, want %s", got["url"], want)
 		}
 	})
+}
+
+func (s hrunnerCovConvStore) SetMuted(context.Context, string, string, bool) error { return nil }
+func (s hrunnerCovConvStore) ConversationMuted(context.Context, string, string) (bool, error) {
+	return false, nil
 }

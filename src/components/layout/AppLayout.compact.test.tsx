@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import type { ReactNode } from 'react';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -18,7 +19,20 @@ vi.mock('./Sidebar', () => ({
     </nav>
   ),
 }));
+// The phone tab bar still draws the account menu.
 vi.mock('./AccountMenu', () => ({ AccountMenu: () => <div data-testid="sidebar-account" /> }));
+// The icon rail and the column header have their own tests; here they are
+// markers, so the layout's structure can be read without their providers.
+vi.mock('./SidebarRail', () => ({
+  SidebarRail: ({ onNavigate }: { onNavigate?: () => void }) => (
+    <nav data-testid="sidebar-rail">
+      <button type="button" onClick={onNavigate}>Rail link</button>
+    </nav>
+  ),
+}));
+vi.mock('./SidebarColumnHeader', () => ({
+  SidebarColumnHeader: ({ children }: { children?: ReactNode }) => <div data-testid="sidebar-column-header">{children}</div>,
+}));
 vi.mock('./AppTopBar', () => ({
   AppTopBar: ({ onOpenChannels, channelsButtonHidden }: { onOpenChannels?: () => void; channelsButtonHidden?: boolean }) => (
     <header data-testid="app-shell-header">

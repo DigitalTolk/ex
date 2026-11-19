@@ -267,6 +267,14 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     // that can recur for one message (a reminder) carries its own alertID,
     // so it isn't swallowed as a repeat of that message's earlier alert.
     const key = n.alertID || n.messageID;
+    // Do Not Disturb: the server marked this one silent. It has already done
+    // its work (the badge and the Activity row ride other handlers), so
+    // nothing pops or sounds here. Not acked and not recorded as alerted
+    // either: no phone push waits on it, and it was never surfaced.
+    if (n.silent) {
+      traceNotification('silent', key);
+      return;
+    }
     // Drop a repeat of a message we've ALREADY alerted on (multi-tab fan-out /
     // a double-publish). Only a *check* here — we record the messageID as
     // alerted at the very end, and only once we actually surface sound or a

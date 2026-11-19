@@ -49,6 +49,9 @@ export interface NotificationSettings {
   ignoreGroupMentions: boolean;
   followAllThreads: boolean;
   keywords?: string[];
+  // Do Not Disturb: until then nothing alerts the user. Set through its own
+  // endpoint (see useDoNotDisturb).
+  snoozeUntil?: string;
 }
 
 // ChannelNotificationOverride is the per-channel override payload. Each field
@@ -72,6 +75,8 @@ export interface Channel {
   name: string;
   slug: string;
   description?: string;
+  // An emoji (the glyph or its name) shown in place of the globe or lock.
+  icon?: string;
   type: 'public' | 'private';
   createdBy: string;
   archived: boolean;
@@ -119,6 +124,10 @@ export interface Message {
   // Skills the run USED (explicit /picks + invoke_skill calls) — rendered as
   // badges next to the "for <invoker>" tag.
   agentSkills?: string[];
+  // Agent user id → whose watcher brought that agent here (a channel
+  // subscription, not a mention). The reaction tooltip names them, since an
+  // agent's run-state reactions look the same however it was invoked.
+  agentWatchers?: Record<string, string>;
   // Echo of the sender's X-Client-Nonce (only on this client's own sends).
   clientNonce?: string;
   // Client-only: an optimistic row for a message still being sent, or one
@@ -394,6 +403,9 @@ export interface MessageAttachment {
   icon?: string;
   // Blocks inside the card sit on its tint.
   blocks?: Block[];
+  // Set by the server on a rich webhook's cards, which are drawn tinted; a
+  // classic webhook's cards keep their side bar.
+  rich?: boolean;
 }
 
 export interface MessageAttachmentField {
@@ -464,6 +476,14 @@ export interface ChannelMembership {
   joinedAt: string;
 }
 
+// One model an admin offers for an engine (Admin › Agents › Models).
+export interface AgentModelOption {
+  harness: string;
+  id: string;
+  // What the dropdown shows; the id when blank.
+  label?: string;
+}
+
 export interface WorkspaceSettings {
   maxUploadBytes: number;
   allowedExtensions: string[];
@@ -481,6 +501,9 @@ export interface WorkspaceSettings {
   // Connect to Claude on the Agents page: ex sets up a runner for the
   // person on the shared agent workbench. Off unless the server has one.
   workbenchEnabled?: boolean;
+  // The models agents may run on, per engine (Claude Code and Bedrock); the
+  // agent forms pick from these. Changed on Admin › Agents.
+  agentModels?: AgentModelOption[];
 }
 
 export interface IncomingWebhook {
@@ -566,6 +589,8 @@ export interface UserChannel {
   // Read-only: the channel is archived. Listed in the sidebar's Archived
   // section, history readable, nobody can post.
   archived?: boolean;
+  // The channel's emoji, drawn in place of its globe or lock.
+  icon?: string;
   muted?: boolean;
   favorite?: boolean;
   categoryID?: string;
@@ -609,6 +634,10 @@ export interface UserConversation {
   // Alerted-unread badge, mirroring UserChannel.unreadNotifyCount (DM
   // messages always alert unless muted).
   unreadNotifyCount?: number;
+  // The other side of this DM is a bot or a webhook: such a chat can be
+  // muted (a chat with a person can't). `muted` is the user's own choice.
+  bot?: boolean;
+  muted?: boolean;
   favorite?: boolean;
   categoryID?: string;
   sidebarPosition?: number;
@@ -795,6 +824,7 @@ export type WireDriftChecks = [
   AssertAssignable<Required<Attachment>, wire.Attachment>,
   AssertAssignable<Required<ChannelMembership>, wire.ChannelMembership>,
   AssertAssignable<Required<WorkspaceSettings>, wire.WorkspaceSettings>,
+  AssertAssignable<Required<AgentModelOption>, wire.AgentModelOption>,
   AssertAssignable<Required<IncomingWebhook>, wire.IncomingWebhook>,
   AssertAssignable<Required<UserChannel>, wire.UserChannel>,
   AssertAssignable<Required<SidebarCategory>, wire.UserChannelCategory>,

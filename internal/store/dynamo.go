@@ -467,7 +467,7 @@ func approvalSK(id string) string { return "APPROVAL#" + id }
 // page that loads (or reconnects) can show the cards the live event already
 // delivered.
 func pendingApprovalsGSI2PK(invokerID string) string { return "APPROVALS_PENDING#" + invokerID }
-func artifactSK(id string) string { return "ART#" + id }
+func artifactSK(id string) string                    { return "ART#" + id }
 
 // Skills are workspace-wide instruction packs (plan.md §2c).
 func skillPK(id string) string { return "SKILL#" + id }

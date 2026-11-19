@@ -11,6 +11,7 @@ import {
   useFavoriteChannel,
   useSetCategory,
   useFavoriteConversation,
+  useMuteConversation,
   useSetConversationCategory,
   useReorderSidebar,
   markLocalSidebarReorder,
@@ -402,6 +403,102 @@ describe('useFavoriteConversation', () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
   });
 
+});
+
+// Muting the chat with a bot or a webhook: the bell-off shows at once, and
+// comes back off if the server refuses (it does for a chat with a person).
+describe('useMuteConversation', () => {
+  // A block body: a function returned from beforeEach runs as its teardown,
+  // and mockReset() returns the mock itself.
+  beforeEach(() => {
+    vi.mocked(apiFetch).mockReset();
+  });
+
+  it('PUTs the muted flag and invalidates userConversations', async () => {
+    vi.mocked(apiFetch).mockResolvedValue(undefined);
+
+    const { wrapper, invalidateSpy } = createWrapperWithClient();
+    const { result } = renderHook(() => useMuteConversation(), { wrapper });
+    result.current.mutate({ conversationID: 'c-1', muted: true });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(apiFetch).toHaveBeenCalledTimes(1);
+    expect(apiFetch).toHaveBeenCalledWith('/api/v1/conversations/c-1/mute', {
+      method: 'PUT',
+      body: JSON.stringify({ muted: true }),
+    });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['userConversations'] });
+  });
+
+  it('shows the chat muted, then unmuted, before each PUT resolves, and touches no other chat', async () => {
+    let resolvePut!: (value: unknown) => void;
+    vi.mocked(apiFetch).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvePut = resolve;
+        }),
+    );
+
+    const { wrapper, queryClient } = createWrapperWithClient();
+    queryClient.setQueryData(['userConversations'], [
+      { conversationID: 'conv-bot', type: 'dm', displayName: 'Deploy bot', favorite: true },
+      { conversationID: 'conv-2', type: 'dm', displayName: 'Bob' },
+    ]);
+    const { result } = renderHook(() => useMuteConversation(), { wrapper });
+
+    result.current.mutate({ conversationID: 'conv-bot', muted: true });
+    await waitFor(() => {
+      expect(queryClient.getQueryData(['userConversations'])).toEqual([
+        { conversationID: 'conv-bot', type: 'dm', displayName: 'Deploy bot', favorite: true, muted: true },
+        { conversationID: 'conv-2', type: 'dm', displayName: 'Bob' },
+      ]);
+    });
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledTimes(1));
+    resolvePut(undefined);
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    result.current.mutate({ conversationID: 'conv-bot', muted: false });
+    await waitFor(() => {
+      expect(queryClient.getQueryData(['userConversations'])).toEqual([
+        { conversationID: 'conv-bot', type: 'dm', displayName: 'Deploy bot', favorite: true, muted: false },
+        { conversationID: 'conv-2', type: 'dm', displayName: 'Bob' },
+      ]);
+    });
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledTimes(2));
+    expect(apiFetch).toHaveBeenLastCalledWith('/api/v1/conversations/conv-bot/mute', {
+      method: 'PUT',
+      body: JSON.stringify({ muted: false }),
+    });
+    resolvePut(undefined);
+    await waitFor(() => expect(result.current.isPending).toBe(false));
+  });
+
+  it('puts the chat back unmuted when the server refuses', async () => {
+    let rejectPut!: (reason: unknown) => void;
+    vi.mocked(apiFetch).mockImplementation(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectPut = reject;
+        }),
+    );
+
+    const { wrapper, queryClient } = createWrapperWithClient();
+    const before = [{ conversationID: 'conv-1', type: 'dm', displayName: 'Alice' }];
+    queryClient.setQueryData(['userConversations'], before);
+    const { result } = renderHook(() => useMuteConversation(), { wrapper });
+
+    result.current.mutate({ conversationID: 'conv-1', muted: true });
+    await waitFor(() => {
+      expect(queryClient.getQueryData(['userConversations'])).toEqual([
+        { conversationID: 'conv-1', type: 'dm', displayName: 'Alice', muted: true },
+      ]);
+    });
+
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledTimes(1));
+    rejectPut(new ApiError(400, 'only a bot or webhook chat can be muted'));
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(queryClient.getQueryData(['userConversations'])).toEqual(before);
+  });
 });
 
 describe('useSetConversationCategory', () => {

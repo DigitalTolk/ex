@@ -61,43 +61,28 @@ function renderAt(path: string) {
   );
 }
 
-// The three agent-feature pages share ONE sidebar entry ("Agents"); it lights up
-// on every hub route and only there, and the old per-page links are gone.
-describe('Sidebar — Agents hub entry', () => {
-  it.each([['/agents'], ['/skills'], ['/connectors'], ['/connectors/cliffhub']])(
-    'marks the Agents entry active on %s',
-    (path) => {
-      const view = renderAt(path);
-      const ai = screen.getByRole('link', { name: 'Agents' });
-      expect(ai.className).toContain('font-semibold');
-      expect(ai).toHaveAttribute('aria-current', 'page');
-      expect(ai).toHaveAttribute('href', '/agents');
-      for (const gone of ['Skills', 'Connectors']) {
-        expect(screen.queryByRole('link', { name: gone })).not.toBeInTheDocument();
-      }
-      view.unmount();
-    },
-  );
-
-  it('is not active elsewhere', () => {
-    renderAt('/activity');
-    const ai = screen.getByRole('link', { name: 'Agents' });
-    expect(ai.className).not.toContain('font-semibold');
-    expect(ai).not.toHaveAttribute('aria-current');
+// The AI hub's one entry lives on the desktop icon rail (SidebarRail tests
+// cover it lighting up on every hub route). The channel list itself carries
+// no page links on desktop, and the phone list has no Agents entry: the hub
+// isn't built for a phone yet.
+describe('Sidebar and the Agents hub entry', () => {
+  afterEach(() => {
+    isMobileRef.value = false;
   });
 
-  // The hub isn't built for a phone yet: the entry is gone there, the other
-  // top-level pages stay.
-  describe('on a phone', () => {
-    afterEach(() => {
-      isMobileRef.value = false;
-    });
+  it.each([['/agents'], ['/skills'], ['/connectors/cliffhub'], ['/activity']])('has no Agents link in the desktop list on %s', (path) => {
+    renderAt(path);
+    for (const gone of ['Agents', 'Skills', 'Connectors', 'Drafts', 'Threads']) {
+      expect(screen.queryByRole('link', { name: gone })).not.toBeInTheDocument();
+    }
+  });
 
-    it('has no Agents entry', () => {
-      isMobileRef.value = true;
-      renderAt('/activity');
-      expect(screen.queryByRole('link', { name: 'Agents' })).not.toBeInTheDocument();
-      expect(screen.getByRole('link', { name: 'Drafts' })).toBeInTheDocument();
-    });
+  it('has no Agents entry on a phone, where the other pages stay', () => {
+    isMobileRef.value = true;
+    renderAt('/activity');
+    expect(screen.queryByRole('link', { name: 'Agents' })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Drafts' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Threads' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Directory' })).toBeInTheDocument();
   });
 });

@@ -196,6 +196,7 @@ vi.mock('@/hooks/useSidebar', () => ({
   useCreateCategory: () => ({ mutate: createCategoryMutate, isPending: false }),
   useDeleteCategory: () => ({ mutate: deleteCategoryMutate, isPending: false }),
   useFavoriteChannel: () => ({ mutate: vi.fn(), isPending: false }),
+  useMuteConversation: () => ({ mutate: vi.fn(), isPending: false }),
   useFavoriteConversation: () => ({ mutate: vi.fn(), isPending: false }),
   useSetCategory: () => ({ mutate: vi.fn(), isPending: false }),
   useSetConversationCategory: () => ({ mutate: vi.fn(), isPending: false }),
@@ -379,10 +380,19 @@ describe('Sidebar browser render — rich fixtures', () => {
     await expect.element(screen.getByText('Work')).toBeVisible();
     await expect.element(screen.getByText('Channels')).toBeVisible();
     await expect.element(screen.getByText('Direct Messages')).toBeVisible();
-    await expect.element(screen.getByText('Drafts')).toBeVisible();
-    await expect.element(screen.getByText('Directory')).toBeVisible();
-    // Drafts badge reflects the 2 mock drafts.
-    expect(document.body.textContent).toContain('2');
+    if (window.innerWidth < 768) {
+      // A phone's list leads with the pages; its Drafts badge reflects the 2
+      // mock drafts.
+      await expect.element(screen.getByText('Drafts')).toBeVisible();
+      await expect.element(screen.getByText('Directory')).toBeVisible();
+      expect(document.querySelector('a[href="/drafts"]')?.textContent).toContain('2');
+    } else {
+      // On desktop the pages live on the icon rail: the list holds chats
+      // only, under a header naming the server.
+      await expect.element(screen.getByTestId('sidebar-server-name')).toBeVisible();
+      expect(document.querySelector('a[href="/drafts"]')).toBeNull();
+      expect(document.querySelector('a[href="/threads"]')).toBeNull();
+    }
     // Favorite channel rendered.
     await expect.element(screen.getByText('announcements')).toBeVisible();
     // Hidden conversation does NOT render even though it's in conversations[].
@@ -392,9 +402,11 @@ describe('Sidebar browser render — rich fixtures', () => {
     const hitboxes = document.querySelectorAll('[data-testid^="sidebar-category-boundary-drop-"]');
     if (window.__EX_FORCE_DEVICE__ === 'touch') expect(hitboxes).toHaveLength(0);
     else expect(hitboxes.length).toBeGreaterThanOrEqual(3);
-    // Threads link is bold (unread thread present).
-    const threadsLink = document.querySelector('a[href="/threads"] span') as HTMLElement;
-    expect(threadsLink?.className).toContain('font-bold');
+    if (window.innerWidth < 768) {
+      // Threads link is bold (unread thread present).
+      const threadsLink = document.querySelector('a[href="/threads"] span') as HTMLElement;
+      expect(threadsLink?.className).toContain('font-bold');
+    }
   });
 
   it('opens the category create input, accepts a name and dispatches the mutation', async () => {
@@ -556,6 +568,10 @@ describe('Sidebar browser render — rich fixtures', () => {
   });
 
   it('renders threads link unbolded when there are no unread threads', async () => {
+    // The Threads and Drafts links are a phone's; on desktop they are stops
+    // on the icon rail (SidebarRail tests).
+    if (window.innerWidth >= 768) return;
+
     mockUserState = { ...mockUserState!, threadNotifications: [] };
     await render(<Frame />);
     const threadsLink = document.querySelector('a[href="/threads"] span') as HTMLElement;
@@ -563,6 +579,10 @@ describe('Sidebar browser render — rich fixtures', () => {
   });
 
   it('renders no drafts badge when there are no drafts', async () => {
+    // The Threads and Drafts links are a phone's; on desktop they are stops
+    // on the icon rail (SidebarRail tests).
+    if (window.innerWidth >= 768) return;
+
     mockDrafts = [];
     await render(<Frame />);
     const draftsLink = document.querySelector('a[href="/drafts"]');
@@ -598,6 +618,10 @@ describe('Sidebar browser render — rich fixtures', () => {
   });
 
   it('renders a sidebar with many channels — drafts badge shows the count', async () => {
+    // The Threads and Drafts links are a phone's; on desktop they are stops
+    // on the icon rail (SidebarRail tests).
+    if (window.innerWidth >= 768) return;
+
     mockChannels = Array.from({ length: 25 }, (_, i) => ({
       channelID: `ch-${i}`,
       channelName: `channel-${i}`,
@@ -633,10 +657,13 @@ describe('Sidebar browser render — rich fixtures', () => {
     expect(document.body.textContent).toContain('Bob Jones');
   });
 
-  it('triggers the Directory nav-link onClose callback when clicked', async () => {
+  it('closes the drawer when the way to the channel directory is taken', async () => {
     const onClose = vi.fn();
     const screen = await render(<Frame onClose={onClose} />);
-    await screen.getByText('Directory').click();
+    // A phone has the Directory page link; desktop ends Channels with "Add
+    // channels", which leads to the same place.
+    if (window.innerWidth < 768) await screen.getByText('Directory').click();
+    else await screen.getByTestId('sidebar-add-channels').click();
     expect(onClose).toHaveBeenCalled();
   });
 
@@ -806,6 +833,10 @@ describe('Sidebar browser render — rich fixtures', () => {
   });
 
   it('renders the drafts badge clamped to "99+" when there are many drafts', async () => {
+    // The Threads and Drafts links are a phone's; on desktop they are stops
+    // on the icon rail (SidebarRail tests).
+    if (window.innerWidth >= 768) return;
+
     mockDrafts = Array.from({ length: 120 }, (_, i) => ({ parentID: `ch-${i}`, parentType: 'channel' }));
     await render(<Frame />);
     const draftsLink = document.querySelector('a[href="/drafts"]') as HTMLElement;
@@ -890,20 +921,30 @@ describe('Sidebar browser render — rich fixtures', () => {
     expect(badge?.textContent).toBe('4');
   });
 
-  it('renders empty state with no channels and no DMs (just nav links)', async () => {
+  it('renders empty state with no channels and no DMs (just the way to other places)', async () => {
     mockChannels = [];
     mockConversations = [];
     mockConversationsState = { data: [], isError: false };
     mockCategories = [];
     mockDrafts = [];
-    await render(<Frame />);
-    // Nav links survive an empty workspace.
-    expect(document.body.textContent).toContain('Directory');
-    expect(document.body.textContent).toContain('Drafts');
-    expect(document.body.textContent).toContain('Threads');
+    const screen = await render(<Frame />);
+    if (window.innerWidth < 768) {
+      // Nav links survive an empty workspace.
+      expect(document.body.textContent).toContain('Directory');
+      expect(document.body.textContent).toContain('Drafts');
+      expect(document.body.textContent).toContain('Threads');
+    } else {
+      // On desktop the header and its "+" menu survive it.
+      await expect.element(screen.getByTestId('sidebar-server-name')).toBeVisible();
+      await expect.element(screen.getByTestId('sidebar-create-menu')).toBeVisible();
+    }
   });
 
   it('Threads link stays unbolded when there are no thread updates', async () => {
+    // The Threads and Drafts links are a phone's; on desktop they are stops
+    // on the icon rail (SidebarRail tests).
+    if (window.innerWidth >= 768) return;
+
     // No unread markers and no live alerts: the link renders without the
     // unread-bold style.
     mockUserState = {
@@ -975,7 +1016,9 @@ describe('Sidebar browser render — rich fixtures', () => {
     expect(bobRow).toBeTruthy();
   });
 
-  it('renders Directory + Threads nav links with click handlers that call onClose', async () => {
+  it('renders Directory + Threads nav links with click handlers that call onClose (phone list)', async () => {
+    // The page links are a phone's; on desktop they live on the icon rail.
+    if (window.innerWidth >= 768) return;
     const onClose = vi.fn();
     await render(<Frame onClose={onClose} />);
     // Click directly on the Threads nav link (href-anchored) rather
@@ -983,7 +1026,7 @@ describe('Sidebar browser render — rich fixtures', () => {
     // sr-only "Unread threads" label which would collide with the
     // text-only locator under Playwright strict mode.
     const threadsLink = document.querySelector('a[href="/threads"]') as HTMLElement;
-    threadsLink?.click();
+    threadsLink.click();
     expect(onClose).toHaveBeenCalled();
   });
 
@@ -1020,6 +1063,10 @@ describe('Sidebar browser render — rich fixtures', () => {
   });
 
   it('renders the Threads link bold from the server\'s unread thread markers', async () => {
+    // The Threads and Drafts links are a phone's; on desktop they are stops
+    // on the icon rail (SidebarRail tests).
+    if (window.innerWidth >= 768) return;
+
     mockUserState = { ...mockUserState!, threadNotifications: ['thr-1'] };
     await render(<Frame />);
     const threadsLink = document.querySelector('a[href="/threads"] span') as HTMLElement;
@@ -1119,6 +1166,10 @@ describe('Sidebar browser render — rich fixtures', () => {
   });
 
   it('marks Threads bold and counts its unread threads, capped at "99+"', async () => {
+    // The Threads and Drafts links are a phone's; on desktop they are stops
+    // on the icon rail (SidebarRail tests).
+    if (window.innerWidth >= 768) return;
+
     mockUserState = { ...mockUserState!, threadNotifications: Array.from({ length: 120 }, (_, i) => `msg-${i}`) };
     await render(<Frame />);
     const label = document.querySelector('[data-testid="threads-nav-label"]') as HTMLElement;
@@ -1177,6 +1228,10 @@ describe('Sidebar browser render — rich fixtures', () => {
   });
 
   it('renders the Drafts nav link in its active state on the /drafts route', async () => {
+    // The Threads and Drafts links are a phone's; on desktop they are stops
+    // on the icon rail (SidebarRail tests).
+    if (window.innerWidth >= 768) return;
+
     await render(<RouteFrame path="/drafts" />);
     const draftsLink = document.querySelector('a[href="/drafts"]') as HTMLAnchorElement;
     expect(draftsLink).not.toBeNull();

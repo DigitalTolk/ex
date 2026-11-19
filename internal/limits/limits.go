@@ -31,7 +31,7 @@ const (
 	// MaxChannelNameLen / MaxChannelDescriptionLen / MaxDistinctReactions
 	// guard the rest of the message-adjacent surface against abuse.
 	MaxChannelNameLen        = 32
-	MaxChannelDescriptionLen = 255
+	MaxChannelDescriptionLen = 1000
 	MaxDistinctReactions     = 16
 
 	// MaxDisplayNameChars caps a user's display name in codepoints.

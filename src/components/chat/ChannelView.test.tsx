@@ -282,9 +282,14 @@ describe('ChannelView', () => {
     expect(screen.getByText('2')).toBeInTheDocument();
   });
 
-  it('renders public channel icon', () => {
+  // Who may edit the channel (the owner, here) changes its icon by clicking
+  // it: the globe is that button's face, drawn once and named by the button.
+  it('shows an owner the public channel icon as the button that changes it', () => {
     renderChannelView();
-    expect(screen.getByLabelText('Public channel')).toBeInTheDocument();
+    const button = screen.getByRole('button', { name: 'Change channel icon' });
+    expect(button.querySelector('svg.lucide-globe')).not.toBeNull();
+    expect(within(screen.getByTestId('channel-title-stack')).queryByLabelText('Public channel')).toBeNull();
+    expect(screen.getByTestId('channel-title-stack').querySelectorAll('svg.lucide-globe')).toHaveLength(1);
   });
 
   it('keeps the message list above the input as flat siblings of MessageDropZone', () => {

@@ -106,6 +106,35 @@ func (h *UserHandler) SetMyNotificationSettings(w http.ResponseWriter, r *http.R
 	writeJSON(w, http.StatusOK, user)
 }
 
+// SnoozeMyNotifications turns Do Not Disturb on for {"minutes": n}, or off
+// with 0.
+func (h *UserHandler) SnoozeMyNotifications(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.UserIDFromContext(r.Context())
+	if userID == "" {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+	var body struct {
+		Minutes int64 `json:"minutes"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
+		return
+	}
+	// Bounded before it becomes a duration, so a huge number can't overflow
+	// into a short or negative one.
+	if body.Minutes < 0 || body.Minutes > int64(service.MaxSnooze/time.Minute) {
+		writeError(w, http.StatusBadRequest, "invalid_minutes", "minutes is out of range")
+		return
+	}
+	user, err := h.userSvc.SnoozeNotifications(r.Context(), userID, time.Duration(body.Minutes)*time.Minute)
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, user)
+}
+
 // SetMyUserStatus sets the authenticated user's visible status message.
 func (h *UserHandler) SetMyUserStatus(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromContext(r.Context())

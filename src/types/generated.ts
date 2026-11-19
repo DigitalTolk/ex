@@ -1038,6 +1038,29 @@ export interface RunnerRegistration {
 }
 
 //////////
+// source: agent_models.go
+
+/**
+ * AgentModelOption is one model an admin offers for an engine: the agents
+ * page and the admin panel pick an agent's model from these instead of a free
+ * text field. Only the engines with a fixed set of models have a list:
+ * Claude Code (Claude models) and AWS Bedrock (Claude in the EU); Codex keeps
+ * its free text.
+ */
+export interface AgentModelOption {
+  harness: string;
+  id: string;
+  /**
+   * Label is what the dropdown shows; the id when blank.
+   */
+  label?: string;
+}
+/**
+ * MaxAgentModelsPerHarness caps each engine's list: it is a dropdown.
+ */
+export const MaxAgentModelsPerHarness = 25;
+
+//////////
 // source: attachment.go
 
 /**
@@ -1738,6 +1761,11 @@ export interface Channel {
   name: string;
   slug: string;
   description?: string;
+  /**
+   * Icon is an emoji (the glyph, or its name) shown in place of the
+   * channel's globe or lock; empty keeps those.
+   */
+  icon?: string;
   type: ChannelType;
   createdBy: string;
   archived: boolean;
@@ -2584,6 +2612,11 @@ export interface UserChannel {
    */
   archived?: boolean;
   /**
+   * Icon mirrors the channel's emoji icon, stamped at read time like
+   * Archived, so changing it writes one row, not one per member.
+   */
+  icon?: string;
+  /**
    * UnreadNotifyCount counts unread messages that actually ALERTED this
    * user per their notification rules (mentions, keywords, "all messages"
    * level; mute suppresses) — the sidebar's numeric badge. Plain unread
@@ -2674,6 +2707,12 @@ export interface UserConversation {
    */
   unreadNotifyCount?: number /* int64 */;
   /**
+   * Muted: this user muted the chat. Only a chat with a bot or a webhook
+   * can be muted (never one with a person); its messages then alert them
+   * for nothing but a direct @-mention.
+   */
+  muted?: boolean;
+  /**
    * AvatarURL and UserStatus are read-time enrichments for DM sidebar rows.
    * They are intentionally not persisted so profile changes stay single
    * sourced from the User record.
@@ -2681,6 +2720,12 @@ export interface UserConversation {
   avatarURL?: string;
   userStatus?: UserStatus;
   profileResolved?: boolean;
+  /**
+   * Bot: the other side of this DM is a bot or a webhook, read from its
+   * profile like the avatar. Such a chat can be muted; one with a person
+   * can't.
+   */
+  bot?: boolean;
   /**
    * Favorite pins this DM/group to the user's "Favorites" sidebar
    * section. Same per-user semantics as on UserChannel.
@@ -2789,6 +2834,14 @@ export interface Message {
    */
   agentSkills?: string[];
   /**
+   * AgentWatchers maps an agent user id to the person whose WATCHER brought
+   * that agent to this message (a channel subscription, not a mention). The
+   * agent's run-state reactions look the same either way, so the reaction
+   * tooltip reads this to say "gg (watcher set up by Alice)" — otherwise
+   * people see an untagged agent react and nobody can tell who asked.
+   */
+  agentWatchers?: { [key: string]: string};
+  /**
    * ClientNonce echoes the sender's client-generated tag (X-Client-Nonce) on
    * the send response and the message.new broadcast, so the sender's client
    * can swap its optimistic "sending" row for the real message whichever
@@ -2851,6 +2904,12 @@ export interface MessageAttachment {
    * Blocks inside a card sit on the card's tint.
    */
   blocks?: Blocks;
+  /**
+   * Rich marks a card posted by a rich webhook, drawn tinted. Set by the
+   * server, never read from a payload: a classic card keeps the side bar
+   * it always had.
+   */
+  rich?: boolean;
 }
 export interface MessageAttachmentField {
   title?: string;
@@ -2938,6 +2997,12 @@ export interface Notification {
    * duplicated events can't drift the count.
    */
   parentUnreadNotifyCount?: number /* int64 */;
+  /**
+   * Silent: the recipient has Do Not Disturb on. The client takes the
+   * notification in (badges, Activity) but shows no popup and plays no
+   * sound; the server sends no phone push for it either.
+   */
+  silent?: boolean;
 }
 
 //////////
@@ -2974,6 +3039,13 @@ export interface NotificationSettings {
   ignoreGroupMentions: boolean;
   followAllThreads: boolean;
   keywords?: string[];
+  /**
+   * SnoozeUntil is Do Not Disturb: until then nothing alerts this user (no
+   * popup, sound or phone push), though everything is still listed in
+   * Activity and counted on badges. Set through its own endpoint, never
+   * with the rest of the settings.
+   */
+  snoozeUntil?: string /* RFC3339 */;
 }
 /**
  * ChannelNotificationOverride carries the per-channel override values a user
@@ -3100,6 +3172,13 @@ export interface WorkspaceSettings {
    * set up from the command line and the account menu's Runners dialog.
    */
   runnersInApp: boolean;
+  /**
+   * AgentModels are the models agents may run on, per engine: the agents
+   * page and the admin panel offer them in a dropdown. Empty means the
+   * built-in list (DefaultAgentModels). Changed only through its own admin
+   * route, never by a save of the other settings.
+   */
+  agentModels: AgentModelOption[];
 }
 /**
  * DefaultMaxUploadBytes is the fallback ceiling when the workspace hasn't

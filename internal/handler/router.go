@@ -122,6 +122,7 @@ func NewRouter(d *Deps) http.Handler {
 	mux.Handle("PATCH /api/v1/users/me/status", middleware.WrapFunc(userH.SetMyUserStatus, authMW))
 	mux.Handle("DELETE /api/v1/users/me/status", middleware.WrapFunc(userH.ClearMyUserStatus, authMW))
 	mux.Handle("PUT /api/v1/users/me/notification-settings", middleware.WrapFunc(userH.SetMyNotificationSettings, authMW))
+	mux.Handle("PUT /api/v1/users/me/notification-snooze", middleware.WrapFunc(userH.SnoozeMyNotifications, authMW))
 	mux.Handle("POST /api/v1/users/me/avatar/upload-url", middleware.WrapFunc(userH.CreateAvatarUploadURL, authMW))
 	mux.Handle("POST /api/v1/users/batch", middleware.WrapFunc(userH.BatchGetUsers, authMW))
 	mux.Handle("GET /api/v1/users/{id}", middleware.WrapFunc(userH.GetUser, authMW))
@@ -153,6 +154,7 @@ func NewRouter(d *Deps) http.Handler {
 	mux.Handle("DELETE /api/v1/channels/{id}", middleware.WrapFunc(channelH.Archive, authMW))
 	mux.Handle("POST /api/v1/channels/{id}/unarchive", middleware.WrapFunc(channelH.Unarchive, authMW))
 	mux.Handle("POST /api/v1/channels/{id}/private", middleware.WrapFunc(channelH.MakePrivate, authMW))
+	mux.Handle("PUT /api/v1/channels/{id}/icon", middleware.WrapFunc(channelH.SetIcon, authMW))
 
 	mux.Handle("POST /api/v1/channels/{id}/join", middleware.WrapFunc(channelH.Join, authMW))
 	mux.Handle("POST /api/v1/channels/{id}/leave", middleware.WrapFunc(channelH.Leave, authMW))
@@ -185,6 +187,7 @@ func NewRouter(d *Deps) http.Handler {
 	mux.Handle("GET /api/v1/conversations", middleware.WrapFunc(convH.List, authMW))
 	mux.Handle("GET /api/v1/conversations/{id}", middleware.WrapFunc(convH.Get, authMW))
 	mux.Handle("PUT /api/v1/conversations/{id}/read", middleware.WrapFunc(convH.MarkRead, authMW))
+	mux.Handle("PUT /api/v1/conversations/{id}/mute", middleware.WrapFunc(convH.SetMute, authMW))
 	mux.Handle("POST /api/v1/conversations/{id}/convert", middleware.WrapFunc(channelH.ConvertConversation, authMW, writeLimit))
 
 	mux.Handle("GET /api/v1/conversations/{id}/messages", middleware.WrapFunc(convH.ListMessages, authMW))
@@ -318,6 +321,7 @@ func NewRouter(d *Deps) http.Handler {
 		// inside the handler.
 		mux.Handle("GET /api/v1/admin/settings", middleware.WrapFunc(adminH.GetSettings, authMW))
 		mux.Handle("PUT /api/v1/admin/settings", middleware.WrapFunc(adminH.UpdateSettings, authMW))
+		mux.Handle("PUT /api/v1/admin/agent-models", middleware.WrapFunc(adminH.SetAgentModels, authMW))
 		mux.Handle("GET /api/v1/admin/search/status", middleware.WrapFunc(adminH.SearchStatus, authMW))
 		mux.Handle("GET /api/v1/admin/push-stats", middleware.WrapFunc(adminH.PushStats, authMW))
 		// Mail diagnostics: read the effective transport, and send a real

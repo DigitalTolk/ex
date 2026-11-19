@@ -105,7 +105,8 @@ describe('limits — codepoints and validators', () => {
 
   it('validateChannelDescription only fails when too long', () => {
     expect(validateChannelDescription('hi')).toBeNull();
-    const long = 'a'.repeat(300);
+    expect(validateChannelDescription('a'.repeat(1000))).toBeNull();
+    const long = 'a'.repeat(1001);
     expect(typeof validateChannelDescription(long)).toBe('string');
   });
 });

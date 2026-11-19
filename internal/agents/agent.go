@@ -99,6 +99,29 @@ type AgentService struct {
 	// dms resolves the creator↔agent DM for parent-less subscriptions.
 	// Optional: nil makes a missing parent a validation error instead.
 	dms agentDMResolver
+	// models is the admin's list of models each engine may run on. Optional:
+	// nil accepts any model (tests, and builds without the settings service).
+	models agentModelCatalog
+}
+
+// agentModelCatalog answers whether a model is on the admin's list for an
+// engine (service.SettingsService).
+type agentModelCatalog interface {
+	OffersAgentModel(ctx context.Context, harness, id string) bool
+}
+
+// SetModelCatalog wires the admin's model list, which every model an admin or
+// a member saves for an agent must come from.
+func (s *AgentService) SetModelCatalog(c agentModelCatalog) { s.models = c }
+
+// checkModel refuses a model the admin does not offer for harness. Only a
+// model being set is checked: a model saved before the list existed keeps
+// running until someone changes it.
+func (s *AgentService) checkModel(ctx context.Context, harness, mdl string) error {
+	if s.models == nil || mdl == "" || s.models.OffersAgentModel(ctx, harness, mdl) {
+		return nil
+	}
+	return fmt.Errorf("agent: %q is not one of the models offered for %s: %w", mdl, harness, service.ErrValidation)
 }
 
 // SetDMResolver wires DM resolution so a subscription can be created without
@@ -393,6 +416,9 @@ func (s *AgentService) CreateAgent(ctx context.Context, in CreateAgentInput) (*m
 		return nil, fmt.Errorf("agent: unknown harness %q: %w", harness, service.ErrValidation)
 	}
 	mdl := strings.TrimSpace(in.Model)
+	if err := s.checkModel(ctx, harness, mdl); err != nil {
+		return nil, err
+	}
 	execMode := ""
 	if model.HarnessIsAPI(harness) {
 		if mdl == "" {
@@ -574,6 +600,9 @@ func (s *AgentService) SetAgentEngine(ctx context.Context, slug, harness, mdl, e
 		return nil, fmt.Errorf("agent: bedrock agents run on the server only: %w", service.ErrValidation)
 	default:
 		return nil, fmt.Errorf("agent: unknown execution mode %q: %w", executionMode, service.ErrValidation)
+	}
+	if err := s.checkModel(ctx, harness, strings.TrimSpace(mdl)); err != nil {
+		return nil, err
 	}
 	tpl, err := s.agents.GetTemplate(ctx, strings.ToLower(strings.TrimSpace(slug)))
 	if err != nil {
@@ -816,7 +845,8 @@ type AgentPrefsPatch struct {
 // UpdatePrefs applies a user's edits to THEIR prefs for a shared agent. No
 // ownership check — everyone edits only their own row.
 func (s *AgentService) UpdatePrefs(ctx context.Context, userID, slug string, patch AgentPrefsPatch) (*model.UserAgentPrefs, error) {
-	if _, err := s.agents.GetTemplate(ctx, slug); err != nil {
+	tpl, err := s.agents.GetTemplate(ctx, slug)
+	if err != nil {
 		return nil, fmt.Errorf("agent: unknown agent %q: %w", slug, err)
 	}
 	prefs, err := s.agents.GetAgentPrefs(ctx, userID, slug)
@@ -835,7 +865,11 @@ func (s *AgentService) UpdatePrefs(ctx context.Context, userID, slug string, pat
 		}
 	}
 	if patch.Model != nil {
-		prefs.Model = *patch.Model
+		prefs.Model = strings.TrimSpace(*patch.Model)
+		// The engine the model will run on: this person's, else the agent's.
+		if err := s.checkModel(ctx, firstNonEmpty(prefs.Harness, tpl.Harness, model.HarnessClaude), prefs.Model); err != nil {
+			return nil, err
+		}
 	}
 	if patch.ExecutionMode != nil {
 		switch *patch.ExecutionMode {

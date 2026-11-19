@@ -53,9 +53,9 @@ describe('MarkdownEditor language', () => {
     expect(ref.current!.getMarkdown()).toBe('- first\n- ');
     expect(onSubmit).not.toHaveBeenCalled();
 
-    // Backspace on the empty marker removes it (the list-markup command).
+    // Backspace on the empty marker removes it, leaving a plain line.
     await userEvent.keyboard('{Backspace}');
-    expect(ref.current!.getMarkdown()).not.toContain('- first\n- ');
+    expect(ref.current!.getMarkdown()).toBe('- first\n');
 
     ref.current!.setMarkdown('plain');
     view.dispatch({ selection: { anchor: view.state.doc.length } });
@@ -71,5 +71,47 @@ describe('MarkdownEditor language', () => {
     dt.setData('text/plain', 'https://example.com/docs');
     view.contentDOM.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
     expect(ref.current!.getMarkdown()).toBe('see [docs](https://example.com/docs)');
+  });
+
+  // The reported case: a plain line typed under a list after one Backspace
+  // used to be indented by the markup command, and joined the last item.
+  it('one Backspace on a continued marker leaves a plain line, for bullets and numbers', async () => {
+    const { ref, view } = await mount({ initialBody: '- GHI' });
+    view.focus();
+    view.dispatch({ selection: { anchor: view.state.doc.length } });
+    await userEvent.keyboard('{Enter}{Backspace}Additional info.');
+    expect(ref.current!.getMarkdown()).toBe('- GHI\nAdditional info.');
+
+    ref.current!.setMarkdown('1. one');
+    view.dispatch({ selection: { anchor: view.state.doc.length } });
+    await userEvent.keyboard('{Enter}{Backspace}After.');
+    expect(ref.current!.getMarkdown()).toBe('1. one\nAfter.');
+  });
+
+  it('a marker with text after the cursor goes too; nested items and code keep the default', async () => {
+    const { ref, view } = await mount({ initialBody: '- item' });
+    view.focus();
+    view.dispatch({ selection: { anchor: 2 } });
+    await userEvent.keyboard('{Backspace}');
+    expect(ref.current!.getMarkdown()).toBe('item');
+
+    // A nested marker: lang-markdown's own handling, not a plain line.
+    ref.current!.setMarkdown('- a\n  - b');
+    view.dispatch({ selection: { anchor: view.state.doc.length - 1 } });
+    await userEvent.keyboard('{Backspace}');
+    expect(ref.current!.getMarkdown()).not.toBe('- a\nb');
+    expect(ref.current!.getMarkdown()).toContain('b');
+
+    // "- " inside a code block is text: Backspace deletes one character.
+    ref.current!.setMarkdown('```\n- x\n```');
+    view.dispatch({ selection: { anchor: 6 } });
+    await userEvent.keyboard('{Backspace}');
+    expect(ref.current!.getMarkdown()).toBe('```\n-x\n```');
+
+    // A selection is never this command's.
+    ref.current!.setMarkdown('- item');
+    view.dispatch({ selection: { anchor: 0, head: 2 } });
+    await userEvent.keyboard('{Backspace}');
+    expect(ref.current!.getMarkdown()).toBe('item');
   });
 });

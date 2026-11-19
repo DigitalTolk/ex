@@ -53,6 +53,9 @@ func (a *App) buildAgents(ctx context.Context) error {
 	// Agent prefs are partitioned by user, so the admin panel's "how many
 	// people have their own settings" and its reset both walk the roster.
 	ag.svc.SetUserLister(in.users)
+	// Every model an admin or a member saves for an agent comes from the
+	// admin's list (Admin › Agents › Models).
+	ag.svc.SetModelCatalog(c.settings)
 	ag.orch = agents.NewOrchestrator(store.NewRunStore(in.db), ag.svc, cachedUserReader{c.users}, c.messages, in.pubsub, in.jwt)
 	c.users.SetAutomationStopper(ag.orch) // deactivating an account stops its agents
 	c.messages.SetAgentDispatcher(ag.orch)

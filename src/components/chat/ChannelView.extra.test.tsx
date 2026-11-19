@@ -36,6 +36,26 @@ import type { Channel, ChannelMembership } from '@/types';
 // Mock dropdown to a simple structure so we can click items in jsdom
 vi.mock('@/components/ui/dropdown-menu');
 
+// The picker has its own tests; here it is its trigger and the kinds of pick
+// it can hand back: a standard emoji, one with a skin tone after it, and a
+// workspace's own.
+vi.mock('@/components/EmojiPicker', () => ({
+  EmojiPicker: ({ onSelect, trigger }: { onSelect: (emoji: string) => void; trigger: React.ReactNode }) => (
+    <span data-testid="emoji-picker">
+      {trigger}
+      <button type="button" onClick={() => onSelect(':rocket:')}>
+        Pick rocket
+      </button>
+      <button type="button" onClick={() => onSelect(':wave::skin-tone-3:')}>
+        Pick toned wave
+      </button>
+      <button type="button" onClick={() => onSelect(':partyparrot:')}>
+        Pick custom parrot
+      </button>
+    </span>
+  ),
+}));
+
 // Mock dialog so the archive confirm always shows
 vi.mock('@/components/ui/dialog', () => ({
   Dialog: ({ children, open }: { children: React.ReactNode; open: boolean }) => open ? <div data-testid="dialog">{children}</div> : null,
@@ -198,6 +218,8 @@ describe('ChannelView - actions', () => {
       { channelID: 'ch-1', userID: 'u-1', role: 'owner', displayName: 'Alice', joinedAt: '2026-01-01T00:00:00Z' },
     ];
     mockChannel.archived = false;
+    mockChannel.description = 'Old description';
+    delete mockChannel.icon;
     setDefaultApi();
   });
 
@@ -325,23 +347,126 @@ describe('ChannelView - actions', () => {
     expect(leaveItem).toBeUndefined();
   });
 
+  // The description's first line sits beside the channel name; the whole of
+  // it opens from there, and whoever may edit the channel edits it from that
+  // dialog (canEdit here because role=owner).
   it('handleDescriptionSave PATCHes the channel', async () => {
     renderChannelView();
 
-    // Click the description text (canEdit because role=owner)
-    fireEvent.click(screen.getByTitle('Click to edit description'));
-    const input = screen.getByPlaceholderText('Add a description...');
-    fireEvent.change(input, { target: { value: 'New desc' } });
-    fireEvent.keyDown(input, { key: 'Enter' });
+    fireEvent.click(screen.getByTestId('channel-description-teaser'));
+    fireEvent.click(screen.getByTestId('channel-description-edit'));
+    const input = screen.getByPlaceholderText('What is this channel for?');
+    expect(input).toHaveValue('Old description');
+    // Several lines are kept as written; only the ends are trimmed.
+    fireEvent.change(input, { target: { value: '  New desc\nRunbook: https://example.com/runbook \n' } });
+    fireEvent.click(screen.getByTestId('channel-description-save'));
 
     await waitFor(() => {
       expect(mockApiFetch).toHaveBeenCalledWith(
         '/api/v1/channels/ch-1',
         expect.objectContaining({
           method: 'PATCH',
-          body: JSON.stringify({ description: 'New desc' }),
+          body: JSON.stringify({ description: 'New desc\nRunbook: https://example.com/runbook' }),
         }),
       );
+    });
+    // The editor closes on save.
+    expect(screen.queryByPlaceholderText('What is this channel for?')).not.toBeInTheDocument();
+  });
+
+  // The channel menu's "Edit description" opens the same editor.
+  function editDescriptionFromMenu(text: string) {
+    const items = screen.getAllByTestId('dropdown-item');
+    fireEvent.click(items.find((b) => b.textContent?.includes('Edit description'))!);
+    fireEvent.change(screen.getByPlaceholderText('What is this channel for?'), { target: { value: text } });
+    fireEvent.click(screen.getByTestId('channel-description-save'));
+  }
+
+  // The channel's icon: whoever may edit the channel picks an emoji from the
+  // icon in the header; the channel keeps the emoji's name.
+  describe('channel icon', () => {
+    const iconPuts = () => mockApiFetch.mock.calls.filter(([url]) => url === '/api/v1/channels/ch-1/icon');
+    // The header's picker (the composer has one of its own).
+    const pick = (name: string) => fireEvent.click(within(screen.getByTestId('channel-title-stack')).getByRole('button', { name }));
+
+    it('picking an emoji PUTs its name as the channel icon', async () => {
+      renderChannelView();
+      expect(screen.getByRole('button', { name: 'Change channel icon' })).toBeInTheDocument();
+      pick('Pick rocket');
+      await waitFor(() => {
+        expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/channels/ch-1/icon', {
+          method: 'PUT',
+          body: JSON.stringify({ icon: 'rocket' }),
+        });
+      });
+      expect(showToast).not.toHaveBeenCalled();
+    });
+
+    it('keeps the name alone of an emoji picked with a skin tone', async () => {
+      renderChannelView();
+      pick('Pick toned wave');
+      await waitFor(() => {
+        expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/channels/ch-1/icon', {
+          method: 'PUT',
+          body: JSON.stringify({ icon: 'wave' }),
+        });
+      });
+    });
+
+    it("refuses a workspace's own emoji with a message, and sends nothing", () => {
+      renderChannelView();
+      pick('Pick custom parrot');
+      expect(showToast).toHaveBeenCalledWith("A custom emoji can't be a channel icon yet. Pick a standard one.");
+      expect(iconPuts()).toHaveLength(0);
+    });
+
+    it('"Remove icon" in the channel menu clears it', async () => {
+      mockChannel.icon = 'rocket';
+      renderChannelView();
+      // The emoji is the face of the button that changes it.
+      expect(within(screen.getByRole('button', { name: 'Change channel icon' })).getByTestId('channel-emoji')).toHaveTextContent(
+        '\u{1F680}',
+      );
+      const items = screen.getAllByTestId('dropdown-item');
+      fireEvent.click(items.find((b) => b.textContent?.includes('Remove icon'))!);
+      await waitFor(() => {
+        expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/channels/ch-1/icon', {
+          method: 'PUT',
+          body: JSON.stringify({ icon: '' }),
+        });
+      });
+      expect(showToast).not.toHaveBeenCalled();
+    });
+
+    it('a failed icon change shows an error toast', async () => {
+      rejectFor('PUT', '/api/v1/channels/ch-1/icon');
+      renderChannelView();
+      pick('Pick rocket');
+      await waitFor(() => expect(showToast).toHaveBeenCalledWith("Couldn't change the icon. Try again."));
+    });
+
+    it('a plain member sees the icon as a mark, with no way to change or remove it', () => {
+      mockChannel.icon = 'rocket';
+      mockMembers = [
+        { channelID: 'ch-1', userID: 'u-1', role: 'member', displayName: 'Alice', joinedAt: '2026-01-01T00:00:00Z' },
+      ];
+      renderChannelView();
+      expect(screen.queryByRole('button', { name: 'Change channel icon' })).not.toBeInTheDocument();
+      expect(within(screen.getByTestId('channel-title-stack')).queryByTestId('emoji-picker')).not.toBeInTheDocument();
+      expect(within(screen.getByTestId('channel-title-stack')).getByRole('img', { name: 'Public channel' })).toHaveTextContent(
+        '\u{1F680}',
+      );
+      expect(screen.queryAllByTestId('dropdown-item').some((b) => b.textContent?.includes('Remove icon'))).toBe(false);
+    });
+
+    it('an archived channel keeps its icon as it is, even for its owner', () => {
+      mockChannel.icon = 'rocket';
+      mockChannel.archived = true;
+      renderChannelView();
+      expect(screen.queryByRole('button', { name: 'Change channel icon' })).not.toBeInTheDocument();
+      expect(within(screen.getByTestId('channel-title-stack')).queryByTestId('emoji-picker')).not.toBeInTheDocument();
+      expect(within(screen.getByTestId('channel-title-stack')).getByTestId('channel-emoji')).toHaveTextContent('\u{1F680}');
+      expect(screen.queryAllByTestId('dropdown-item').some((b) => b.textContent?.includes('Remove icon'))).toBe(false);
     });
   });
 
@@ -453,10 +578,7 @@ describe('ChannelView - actions', () => {
   it('a failed description save shows an error toast', async () => {
     rejectFor('PATCH', '/api/v1/channels/ch-1');
     renderChannelView();
-    fireEvent.click(screen.getByTitle('Click to edit description'));
-    const input = screen.getByPlaceholderText('Add a description...');
-    fireEvent.change(input, { target: { value: 'New desc' } });
-    fireEvent.keyDown(input, { key: 'Enter' });
+    editDescriptionFromMenu('New desc');
     await waitFor(() => expect(showToast).toHaveBeenCalledWith("Couldn't save the description. Try again."));
   });
 });

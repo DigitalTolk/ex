@@ -12,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 
+	"github.com/DigitalTolk/ex/internal/limits"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/store"
 )
@@ -76,7 +77,7 @@ func TestEnsureChannel(t *testing.T) {
 		{Slug: "x", Type: "public"},
 		{ID: "b", Slug: "Bad Slug", Type: "public"},
 		{ID: "b", Slug: "ok", Name: "Bad Name", Type: "public"},
-		{ID: "b", Slug: "ok", Type: "public", Description: strings.Repeat("d", 300)},
+		{ID: "b", Slug: "ok", Type: "public", Description: strings.Repeat("d", limits.MaxChannelDescriptionLen+1)},
 		{ID: "b", Slug: "ok", Type: "secret"},
 	} {
 		if _, err := e.im.EnsureChannel(ctx, bad); !errors.Is(err, ErrInvalidSpec) {

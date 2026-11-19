@@ -63,7 +63,7 @@ describe('MessageItem with blocks', () => {
         body: 'Platform sync: 2 items',
         blocks: undefined,
         messageAttachments: [
-          { color: '#D97706', blocks: [{ type: 'actions', block_id: 'b1', elements: [{ type: 'button', action_id: 'vote', ex_action: 'vote', text: { type: 'plain_text', text: '+1' } }] }] },
+          { rich: true, color: '#D97706', blocks: [{ type: 'actions', block_id: 'b1', elements: [{ type: 'button', action_id: 'vote', ex_action: 'vote', text: { type: 'plain_text', text: '+1' } }] }] },
         ],
       }),
     );

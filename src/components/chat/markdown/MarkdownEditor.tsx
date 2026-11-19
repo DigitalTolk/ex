@@ -14,6 +14,7 @@ import { composerTooltips, visualViewportRepositioner } from './tooltipSpace';
 import { historyKeyBindings, withoutHistoryKeys } from '@/lib/history-shortcut';
 import { isApplePlatform } from '@/lib/platform';
 import { formatShortcuts, type FormatAction, type FormatShortcut } from '@/lib/format-shortcuts';
+import { pastedFiles } from '@/lib/clipboard';
 
 export type { WysiwygEditorHandle, ActiveFormat };
 
@@ -271,18 +272,9 @@ export const MarkdownEditor = forwardRef<WysiwygEditorHandle, Props>(function Ma
             paste: (event) => {
               const dt = event.clipboardData;
               if (!dt) return false;
-              // Collect files from both `files` (copied files) and `items`
-              // (clipboard images arrive as a `kind:'file'` item) — matching
-              // the old paste plugin so screenshots paste as attachments.
-              const files = Array.from(dt.files);
-              if (files.length === 0) {
-                for (const item of Array.from(dt.items)) {
-                  if (item.kind === 'file') {
-                    const f = item.getAsFile();
-                    if (f) files.push(f);
-                  }
-                }
-              }
+              // Screenshots and copied files attach; text copied from Word or
+              // Outlook (which also carries a picture of itself) pastes as text.
+              const files = pastedFiles(dt);
               if (files.length > 0 && cbRef.current.onPasteFiles) {
                 event.preventDefault();
                 cbRef.current.onPasteFiles(files);

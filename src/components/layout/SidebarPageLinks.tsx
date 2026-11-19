@@ -1,10 +1,8 @@
-import { Link, NavLink, useLocation } from 'react-router-dom';
-import { BookUser, Bot, FilePenLine, MessagesSquare } from 'lucide-react';
+import { NavLink, useLocation } from 'react-router-dom';
+import { BookUser, FilePenLine, MessagesSquare } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { useDrafts } from '@/hooks/useDrafts';
-import { useIsMobile } from '@/hooks/useIsMobile';
 import { useUserState } from '@/hooks/useUserState';
-import { AI_HUB_HOME, isAiHubPath } from '@/lib/ai-hub';
 
 // Same row geometry (px-2 py-1.5) as the channel rows below them, so the eye
 // doesn't catch on a height bump.
@@ -26,19 +24,15 @@ function useUnreadThreadCount(): number {
   return userState?.threadNotifications?.length ?? 0;
 }
 
-// The sidebar's top-level pages, above the channel/DM list. Activity has its
-// own sidebar mode (the Home / Activity switch above the sidebar).
+// The phone list's top-level pages, above its channels and DMs (the desktop
+// has them on the icon rail). Activity has its own tab on a phone, and the AI
+// hub isn't built for a phone yet, so it has no entry here.
 export function SidebarPageLinks({ onClose }: { onClose: () => void }) {
   const { pathname } = useLocation();
   const unreadThreads = useUnreadThreadCount();
   const { data: drafts } = useDrafts();
   const draftCount = drafts?.length ?? 0;
   const directoryActive = pathname === '/directory' || pathname.startsWith('/directory/');
-  // The AI hub entry is one link for three routes, so its active state is
-  // ours to compute — NavLink would only match /agents.
-  const aiHubActive = isAiHubPath(pathname);
-  // The AI hub isn't built for a phone yet, so the entry stays off there.
-  const isMobile = useIsMobile();
 
   return (
     <>
@@ -68,20 +62,6 @@ export function SidebarPageLinks({ onClose }: { onClose: () => void }) {
           </Badge>
         )}
       </NavLink>
-
-      {/* One entry for the whole AI hub — Agents, Skills and Connectors
-          are tabs inside it (AiHubLayout). Lit for all three routes. */}
-      {!isMobile && (
-        <Link
-          to={AI_HUB_HOME}
-          onClick={onClose}
-          aria-current={aiHubActive ? 'page' : undefined}
-          className={pageLinkClass(aiHubActive)}
-        >
-          <Bot className="h-4 w-4 shrink-0" aria-hidden="true" />
-          <span>Agents</span>
-        </Link>
-      )}
     </>
   );
 }

@@ -683,6 +683,7 @@ func (s *IncomingWebhookService) content(ctx context.Context, payload IncomingWe
 	attachments := make([]model.MessageAttachment, len(payload.Attachments))
 	for i, a := range payload.Attachments {
 		attachments[i] = refs.sanitizeAttachment(ctx, a)
+		attachments[i].Rich = rich
 	}
 	if !rich {
 		return body, attachments, nil, nil

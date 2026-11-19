@@ -39,22 +39,24 @@ export function cardTint(color?: string): RichColor | null {
   return 'purple';
 }
 
-// A tinted card's edge: its own hue, faint, so a pale tint still has a
-// shape against the chat.
-const EDGE: Record<RichColor, string> = {
-  gray: 'border-rt-gray/15',
-  brown: 'border-rt-brown/15',
-  orange: 'border-rt-orange/15',
-  yellow: 'border-rt-yellow/15',
-  green: 'border-rt-green/15',
-  blue: 'border-rt-blue/15',
-  purple: 'border-rt-purple/15',
-  red: 'border-rt-red/15',
+// A card is a bigger box than a callout or a pill, so it takes its tint
+// thinner: most of it in light mode, well under half in dark, where a full
+// tint over a whole card reads as a coloured slab. Its edge is its own hue,
+// faint, so the paler tint still has a shape against the chat.
+const CARD: Record<RichColor, string> = {
+  gray: 'bg-rt-gray-bg/70 dark:bg-rt-gray-bg/40 border-rt-gray/15',
+  brown: 'bg-rt-brown-bg/70 dark:bg-rt-brown-bg/40 border-rt-brown/15',
+  orange: 'bg-rt-orange-bg/70 dark:bg-rt-orange-bg/40 border-rt-orange/15',
+  yellow: 'bg-rt-yellow-bg/70 dark:bg-rt-yellow-bg/40 border-rt-yellow/15',
+  green: 'bg-rt-green-bg/70 dark:bg-rt-green-bg/40 border-rt-green/15',
+  blue: 'bg-rt-blue-bg/70 dark:bg-rt-blue-bg/40 border-rt-blue/15',
+  purple: 'bg-rt-purple-bg/70 dark:bg-rt-purple-bg/40 border-rt-purple/15',
+  red: 'bg-rt-red-bg/70 dark:bg-rt-red-bg/40 border-rt-red/15',
 };
 
 // cardClass is the background and border colour a card with this `color`
 // takes.
 export function cardClass(color?: string): string {
   const tint = cardTint(color);
-  return tint ? `${TINT[tint]} ${EDGE[tint]}` : 'border-border bg-background';
+  return tint ? CARD[tint] : 'border-border bg-background';
 }

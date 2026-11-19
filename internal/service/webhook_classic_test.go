@@ -219,6 +219,28 @@ func TestClassicWebhook_IgnoresCardIcons(t *testing.T) {
 	}
 }
 
+// The server marks a rich webhook's cards so the client tints them; a
+// classic webhook's cards stay unmarked, keeping their side bar, even when
+// the payload claims otherwise.
+func TestWebhookCards_MarkedRichOnlyByRichWebhooks(t *testing.T) {
+	card := []model.MessageAttachment{{Title: "service went up!", Color: "#32cd32", Rich: true}}
+	classic, classicMessages, _ := classicWebhookFixture(nil)
+	if _, err := classic.ExecuteMessage(context.Background(), "wh", IncomingWebhookPayload{Attachments: card}); err != nil {
+		t.Fatalf("classic: %v", err)
+	}
+	if a := onlyStoredMessage(t, classicMessages).MessageAttachments[0]; a.Rich {
+		t.Fatalf("classic card = %+v; want it unmarked", a)
+	}
+	rich, richMessages := blocksWebhookFixture(nil)
+	card[0].Rich = false
+	if _, err := rich.ExecuteMessage(context.Background(), "wh", IncomingWebhookPayload{Attachments: card}); err != nil {
+		t.Fatalf("rich: %v", err)
+	}
+	if a := onlyStoredMessage(t, richMessages).MessageAttachments[0]; !a.Rich {
+		t.Fatalf("rich card = %+v; want it marked", a)
+	}
+}
+
 // A rich card's icon is an emoji or an emoji's name; anything else is
 // refused, naming the card.
 func TestRichWebhook_CardIcons(t *testing.T) {
