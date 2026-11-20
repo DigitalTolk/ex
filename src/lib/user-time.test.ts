@@ -106,10 +106,14 @@ describe('localTimeZone', () => {
   });
 
   it('reports a zone the browser knows by a retired name under its current one', () => {
-    vi.stubGlobal('Intl', {
-      DateTimeFormat: () => ({ resolvedOptions: () => ({ timeZone: 'Europe/Kiev' }) }),
+    // The real engine (which knows "Europe/Kyiv") reporting the retired name,
+    // as V8 does.
+    const real = Intl.DateTimeFormat.prototype.resolvedOptions;
+    vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockImplementation(function (this: Intl.DateTimeFormat) {
+      return { ...real.call(this), timeZone: 'Europe/Kiev' };
     });
     expect(localTimeZone()).toBe('Europe/Kyiv');
+    vi.restoreAllMocks();
   });
 
   it('degrades to empty (server decides) when the browser cannot say', () => {

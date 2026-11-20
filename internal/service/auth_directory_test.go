@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/DigitalTolk/ex/internal/events"
@@ -284,5 +285,45 @@ func TestOIDCCallbackNewUserTakesTheDirectoryName(t *testing.T) {
 	}
 	if stored := env.users.users[user.ID]; stored.DisplayName != "Dir Name" || stored.Department != "Legal" {
 		t.Errorf("stored = name %q department %q, want the directory's", stored.DisplayName, stored.Department)
+	}
+}
+
+// Regression: a new account's default keywords came from the ID token's name
+// while it took the directory's, so messages naming them by that didn't alert.
+func TestOIDCCallbackNewUserKeywordsComeFromTheDirectoryName(t *testing.T) {
+	env := setupAuthService()
+	env.users.hasUsersVal = true
+	env.svc.SetDirectory(&stubDirectoryLookup{profile: &DirectoryProfile{DisplayName: "Jane Doe"}})
+
+	_, _, user, err := env.svc.HandleOIDCCallback(context.Background(), "auth-code", "state", "nonce")
+	if err != nil {
+		t.Fatalf("HandleOIDCCallback: %v", err)
+	}
+	stored := env.users.users[user.ID]
+	if want := model.NotificationKeywordsFromName("Jane Doe"); !reflect.DeepEqual(stored.NotificationSettings.Keywords, want) {
+		t.Errorf("keywords = %v, want %v (from the directory name)", stored.NotificationSettings.Keywords, want)
+	}
+}
+
+// Regression: a login whose token carries no oid looked the account up by
+// email alone, so another directory account with that address could write
+// its name, phone and title onto this one; the bound object id decides.
+func TestOIDCCallbackExistingUserLooksUpTheBoundDirectoryAccount(t *testing.T) {
+	env := setupAuthService()
+	env.oidc.userInfo.ObjectID = ""
+	existing := &model.User{
+		ID: "existing-user", Email: "oidc@example.com", DisplayName: "Name",
+		SystemRole: model.SystemRoleMember, Status: "active", MSObjectID: "oid-bound",
+	}
+	env.users.users[existing.ID] = existing
+	env.users.emailIndex[existing.Email] = existing
+	dir := &stubDirectoryLookup{profile: &DirectoryProfile{ObjectID: "oid-bound", DisplayName: "Name"}}
+	env.svc.SetDirectory(dir)
+
+	if _, _, _, err := env.svc.HandleOIDCCallback(context.Background(), "auth-code", "state", "nonce"); err != nil {
+		t.Fatalf("HandleOIDCCallback: %v", err)
+	}
+	if dir.gotObjectID != "oid-bound" {
+		t.Errorf("directory looked up object id %q, want the account's bound one", dir.gotObjectID)
 	}
 }

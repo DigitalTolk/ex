@@ -346,19 +346,34 @@ func (s *DirectorySyncService) syncUser(ctx context.Context, user *model.User) (
 	// Field-level: the copy came from the sweep's page read, and writing all
 	// of it back would undo a status change made since (the status sweep
 	// deactivating this very account, say).
-	if err := s.users.PatchUser(ctx, user.ID, store.UserPatch{
-		DisplayName: &user.DisplayName,
-		Directory:   &fields,
-		MSObjectID:  &user.MSObjectID,
-		UpdatedAt:   user.UpdatedAt,
-	}); err != nil {
+	patch := store.UserPatch{
+		Directory:  &fields,
+		MSObjectID: &user.MSObjectID,
+		UpdatedAt:  user.UpdatedAt,
+	}
+	// No directory name leaves the stored one alone — including a rename a
+	// login made since the page read.
+	if dp.DisplayName != "" {
+		patch.DisplayName = &dp.DisplayName
+	}
+	if err := s.users.PatchUser(ctx, user.ID, patch); err != nil {
 		return false, err
 	}
 	forgetCachedUser(ctx, s.cache, user.ID)
+	// Index and broadcast the stored row, not the page copy: the index
+	// carries status and role (the copy could put back an account the status
+	// sweep has just deactivated), and the copy's name may predate a login's
+	// rename the patch above left alone.
+	stored, err := s.users.GetUser(ctx, user.ID)
+	if err != nil {
+		slog.WarnContext(ctx, "directory sync: re-read after update failed", "userID", user.ID, "error", err)
+		publishUserDirectoryUpdated(ctx, s.publisher, user)
+		return true, nil
+	}
 	// A renamed user must be findable (mentions, people search) by the new
 	// name without waiting for their next login.
-	IndexUser(ctx, s.indexer, user)
-	publishUserDirectoryUpdated(ctx, s.publisher, user)
+	IndexUser(ctx, s.indexer, stored)
+	publishUserDirectoryUpdated(ctx, s.publisher, stored)
 	return true, nil
 }
 

@@ -3,7 +3,9 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/msgraph"
@@ -234,5 +236,18 @@ func TestLookupProfileMapsNameDepartmentAndTitle(t *testing.T) {
 	}
 	if dp.DisplayName != "Alice Andersson" || dp.Department != "Engineering" || dp.JobTitle != "Developer" {
 		t.Errorf("profile = %+v, want trimmed name, department and title", dp)
+	}
+}
+
+// A directory name obeys the same length rule as a rename in the app.
+func TestLookupProfileCapsTheDirectoryName(t *testing.T) {
+	long := strings.Repeat("ä", MaxUserDisplayNameLen+20)
+	graph := &stubGraph{profile: &msgraph.UserProfile{ID: "oid-1", DisplayName: long}, managerErr: msgraph.ErrNotFound}
+	dp, err := NewMSDirectoryService(graph, newMockUserStore()).LookupProfile(context.Background(), "a@example.com", "oid-1")
+	if err != nil {
+		t.Fatalf("LookupProfile: %v", err)
+	}
+	if got := utf8.RuneCountInString(dp.DisplayName); got != MaxUserDisplayNameLen {
+		t.Errorf("name is %d runes, want %d", got, MaxUserDisplayNameLen)
 	}
 }

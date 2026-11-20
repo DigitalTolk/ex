@@ -1,4 +1,7 @@
 import { partsInTimeZone } from '@/lib/datetime-input';
+import { canonicalTimeZone, currentTimeZoneName, engineAccepts, engineTimeZone } from '@/lib/time-zone-names';
+
+export { canonicalTimeZone } from '@/lib/time-zone-names';
 
 // The formatters here are built once and reused (per zone where they take
 // one): the members directory formats every member's last-seen time, local
@@ -26,36 +29,10 @@ const clockFormats = new Map<string, Intl.DateTimeFormat>();
 export function formatLocalTime(timeZone: string, at = new Date()): string {
   let format = clockFormats.get(timeZone);
   if (!format) {
-    format = new Intl.DateTimeFormat(undefined, { timeZone, hour: 'numeric', minute: '2-digit' });
+    format = new Intl.DateTimeFormat(undefined, { timeZone: engineTimeZone(timeZone), hour: 'numeric', minute: '2-digit' });
     clockFormats.set(timeZone, format);
   }
   return format.format(at);
-}
-
-// Zones the IANA database renamed. Browsers on an older zone database (and
-// V8's zone list) still report the retired spelling — "Europe/Kiev" — so it
-// would show on profiles; the server applies the same map
-// (canonicalTimeZones in internal/service/user.go) to what it stores.
-const renamedTimeZones: Record<string, string> = {
-  'Europe/Kiev': 'Europe/Kyiv',
-  'Europe/Uzhgorod': 'Europe/Kyiv',
-  'Europe/Zaporozhye': 'Europe/Kyiv',
-  'Asia/Calcutta': 'Asia/Kolkata',
-  'Asia/Saigon': 'Asia/Ho_Chi_Minh',
-  'Asia/Katmandu': 'Asia/Kathmandu',
-  'Asia/Rangoon': 'Asia/Yangon',
-  'Asia/Dacca': 'Asia/Dhaka',
-  'Asia/Thimbu': 'Asia/Thimphu',
-  'Asia/Ulan_Bator': 'Asia/Ulaanbaatar',
-  'Atlantic/Faeroe': 'Atlantic/Faroe',
-  'America/Godthab': 'America/Nuuk',
-  'Pacific/Enderbury': 'Pacific/Kanton',
-};
-
-// canonicalTimeZone is a zone's current IANA name ("Europe/Kiev" →
-// "Europe/Kyiv"); any other value comes back unchanged.
-export function canonicalTimeZone(timeZone: string): string {
-  return renamedTimeZones[timeZone] ?? timeZone;
 }
 
 // localTimeZone is the viewer's IANA zone — what "8am" means to them — under
@@ -63,27 +40,16 @@ export function canonicalTimeZone(timeZone: string): string {
 // decides (the profile's zone, then UTC).
 export function localTimeZone(): string {
   try {
-    return canonicalTimeZone(Intl.DateTimeFormat().resolvedOptions().timeZone || '');
+    return currentTimeZoneName(Intl.DateTimeFormat().resolvedOptions().timeZone || '');
   } catch {
     return '';
   }
 }
 
-const zoneValidity = new Map<string, boolean>();
-
+// isValidTimeZone: a zone this engine can format, under the name given or,
+// for a renamed zone, the retired one it knows.
 export function isValidTimeZone(timeZone?: string | null): timeZone is string {
-  if (!timeZone) return false;
-  let valid = zoneValidity.get(timeZone);
-  if (valid === undefined) {
-    try {
-      new Intl.DateTimeFormat('en-US', { timeZone }).format(new Date(0));
-      valid = true;
-    } catch {
-      valid = false;
-    }
-    zoneValidity.set(timeZone, valid);
-  }
-  return valid;
+  return !!timeZone && engineAccepts(engineTimeZone(timeZone));
 }
 
 export function formatTimeZoneName(timeZone?: string): string | null {

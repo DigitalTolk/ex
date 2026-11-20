@@ -339,3 +339,74 @@ func TestDirectorySyncSweepEachDirectoryFieldCountsAsAChange(t *testing.T) {
 		})
 	}
 }
+
+// indexedUsers records what the index was given, not just whom.
+type indexedUsers struct{ got []model.User }
+
+func (i *indexedUsers) IndexUser(_ context.Context, u *model.User) error {
+	i.got = append(i.got, *u)
+	return nil
+}
+func (i *indexedUsers) DeleteUser(context.Context, string) error { return nil }
+
+// Regression: the sweep reindexed the copy from its page read, so an
+// account the status sweep deactivated meanwhile showed in search as active.
+func TestDirectorySyncSweepIndexesTheStoredUserNotThePageCopy(t *testing.T) {
+	dir := &stubDirectoryLookup{profile: &DirectoryProfile{ObjectID: "oid-1", DisplayName: "Alicia", Phone: "+1"}}
+	page := oidcUser("u1", "a@x.se", "+1")
+	page.DisplayName, page.MSObjectID, page.Status = "Alice", "oid-1", "active"
+	env := setupDirectorySync(dir, []*model.User{page})
+	stored := *page
+	stored.Status = "deactivated"
+	env.users.users["u1"] = &stored
+	idx := &indexedUsers{}
+	env.svc.SetIndexer(idx)
+
+	env.svc.Sweep(context.Background(), time.Hour)
+
+	if len(idx.got) != 1 || idx.got[0].Status != "deactivated" || idx.got[0].DisplayName != "Alicia" {
+		t.Fatalf("indexed %+v, want the stored (deactivated) account under its new name", idx.got)
+	}
+}
+
+// A re-read that fails leaves the index alone rather than writing the stale
+// page copy.
+func TestDirectorySyncSweepSkipsIndexingWhenTheReReadFails(t *testing.T) {
+	dir := &stubDirectoryLookup{profile: &DirectoryProfile{ObjectID: "oid-1", DisplayName: "Alicia", Phone: "+1"}}
+	page := oidcUser("u1", "a@x.se", "+1")
+	page.DisplayName, page.MSObjectID = "Alice", "oid-1"
+	env := setupDirectorySync(dir, []*model.User{page})
+	env.users.getUserErr = errors.New("dynamo down")
+	idx := &indexedUsers{}
+	env.svc.SetIndexer(idx)
+
+	env.svc.Sweep(context.Background(), time.Hour)
+
+	if len(idx.got) != 0 {
+		t.Fatalf("indexed %+v after a failed re-read", idx.got)
+	}
+	if len(userUpdatedEvents(t, env.pub)) != 1 {
+		t.Fatal("the change itself must still be broadcast")
+	}
+}
+
+// Regression: with no directory name, the sweep still wrote back the name
+// from its page read, undoing a rename a login made meanwhile.
+func TestDirectorySyncSweepWithoutADirectoryNameKeepsAConcurrentRename(t *testing.T) {
+	dir := &stubDirectoryLookup{profile: &DirectoryProfile{ObjectID: "oid-1", Phone: "+1", Department: "Ops"}}
+	page := oidcUser("u1", "a@x.se", "+1")
+	page.DisplayName, page.MSObjectID = "Old Name", "oid-1"
+	env := setupDirectorySync(dir, []*model.User{page})
+	stored := *page
+	stored.DisplayName = "New Name"
+	env.users.users["u1"] = &stored
+
+	env.svc.Sweep(context.Background(), time.Hour)
+
+	if got := env.users.users["u1"]; got.DisplayName != "New Name" || got.Department != "Ops" {
+		t.Fatalf("stored name=%q department=%q, want the login's rename kept and the department synced", got.DisplayName, got.Department)
+	}
+	if ev := userUpdatedEvents(t, env.pub); len(ev) != 1 || ev[0]["displayName"] != "New Name" {
+		t.Fatalf("user.updated = %v, want one event carrying the stored name", ev)
+	}
+}

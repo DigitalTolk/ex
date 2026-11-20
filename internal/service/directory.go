@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/msgraph"
@@ -98,7 +99,7 @@ func (s *MSDirectoryService) LookupProfile(ctx context.Context, email, objectID 
 
 	dp := &DirectoryProfile{
 		ObjectID:    profile.ID,
-		DisplayName: strings.TrimSpace(profile.DisplayName),
+		DisplayName: directoryName(profile.DisplayName),
 		Phone:       profile.Phone(),
 		Department:  strings.TrimSpace(profile.Department),
 		JobTitle:    strings.TrimSpace(profile.JobTitle),
@@ -155,4 +156,14 @@ func (s *MSDirectoryService) managerRef(ctx context.Context, manager *msgraph.Us
 		}
 	}
 	return ref
+}
+
+// directoryName is the directory's name for a user under the app's own rule
+// for names: trimmed, and at most MaxUserDisplayNameLen characters.
+func directoryName(name string) string {
+	name = strings.TrimSpace(name)
+	if utf8.RuneCountInString(name) > MaxUserDisplayNameLen {
+		name = strings.TrimSpace(string([]rune(name)[:MaxUserDisplayNameLen]))
+	}
+	return name
 }
