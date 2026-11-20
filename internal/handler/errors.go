@@ -97,6 +97,12 @@ var errorMappings = []errorMapping{
 	{agents.ErrServiceUnreachable, http.StatusFailedDependency, "unreachable", ""},
 	{agents.ErrRunnerGrantInvalid, http.StatusBadRequest, "invalid_grant", ""},
 	{agents.ErrRunnerTokenRevoked, http.StatusUnauthorized, "runner_disconnected", ""},
+	{agents.ErrWorkbenchOff, http.StatusNotFound, "workbench_off", ""},
+	{agents.ErrWorkbenchConnected, http.StatusConflict, "workbench_connected", ""},
+	// 424 like ErrServiceUnreachable: Cloudflare keeps the body intact.
+	{agents.ErrWorkbenchFailed, http.StatusFailedDependency, "workbench_failed", ""},
+	{agents.ErrWorkbenchNotConnected, http.StatusNotFound, "workbench_not_connected", ""},
+	{agents.ErrWorkbenchUnreachable, http.StatusFailedDependency, "workbench_unreachable", ""},
 
 	// ---- coding tasks (the MCP tool callers key off these codes: 409s are
 	// "stop / different step", 400s "fix your input", 403s "not yours")

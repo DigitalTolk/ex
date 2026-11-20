@@ -21,18 +21,21 @@ export interface RunnerInstall {
   os?: string;
   version?: string;
   harnesses?: RunnerHarness[];
+  // The install ex set up on the agent workbench (Connect to Claude).
+  workbench?: boolean;
 }
 
 const RUNNER_TOKENS_KEY = queryKeys.runnerTokens();
 
 // useRunnerTokens lists the caller's connected computers. A runner going
 // offline has no event (its lease just lapses), so a page that shows online
-// status passes pollMs to re-check while it is open.
-export function useRunnerTokens(enabled = true, pollMs?: number) {
+// status passes pollMs to re-check while it is open: a fixed interval, or a
+// function of the current list (false stops polling).
+export function useRunnerTokens(enabled = true, pollMs?: number | ((runners: RunnerInstall[] | undefined) => number | false)) {
   return useQuery({
     queryKey: RUNNER_TOKENS_KEY,
     enabled,
-    refetchInterval: pollMs,
+    refetchInterval: typeof pollMs === 'function' ? (query) => pollMs(query.state.data) : pollMs,
     queryFn: async () => {
       const res = await apiFetch<{ runners: RunnerInstall[] }>('/api/v1/runner-tokens');
       return res?.runners ?? [];
@@ -58,5 +61,53 @@ export function useCreateRunnerGrant() {
         method: 'POST',
         body: JSON.stringify(input),
       }),
+  });
+}
+
+// How the agent workbench is setting up the caller's runner. state is
+// queued, running, done or failed; status and result are the workbench's
+// own words, whatever shape they take.
+export interface WorkbenchJob {
+  id: string;
+  state: 'queued' | 'running' | 'done' | 'failed';
+  createdAt?: string;
+  startedAt?: string;
+  finishedAt?: string;
+  status?: unknown;
+  result?: unknown;
+}
+
+export const WORKBENCH_POLL_MS = 3000;
+
+// useWorkbenchStatus follows the setup while it is queued or running, and
+// keeps asking while the workbench can't be reached. It sits under the
+// Runners key, so anything that refetches the Runners list (connecting,
+// disconnecting) refetches this too.
+export function useWorkbenchStatus(enabled: boolean) {
+  return useQuery({
+    queryKey: queryKeys.workbenchStatus(),
+    enabled,
+    queryFn: async () => (await apiFetch<WorkbenchJob>('/api/v1/runner-tokens/workbench')) ?? null,
+    refetchInterval: (query) => {
+      const state = query.state.data?.state;
+      return query.state.status === 'error' || state === 'queued' || state === 'running' ? WORKBENCH_POLL_MS : false;
+    },
+  });
+}
+
+// useConnectWorkbench is Connect to Claude: the server issues a runner token
+// and hands it to the agent workbench, which queues setting up ex-runner for
+// the caller. The token never comes to the browser. Trying again passes the
+// failed install, which goes first. Either way the Runners list is
+// refetched: a failed setup still lists its install, and a 409 means another
+// tab already connected.
+export function useConnectWorkbench() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (replace?: string) => {
+      if (replace) await apiFetch(`/api/v1/runner-tokens/${encodeURIComponent(replace)}`, { method: 'DELETE' });
+      return apiFetch<WorkbenchJob>('/api/v1/runner-tokens/workbench', { method: 'POST' });
+    },
+    onSettled: () => void queryClient.invalidateQueries({ queryKey: RUNNER_TOKENS_KEY }),
   });
 }

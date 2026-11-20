@@ -444,13 +444,13 @@ describe('MessageAttachments', () => {
 
     fireEvent.click(screen.getByLabelText('Open image zoom.png'));
     const image = screen.getByTestId('image-lightbox-image');
-    expect(image).toHaveStyle({ transform: 'translate(0px, 0px) scale(1)' });
+    expect(image).toHaveStyle({ transform: 'translate3d(0px, 0px, 0) scale(1)' });
 
     fireEvent.click(screen.getByTestId('image-lightbox-zoom-in'));
-    expect(image).toHaveStyle({ transform: 'translate(0px, 0px) scale(1.8)' });
+    expect(image).toHaveStyle({ transform: 'translate3d(0px, 0px, 0) scale(1.8)' });
 
     fireEvent.click(screen.getByTestId('image-lightbox-zoom-out'));
-    expect(image).toHaveStyle({ transform: 'translate(0px, 0px) scale(1.1)' });
+    expect(image).toHaveStyle({ transform: 'translate3d(0px, 0px, 0) scale(1.1)' });
   });
 
   it('pans a zoomed lightbox image on touch-style pointer drag', () => {
@@ -477,7 +477,7 @@ describe('MessageAttachments', () => {
     fireEvent.pointerMove(stage, { pointerId: 1, clientX: 152, clientY: 118, pointerType: 'touch' });
     fireEvent.pointerUp(stage, { pointerId: 1, clientX: 152, clientY: 118, pointerType: 'touch' });
 
-    expect(image).toHaveStyle({ transform: 'translate(32px, -22px) scale(1.8)' });
+    expect(image).toHaveStyle({ transform: 'translate3d(32px, -22px, 0) scale(1.8)' });
     expect(image).toHaveAttribute('data-pan-x', '32');
     expect(image).toHaveAttribute('data-pan-y', '-22');
   });

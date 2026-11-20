@@ -18,6 +18,7 @@ export const queryKeys = {
   // The deployed server build (hooks/useServerVersion).
   serverVersion: () => ['server-version'] as const,
   runnerTokens: () => ['runner-tokens'] as const,
+  workbenchStatus: () => ['runner-tokens', 'workbench'] as const,
   emojis: () => ['emojis'] as const,
   frequentEmojis: () => ['emojis', 'frequent'] as const,
   sidebarCategories: () => ['sidebarCategories'] as const,

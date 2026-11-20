@@ -498,6 +498,9 @@ export interface WorkspaceSettings {
   // Hosts whose links are shared SharePoint files ("*.example.com" matches
   // every subdomain); absent when SharePoint sharing is off.
   sharePointHosts?: string[];
+  // Connect to Claude on the Agents page: ex sets up a runner for the
+  // person on the shared agent workbench. Off unless the server has one.
+  workbenchEnabled?: boolean;
   // The models agents may run on, per engine (Claude Code and Bedrock); the
   // agent forms pick from these. Changed on Admin › Agents.
   agentModels?: AgentModelOption[];

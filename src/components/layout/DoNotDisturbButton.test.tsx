@@ -5,7 +5,7 @@ import { clearAccessToken } from '@/lib/api';
 import { INDEFINITE_SNOOZE_MINUTES } from '@/lib/notification-snooze';
 import { showToast } from '@/lib/toast';
 import type { User } from '@/types';
-import { DoNotDisturbButton } from './DoNotDisturbButton';
+import { DoNotDisturbButton, MobilePauseNotifications, PausedMark } from './DoNotDisturbButton';
 
 vi.mock('@/lib/toast', () => ({ showToast: vi.fn() }));
 
@@ -266,5 +266,75 @@ describe('DoNotDisturbButton, when the time runs out', () => {
     expect(trigger()).toHaveAttribute('data-paused', 'false');
     expect(trigger()).toHaveAttribute('aria-label', 'Pause notifications');
     expect(snoozeRequests).toEqual([]);
+  });
+});
+
+// The phone has no rail: Do Not Disturb is the first row of the You sheet,
+// and the You tab carries a mark while it is on.
+describe('MobilePauseNotifications', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(START);
+    serverUser = alice();
+    snoozeRequests = [];
+    snoozeFailure = null;
+    globalThis.fetch = vi.fn(server);
+  });
+
+  afterEach(() => {
+    restoreClock();
+    globalThis.fetch = originalFetch;
+    clearAccessToken();
+  });
+
+  function PhoneSheet() {
+    const { user } = useAuth();
+    if (!user) return null;
+    return (
+      <>
+        <span data-testid="you-tab">
+          You
+          <PausedMark />
+        </span>
+        <MobilePauseNotifications />
+      </>
+    );
+  }
+
+  it('pauses from the You sheet, marks the You tab, and resumes', async () => {
+    render(
+      <AuthProvider>
+        <PhoneSheet />
+      </AuthProvider>,
+    );
+    const toggle = await screen.findByTestId('mobile-dnd-toggle');
+    expect(toggle).toHaveTextContent('Pause notifications');
+    expect(screen.getByTestId('mobile-dnd-state')).toHaveTextContent('No popups, sounds or phone alerts');
+    expect(screen.queryByTestId('mobile-tab-paused')).toBeNull();
+
+    // Closed until tapped; open, it offers the choices and no Resume.
+    expect(screen.queryByTestId('mobile-dnd-1h')).toBeNull();
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.queryByTestId('mobile-dnd-resume')).toBeNull();
+    fireEvent.click(screen.getByTestId('mobile-dnd-1h'));
+
+    await waitFor(() => expect(screen.getByTestId('mobile-dnd-toggle')).toHaveTextContent('Notifications paused'));
+    expect(snoozeRequests.map((r) => r.minutes)).toEqual([60]);
+    expect(screen.getByTestId('mobile-dnd-state')).toHaveTextContent(`Paused until ${clock(snoozedUntil())}`);
+    // Picking closed the choices; the You tab now says it is paused.
+    expect(screen.queryByTestId('mobile-dnd-1h')).toBeNull();
+    expect(screen.getByTestId('you-tab').querySelector('[data-testid="mobile-tab-paused"]')).not.toBeNull();
+
+    fireEvent.click(screen.getByTestId('mobile-dnd-toggle'));
+    fireEvent.click(screen.getByTestId('mobile-dnd-resume'));
+    await waitFor(() => expect(screen.getByTestId('mobile-dnd-toggle')).toHaveTextContent('Pause notifications'));
+    expect(snoozeRequests.map((r) => r.minutes)).toEqual([60, 0]);
+    expect(screen.queryByTestId('mobile-tab-paused')).toBeNull();
+
+    // Tapping the row again closes the choices without picking.
+    fireEvent.click(screen.getByTestId('mobile-dnd-toggle'));
+    fireEvent.click(screen.getByTestId('mobile-dnd-toggle'));
+    expect(screen.queryByTestId('mobile-dnd-1h')).toBeNull();
   });
 });

@@ -435,6 +435,7 @@ func NewRouter(d *Deps) http.Handler {
 		mux.Handle("GET /api/v1/runs/{id}", middleware.WrapFunc(d.Agent.Timeline, authMW))
 		mux.Handle("GET /api/v1/runs/{id}/artifacts/{artifactID}", middleware.WrapFunc(d.Agent.GetArtifact, authMW))
 		mux.Handle("POST /api/v1/runs/{id}/approvals/{approvalID}", middleware.WrapFunc(d.Agent.DecideApproval, authMW, writeLimit))
+		mux.Handle("GET /api/v1/approvals/pending", middleware.WrapFunc(d.Agent.PendingApprovals, authMW))
 		mux.Handle("POST /api/v1/runs/{id}/stop", middleware.WrapFunc(d.Agent.StopRun, authMW, writeLimit))
 		mux.Handle("GET /api/v1/agents/{slug}/subscriptions", middleware.WrapFunc(d.Agent.ListSubscriptions, authMW))
 		mux.Handle("POST /api/v1/agents/{slug}/subscriptions", middleware.WrapFunc(d.Agent.CreateSubscription, authMW, writeLimit))
@@ -457,6 +458,8 @@ func NewRouter(d *Deps) http.Handler {
 		mux.Handle("POST /api/v1/runner-tokens/exchange", middleware.WrapFunc(d.RunnerToken.Exchange, credentialLimit("runner-exchange")))
 		mux.Handle("GET /api/v1/runner-tokens", middleware.WrapFunc(d.RunnerToken.List, authMW))
 		mux.Handle("DELETE /api/v1/runner-tokens/{id}", middleware.WrapFunc(d.RunnerToken.Revoke, authMW, writeLimit))
+		mux.Handle("POST /api/v1/runner-tokens/workbench", middleware.WrapFunc(d.RunnerToken.ConnectWorkbench, authMW, writeLimit))
+		mux.Handle("GET /api/v1/runner-tokens/workbench", middleware.WrapFunc(d.RunnerToken.WorkbenchStatus, authMW))
 		mux.Handle("POST /api/v1/agent/runner/renew", middleware.WrapFunc(d.RunnerToken.Renew, runnerMW))
 		mux.Handle("POST /api/v1/agent/runner/revoke", middleware.WrapFunc(d.RunnerToken.RevokeSelf, runnerMW))
 	}

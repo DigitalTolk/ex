@@ -88,6 +88,10 @@ export function ImageLightbox({
   const [zoomState, setZoomState] = useState({ key: '', value: 1 });
   const [panState, setPanState] = useState({ key: '', x: 0, y: 0 });
   const [swipeDrag, setSwipeDrag] = useState({ x: 0, y: 0 });
+  // A finger is panning or pinching the image: it follows them directly,
+  // with no easing, which would trail each move and restart on the next.
+  const [gesturing, setGesturing] = useState(false);
+  const imageRef = useRef<HTMLImageElement>(null);
   // gestureRef holds the active gesture as a tagged union — only one
   // of pinch/pan/swipe can be active at a time, by definition. The
   // mutual exclusivity that was previously enforced by manual null-
@@ -160,6 +164,7 @@ export function ImageLightbox({
     lastTapRef.current = null;
     tapStartRef.current = null;
     setSwipeDrag({ x: 0, y: 0 });
+    setGesturing(false);
     onClose();
   }, [onClose]);
 
@@ -215,6 +220,11 @@ export function ImageLightbox({
     ? { transform: `translate3d(${Math.round(swipeDrag.x)}px, ${Math.round(swipeDrag.y)}px, 0)`, transition: 'none' }
     : undefined;
 
+  function syncGesturing() {
+    const kind = gestureRef.current.kind;
+    setGesturing(kind === 'pan' || kind === 'pinch');
+  }
+
   function activePointers() {
     return Array.from(activePointersRef.current.entries()).map(([pointerId, p]) => ({
       pointerId,
@@ -231,11 +241,14 @@ export function ImageLightbox({
       // Synthetic browser-test PointerEvents are not active pointers.
     }
     activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    // The image scales around its center; panned, that center moved by the pan.
+    const rect = imageRef.current?.getBoundingClientRect();
+    const anchor = rect && { anchorX: rect.left + rect.width / 2 - pan.x, anchorY: rect.top + rect.height / 2 - pan.y };
     const { state, tapStart } = gestureOnPointerDown(
       gestureRef.current,
       { pointerId: e.pointerId, x: e.clientX, y: e.clientY, pointerType: e.pointerType, time: Date.now() },
       activePointers(),
-      { isImage, isMobile, zoom, panX: pan.x, panY: pan.y },
+      { isImage, isMobile, zoom, panX: pan.x, panY: pan.y, ...anchor },
     );
     gestureRef.current = state;
     tapStartRef.current = tapStart;
@@ -544,17 +557,27 @@ export function ImageLightbox({
           data-testid="image-lightbox-zoom-stage"
           onClick={(e) => e.stopPropagation()}
           ref={imageWheelRef}
-          onPointerDown={handleLightboxPointerDown}
+          onPointerDown={(e) => {
+            handleLightboxPointerDown(e);
+            syncGesturing();
+          }}
           onPointerMove={handleLightboxPointerMove}
-          onPointerUp={handleLightboxPointerUp}
-          onPointerCancel={handleLightboxPointerCancel}
+          onPointerUp={(e) => {
+            handleLightboxPointerUp(e);
+            syncGesturing();
+          }}
+          onPointerCancel={(e) => {
+            handleLightboxPointerCancel(e);
+            syncGesturing();
+          }}
           onDoubleClick={handleImageStageDoubleClick}
         >
           <img
+            ref={imageRef}
             src={current.url}
             alt={current.filename}
-            className={`pointer-events-none max-h-full max-w-full rounded-md object-contain shadow-2xl transition-transform ${zoom > 1 ? 'cursor-grab active:cursor-grabbing' : ''}`}
-            style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}
+            className={`pointer-events-none max-h-full max-w-full rounded-md object-contain shadow-2xl will-change-transform ${gesturing ? '' : 'transition-transform'} ${zoom > 1 ? 'cursor-grab active:cursor-grabbing' : ''}`}
+            style={{ transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom})` }}
             data-testid="image-lightbox-image"
             data-zoom={zoom}
             data-pan-x={pan.x}

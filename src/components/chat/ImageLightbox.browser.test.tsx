@@ -113,6 +113,35 @@ describe('ImageLightbox browser behavior', () => {
     });
   });
 
+  it('follows the fingers without easing while a pinch is held, and eases again after', async () => {
+    await render(lightbox());
+    const stage = document.querySelector('[data-testid="image-lightbox-zoom-stage"]') as HTMLElement;
+    const image = document.querySelector('[data-testid="image-lightbox-image"]') as HTMLImageElement;
+    await vi.waitFor(() => expect(image.getBoundingClientRect().width).toBeGreaterThan(0));
+    const easing = () => getComputedStyle(image).transitionDuration;
+    expect(easing()).not.toBe('0s');
+
+    const rect = image.getBoundingClientRect();
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    const fire = (type: string, pointerId: number, x: number) =>
+      stage.dispatchEvent(new PointerEvent(type, { pointerId, pointerType: 'touch', clientX: x, clientY: cy, bubbles: true }));
+    fire('pointerdown', 1, cx + 10);
+    fire('pointerdown', 2, cx + 50);
+    fire('pointermove', 1, cx - 10);
+    fire('pointermove', 2, cx + 70);
+    // Each move sets the transform at once: an eased one trails the fingers
+    // and restarts on every move, which is the jitter.
+    await vi.waitFor(() => expect(Number(image.dataset.zoom)).toBeGreaterThan(1.5));
+    expect(easing()).toBe('0s');
+    // Zoomed around the fingers (30px right of center), not the middle.
+    expect(Number(image.dataset.panX)).toBeLessThan(-20);
+
+    fire('pointerup', 1, cx - 10);
+    fire('pointerup', 2, cx + 70);
+    await vi.waitFor(() => expect(easing()).not.toBe('0s'));
+  });
+
   it('closes on a mobile downward swipe', async () => {
     if (window.innerWidth > 767) return;
     const onClose = vi.fn();

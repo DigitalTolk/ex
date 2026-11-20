@@ -1,5 +1,5 @@
-import { memo } from 'react';
-import { BellOff, BellRing } from 'lucide-react';
+import { memo, useState } from 'react';
+import { BellOff, BellRing, ChevronDown } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -64,3 +64,76 @@ export const DoNotDisturbButton = memo(function DoNotDisturbButton() {
     </DropdownMenu>
   );
 });
+
+// MobilePauseNotifications is Do Not Disturb on a phone: the first row of the
+// You sheet (a phone has no rail). It says whether alerts are paused and until
+// when; tapping it opens the same choices as the rail's menu, in place.
+export function MobilePauseNotifications() {
+  const { until, snooze } = useDoNotDisturb();
+  const [open, setOpen] = useState(false);
+  const paused = until !== null;
+  const choose = (minutes: number) => {
+    setOpen(false);
+    void snooze(minutes);
+  };
+  const row = 'flex h-12 w-full items-center gap-3 rounded-md px-3 text-left text-base hover:bg-muted active:bg-muted';
+  return (
+    <div className="rounded-lg border" data-testid="mobile-dnd">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex min-h-12 w-full items-center gap-3 rounded-lg px-3 py-2 text-left hover:bg-muted"
+        data-testid="mobile-dnd-toggle"
+      >
+        <span className={`inline-flex h-5 w-5 items-center justify-center ${paused ? 'text-brand' : 'text-muted-foreground'}`}>
+          {paused ? <BellOff className="h-4 w-4" aria-hidden="true" /> : <BellRing className="h-4 w-4" aria-hidden="true" />}
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-base">{paused ? 'Notifications paused' : 'Pause notifications'}</span>
+          <span className="block text-xs text-muted-foreground" data-testid="mobile-dnd-state">
+            {paused ? `Paused ${describeSnoozeEnd(until)}` : 'No popups, sounds or phone alerts'}
+          </span>
+        </span>
+        <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${open ? 'rotate-180' : ''}`} aria-hidden="true" />
+      </button>
+      {open && (
+        <div className="border-t p-1" role="group" aria-label="Pause notifications">
+          {paused && (
+            <button type="button" onClick={() => choose(0)} className={row} data-testid="mobile-dnd-resume">
+              <BellRing className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+              Resume notifications
+            </button>
+          )}
+          {CHOICES.map((choice) => (
+            <button
+              key={choice.testID}
+              type="button"
+              onClick={() => choose(choice.minutes())}
+              className={row}
+              data-testid={`mobile-${choice.testID}`}
+            >
+              <span className="h-4 w-4" aria-hidden="true" />
+              {choice.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// PausedMark sits on the phone's You tab while alerts are paused, so the
+// pause is never forgotten behind a sheet.
+export function PausedMark() {
+  const { until } = useDoNotDisturb();
+  if (!until) return null;
+  return (
+    <span
+      className="absolute -top-1 -right-2 inline-flex h-4 w-4 items-center justify-center rounded-full bg-sidebar text-brand"
+      data-testid="mobile-tab-paused"
+    >
+      <BellOff className="h-3 w-3" aria-hidden="true" />
+    </span>
+  );
+}

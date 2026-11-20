@@ -10,6 +10,7 @@ import {
   type AgentView,
   AUTO_ALLOW_CLASSES,
 } from '@/hooks/useAgents';
+import type { RunnerInstall } from '@/hooks/useRunnerTokens';
 import { ScheduledOrders } from './ScheduledOrders';
 import { WatchedChannels } from './WatchedChannels';
 import { InfoTip } from '@/components/ui/info-tip';
@@ -17,18 +18,32 @@ import { NativeSelect } from '@/components/ui/native-select';
 import { AgentModelSelect } from './AgentModelSelect';
 import { wholeNumberField } from '@/lib/numeric-field';
 
-function statusBadge(status: string, serverRun: boolean) {
+function statusBadge(status: string, serverRun: boolean, where: string) {
   switch (status) {
     case 'active':
       // Bedrock agents execute in the backend — "your machine" would be a lie.
-      return <Badge variant="secondary">{serverRun ? 'ready — runs on the server' : 'ready on your machine'}</Badge>;
+      return <Badge variant="secondary">{serverRun ? 'ready — runs on the server' : `ready on ${where}`}</Badge>;
     case 'needs_setup':
-      return <Badge variant="destructive">CLI missing on your machine</Badge>;
+      return <Badge variant="destructive">CLI missing on {where}</Badge>;
     case 'offline':
       return <Badge variant="outline">ex-runner not running</Badge>;
     default:
       return <Badge variant="outline">{status}</Badge>;
   }
+}
+
+// runnerPlace says where the caller's online runners are: their own
+// computer, the agent workbench, or both. A ready agent names only the
+// runners that have its CLI. Without the list (no workbench on this server)
+// it is the caller's own machine, as it always was.
+function runnerPlace(runners: RunnerInstall[] | undefined, harness: string): string {
+  const online = (runners ?? []).filter((r) => r.online);
+  const withCLI = online.filter((r) => r.harnesses?.some((h) => h.name === harness));
+  const pool = withCLI.length > 0 ? withCLI : online;
+  const workbench = pool.some((r) => r.workbench);
+  const machine = pool.some((r) => !r.workbench);
+  if (workbench && machine) return 'your machine and the agent workbench';
+  return workbench ? 'the agent workbench' : 'your machine';
 }
 
 // The card is PROGRESSIVE, twice over: collapsed it is ONE row (name, status,
@@ -41,7 +56,9 @@ function statusBadge(status: string, serverRun: boolean) {
 // who never really diverged.
 // runnersTab: the workspace has the Runners tab, so an offline hint can link
 // there (read once by the page, not per card).
-export function AgentCard({ agent, runnersTab }: { agent: AgentView; runnersTab: boolean }) {
+// runners: the caller's installs when the page has them, so a ready agent
+// can say whether it runs on their machine or the agent workbench.
+export function AgentCard({ agent, runnersTab, runners }: { agent: AgentView; runnersTab: boolean; runners?: RunnerInstall[] }) {
   const [open, setOpen] = useState(false);
   const update = useUpdateAgentPrefs();
   const defaultPersona = agent.defaultPersona ?? agent.resolved.persona ?? '';
@@ -168,10 +185,17 @@ export function AgentCard({ agent, runnersTab }: { agent: AgentView; runnersTab:
         )}
         <Bot className="h-4 w-4 shrink-0 text-muted-foreground" />
         <span className="font-semibold">@{agent.displayName}</span>
-        {statusBadge(agent.status, agent.resolved.harness === 'bedrock')}
-        {customized && <Badge variant="outline">custom prompt</Badge>}
-        {overrideCount > 0 && <Badge variant="outline">{overrideCount} customized</Badge>}
-        <span className="ml-auto text-sm text-muted-foreground">
+        {statusBadge(agent.status, agent.resolved.harness === 'bedrock', runnerPlace(runners, agent.resolved.harness))}
+        {(customized || overrideCount > 0) && (
+          // Phone: their own line under the name, after "for you"; desktop:
+          // `contents`, so they sit in the row as before.
+          <span className="contents mobile:order-last mobile:flex mobile:w-full mobile:gap-2 mobile:pl-12">
+            {customized && <Badge variant="outline">custom prompt</Badge>}
+            {overrideCount > 0 && <Badge variant="outline">{overrideCount} customized</Badge>}
+          </span>
+        )}
+        {/* Phone: under the name, not pushed right and wrapping. */}
+        <span className="ml-auto text-sm text-muted-foreground mobile:ml-0 mobile:w-full mobile:truncate mobile:pl-12 mobile:text-xs">
           for you: {agent.resolved.harness}
           {agent.resolved.model ? ` · ${agent.resolved.model}` : ''}
         </span>
@@ -208,7 +232,7 @@ export function AgentCard({ agent, runnersTab }: { agent: AgentView; runnersTab:
       {open && (
       <div className="space-y-3 border-t p-3">
         <div>
-          <div className="flex items-baseline justify-between gap-2">
+          <div className="flex items-baseline justify-between gap-2 mobile:flex-col mobile:gap-0.5">
             <Label htmlFor={`persona-${agent.slug}`}>Prompt for @{agent.displayName}</Label>
             {customized ? (
               <button

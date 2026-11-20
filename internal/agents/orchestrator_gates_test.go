@@ -23,7 +23,7 @@ func TestOrchestrator_ApprovalDecidedByInvoker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request: %v", err)
 	}
-	if fx.msgs.lastReaction() != service.StateEmojiBlocked {
+	if fx.msgs.lastReaction() != service.StateEmojiAwaiting {
 		t.Fatalf("expected ⛔ while pending, got %q", fx.msgs.lastReaction())
 	}
 
