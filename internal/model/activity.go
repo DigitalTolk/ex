@@ -40,6 +40,9 @@ const (
 	MentionKindAll     MentionKind = "all"     // @all / @channel
 	MentionKindHere    MentionKind = "here"    // @here
 	MentionKindKeyword MentionKind = "keyword" // matched one of the user's notification keywords
+	// MentionKindUserGroup: mentioned through a user group they belong to
+	// (UserGroupID / UserGroupHandle name it).
+	MentionKindUserGroup MentionKind = "usergroup"
 )
 
 // ActivityItem is one entry in a user's personal activity stream (Slack-style
@@ -80,6 +83,10 @@ type ActivityItem struct {
 	ParentName string `json:"parentName,omitempty"`
 	// MentionKind is set on ActivityMention items.
 	MentionKind MentionKind `json:"mentionKind,omitempty"`
+	// UserGroupID / UserGroupHandle name the group of a MentionKindUserGroup
+	// item; the handle is snapshotted so the row renders without a lookup.
+	UserGroupID     string `json:"userGroupID,omitempty"`
+	UserGroupHandle string `json:"userGroupHandle,omitempty"`
 }
 
 // ActivityFeedItem is an ActivityItem as listed to its owner: the stored item

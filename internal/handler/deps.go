@@ -81,8 +81,10 @@ type Deps struct {
 	// (/api/v4) bots call with their tokens.
 	Bot        *BotHandler
 	Mattermost *MattermostHandler
-	Activity   *ActivityHandler
-	Command    *CommandHandler
+	// User groups: mentionable named sets of people (/api/v1/usergroups).
+	UserGroup *UserGroupHandler
+	Activity  *ActivityHandler
+	Command   *CommandHandler
 	// SharePoint serves posted SharePoint links; nil unless SharePoint
 	// sharing is configured.
 	SharePoint *SharePointHandler

@@ -32,8 +32,9 @@ import { deactivatedLast, isDeactivated } from '@/lib/deactivated';
 import { formatLastSeen, formatLocalTime, formatTimeZoneDelta, formatTimeZoneName, isValidTimeZone, localTimeZone } from '@/lib/user-time';
 import type { Channel, User, UserChannel } from '@/types';
 import { SearchInput } from '@/components/ui/search-input';
+import { UserGroupsTab } from '@/components/usergroups/UserGroupsTab';
 
-type Tab = 'channels' | 'members';
+type Tab = 'channels' | 'members' | 'groups';
 
 // A directory row: a public channel, or one of the user's archived channels
 // (listed under every live result while searching).
@@ -53,9 +54,11 @@ export default function DirectoriesPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const activeSection = section ?? location.pathname.split('/').filter(Boolean).at(-1);
-  const tab: Tab = activeSection === 'users' ? 'members' : 'channels';
   const { user } = useAuth();
   const isAdmin = user?.systemRole === 'admin';
+  // Guests can't use user groups, so they get no Groups tab.
+  const showGroups = user?.systemRole !== 'guest';
+  const tab: Tab = activeSection === 'users' ? 'members' : activeSection === 'groups' && showGroups ? 'groups' : 'channels';
 
   return (
     <PageContainer title="Directory">
@@ -84,9 +87,25 @@ export default function DirectoriesPage() {
         >
           Members
         </button>
+        {showGroups && (
+          <button
+            role="tab"
+            aria-selected={tab === 'groups'}
+            onClick={() => navigate('/directory/groups')}
+            className={`px-3 py-2 text-sm font-medium border-b-2 -mb-px ${
+              tab === 'groups'
+                ? 'border-primary text-foreground'
+                : 'border-transparent text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            Groups
+          </button>
+        )}
       </div>
 
-      {tab === 'channels' ? <ChannelsTab /> : <MembersTab isAdmin={isAdmin} currentUserId={user?.id} />}
+      {tab === 'channels' && <ChannelsTab />}
+      {tab === 'members' && <MembersTab isAdmin={isAdmin} currentUserId={user?.id} />}
+      {tab === 'groups' && <UserGroupsTab />}
     </PageContainer>
   );
 }

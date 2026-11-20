@@ -12,13 +12,14 @@ import {
   type ChannelInput,
   type GroupName,
   type MentionUser,
+  type MentionUserGroup,
   type UserSuggestion,
 } from './mentionData';
 import type { MentionCompletion } from './optionRender';
 
 // CodeMirror completion sources for @-mentions and ~-channels. The editor's
 // document stays raw markdown: selecting a suggestion inserts the canonical
-// token (`@[id|name]`, `~[id|slug]`, `@all`/`@here`) — exactly what the message
+// token (`@[id|name]` for a person or a user group, `~[id|slug]`, `@all`/`@here`) — exactly what the message
 // renderer and the Go validator parse — followed by a trailing space. The
 // matching mirrors the old Lexical trigger: the sigil must sit at a word
 // boundary so "email@host" doesn't pop the menu.
@@ -28,6 +29,8 @@ export interface MentionProviders {
   online: () => Set<string>;
   memberIds: () => Set<string> | null;
   channels: () => ChannelInput[];
+  // The enabled user groups the author may mention; omitted → none.
+  userGroups?: () => MentionUserGroup[];
 }
 
 // Insert `text` over the matched range and drop the caret just after it.
@@ -54,7 +57,8 @@ function mkSection(name: string, rank: number): CompletionSection {
 }
 const SECTION_MEMBERS = mkSection('Channel members', 0);
 const SECTION_SPECIAL = mkSection('Special mentions', 1);
-const SECTION_OTHERS = mkSection('Not in channel', 2);
+const SECTION_USERGROUPS = mkSection('User groups', 2);
+const SECTION_OTHERS = mkSection('Not in channel', 3);
 // `useUserChannels` returns only the channels the user has joined, so the
 // ~-popup is always "My Channels".
 const SECTION_CHANNELS = mkSection('My Channels', 0);
@@ -64,7 +68,22 @@ const GROUP_DETAIL: Record<GroupName, string> = {
   here: 'Notify everyone currently online',
 };
 
+function memberCountLabel(n: number): string {
+  return `${n} ${n === 1 ? 'member' : 'members'}`;
+}
+
 function userCompletion(s: UserSuggestion, partitioned: boolean): MentionCompletion {
+  if (s.kind === 'usergroup') {
+    const description = `${s.name} · ${memberCountLabel(s.memberCount)}`;
+    return {
+      label: `@${s.handle}`,
+      detail: description,
+      type: 'keyword',
+      section: partitioned ? SECTION_USERGROUPS : undefined,
+      apply: applyInsert(`@[${s.id}|${s.handle}] `),
+      meta: { kind: 'group', title: `@${s.handle}`, description },
+    };
+  }
   if (s.kind === 'group') {
     return {
       label: `@${s.group}`,
@@ -106,6 +125,7 @@ export function userMentionSource(providers: MentionProviders): CompletionSource
       users: providers.users(),
       online: providers.online(),
       memberIds,
+      userGroups: providers.userGroups?.() ?? [],
     }).map((s) => userCompletion(s, partitioned));
     return { from: before.from, to: before.to, options, filter: false };
   };

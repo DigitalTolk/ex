@@ -41,6 +41,7 @@ type chat struct {
 	webhooks      *service.IncomingWebhookService
 	interactions  *service.InteractionService
 	bots          *service.BotService
+	userGroups    *service.UserGroupService
 	mattermost    *service.MattermostService
 	commands      *service.CommandService
 	// directorySync is nil without the Microsoft 365 integration.
@@ -53,6 +54,11 @@ type chat struct {
 	sidebar       *service.SidebarService
 	messageLinks  *service.MessageLinkService
 }
+
+// userGroupCopyTTL bounds how long a user group's Redis copy can lag a
+// change: every committed change deletes it, and this caps a copy a reader
+// stored just after that delete (or a delete that failed).
+const userGroupCopyTTL = 5 * time.Minute
 
 // newGraphClient is a seam over the Microsoft Graph constructor: the
 // configuration exposes no endpoint overrides, so tests point the client at a
@@ -199,7 +205,22 @@ func (a *App) buildChat(ctx context.Context) error {
 	// against Mattermost's REST API acts as a bot with one, through the same
 	// services the app uses (the webhooks' Mattermost markup translation
 	// included).
-	c.bots = service.NewBotService(store.NewBotStore(in.db), in.users, c.users, in.cache, in.pubsub)
+	botStore := store.NewBotStore(in.db)
+	c.bots = service.NewBotService(botStore, in.users, c.users, in.cache, in.pubsub)
+
+	// ------------------------------------------------------------- User groups
+	// "@oncall" pings every member who can see the message, as a direct
+	// @-mention: typed handles become group mentions on send, the fan-out
+	// expands them, pills and alert text show the current handle, and a
+	// demotion to guest leaves every group.
+	c.userGroups = service.NewUserGroupService(store.NewUserGroupStore(in.db), c.users, botStore, in.pubsub)
+	// A group mention reads the group from Redis; the store stays the source.
+	c.userGroups.SetCopies(cache.NewUserGroupCopies(in.cache.Client(), userGroupCopyTTL))
+	// The last sweep's group sync status, which admins read.
+	c.userGroups.SetSyncStatusCache(in.cache)
+	c.messages.SetUserGroups(c.userGroups)
+	c.mentions.SetUserGroups(c.userGroups)
+	c.users.SetUserGroups(c.userGroups)
 	c.mattermost = service.NewMattermostService(c.channels, members, in.users, c.messages, c.conversations, c.webhooks)
 
 	// ------------------------------------------------------------- Microsoft 365 (Graph)
@@ -228,6 +249,10 @@ func (a *App) buildChat(ctx context.Context) error {
 		// deactivated (sessions ended) by the next status sweep, minutes
 		// later, and reactivated once it can sign in again.
 		c.directorySync.SetStatusSync(directory, c.users)
+		// User groups follow the Entra department field: the same status
+		// sweep, which already lists every account, creates and syncs one
+		// group per department and per squad.
+		c.directorySync.SetUserGroupSync(c.userGroups)
 		c.commands.Register(service.NewTeamsMeetingCommand(service.TeamsMeetingDeps{
 			Meetings:      graph,
 			Sender:        c.messages,

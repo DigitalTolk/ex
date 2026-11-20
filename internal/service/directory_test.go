@@ -40,17 +40,21 @@ func (s *stubGraph) ListUserAccounts(context.Context) ([]msgraph.UserAccount, er
 	return s.accounts, s.accountsErr
 }
 
-func TestListAccountsMapsObjectIDToEnabled(t *testing.T) {
+func TestListAccountsMapsObjectIDToEnabledAndDepartment(t *testing.T) {
 	off := false
-	graph := &stubGraph{accounts: []msgraph.UserAccount{{ID: "oid-on"}, {ID: "oid-off", AccountEnabled: &off}}}
+	graph := &stubGraph{accounts: []msgraph.UserAccount{
+		{ID: "oid-on", Department: "Engineering - DOPE"},
+		{ID: "oid-off", AccountEnabled: &off},
+	}}
 	svc := NewMSDirectoryService(graph, newMockUserStore())
 
 	got, err := svc.ListAccounts(context.Background())
 	if err != nil {
 		t.Fatalf("ListAccounts: %v", err)
 	}
-	if len(got) != 2 || !got["oid-on"] || got["oid-off"] {
-		t.Errorf("accounts = %v, want oid-on enabled and oid-off disabled", got)
+	want := map[string]DirectoryAccount{"oid-on": {Enabled: true, Department: "Engineering - DOPE"}, "oid-off": {}}
+	if len(got) != 2 || got["oid-on"] != want["oid-on"] || got["oid-off"] != want["oid-off"] {
+		t.Errorf("accounts = %v, want %v", got, want)
 	}
 }
 

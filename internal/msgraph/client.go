@@ -21,6 +21,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -78,6 +79,8 @@ type Client struct {
 	// caching ReuseTokenSource: it fetches once, serves the cached token
 	// until tokenExpiryMargin before expiry, and serialises refreshes.
 	tokens oauth2.TokenSource
+	// wait pauses before retrying a throttled call (a seam for tests).
+	wait func(ctx context.Context, d time.Duration) error
 }
 
 // New builds a Client, or (nil, nil) when the integration is not configured
@@ -125,7 +128,20 @@ func New(cfg Config) (*Client, error) {
 		baseURL: strings.TrimRight(baseURL, "/"),
 		client:  client,
 		tokens:  oauth2.ReuseTokenSourceWithExpiry(nil, creds.TokenSource(tokenCtx), tokenExpiryMargin),
+		wait:    waitCtx,
 	}, nil
+}
+
+// waitCtx sleeps for d, or until ctx ends.
+func waitCtx(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
 }
 
 // UserProfile is the directory slice the app reads for a user.
@@ -218,6 +234,9 @@ type UserAccount struct {
 	// longer sign in). Graph returns it only when selected; nil means it
 	// wasn't reported, which never counts as disabled.
 	AccountEnabled *bool `json:"accountEnabled"`
+	// Department is the Entra department field ("Department - Squad, Squad"),
+	// which user groups follow; "" when unset.
+	Department string `json:"department"`
 }
 
 // Enabled reports whether the account can sign in. An unreported flag
@@ -227,13 +246,13 @@ func (a UserAccount) Enabled() bool {
 }
 
 // ListUserAccounts returns every user account in the tenant with its enabled
-// flag, following Graph's paging to the end: one call per 999 accounts, so a
-// whole-tenant check stays cheap enough to run every few minutes. A page
-// link pointing anywhere but this client's Graph base URL is refused rather
-// than sent the bearer token.
+// flag and department, following Graph's paging to the end: one call per 999
+// accounts, so a whole-tenant check stays cheap enough to run every few
+// minutes. A page link pointing anywhere but this client's Graph base URL is
+// refused rather than sent the bearer token.
 func (c *Client) ListUserAccounts(ctx context.Context) ([]UserAccount, error) {
 	var accounts []UserAccount
-	path := "/users?$select=id,accountEnabled&$top=999"
+	path := "/users?$select=id,accountEnabled,department&$top=999"
 	for path != "" {
 		var page struct {
 			Value    []UserAccount `json:"value"`
@@ -243,16 +262,27 @@ func (c *Client) ListUserAccounts(ctx context.Context) ([]UserAccount, error) {
 			return nil, err
 		}
 		accounts = append(accounts, page.Value...)
-		path = ""
-		if page.NextLink != "" {
-			rest, ok := strings.CutPrefix(page.NextLink, c.baseURL+"/")
-			if !ok {
-				return nil, errors.New("msgraph: next page link is outside the Graph base URL")
-			}
-			path = "/" + rest
+		next, err := c.nextPath(page.NextLink)
+		if err != nil {
+			return nil, err
 		}
+		path = next
 	}
 	return accounts, nil
+}
+
+// nextPath turns a page's @odata.nextLink into the path of the next request
+// ("" on the last page). A link pointing anywhere but this client's Graph
+// base URL is refused rather than sent the bearer token.
+func (c *Client) nextPath(nextLink string) (string, error) {
+	if nextLink == "" {
+		return "", nil
+	}
+	rest, ok := strings.CutPrefix(nextLink, c.baseURL+"/")
+	if !ok {
+		return "", errors.New("msgraph: next page link is outside the Graph base URL")
+	}
+	return "/" + rest, nil
 }
 
 // GetUserManager fetches a user's manager from the directory hierarchy.
@@ -360,14 +390,55 @@ func (c *Client) token() (string, error) {
 	return tok.AccessToken, nil
 }
 
+// Throttling: Graph answers 429 (or 503) with a Retry-After header when a
+// tenant or app goes over its limits. A call is retried up to
+// throttleAttempts times, waiting as asked (capped at maxRetryAfter, and
+// defaultRetryAfter when no wait is given).
+const (
+	throttleAttempts  = 3
+	defaultRetryAfter = 2 * time.Second
+	maxRetryAfter     = 30 * time.Second
+)
+
 // doJSON authenticates, performs one Graph call, and decodes the JSON
-// response into dest.
+// response into dest, retrying a throttled call.
 func (c *Client) doJSON(ctx context.Context, method, path string, payload, dest any) error {
+	for attempt := 1; ; attempt++ {
+		retryAfter, err := c.once(ctx, method, path, payload, dest)
+		if retryAfter == 0 || attempt == throttleAttempts {
+			return err
+		}
+		if werr := c.wait(ctx, retryAfter); werr != nil {
+			return fmt.Errorf("msgraph: request: %w", werr)
+		}
+	}
+}
+
+// retryDelay reads a throttled response's Retry-After (seconds).
+func retryDelay(res *http.Response) time.Duration {
+	secs, err := strconv.Atoi(strings.TrimSpace(res.Header.Get("Retry-After")))
+	if err != nil || secs <= 0 {
+		return defaultRetryAfter
+	}
+	return min(time.Duration(secs)*time.Second, maxRetryAfter)
+}
+
+// once performs one Graph call. A throttled answer returns how long to wait
+// before retrying, with the error to report if no retry is left.
+func (c *Client) once(ctx context.Context, method, path string, payload, dest any) (time.Duration, error) {
 	tok, err := c.token()
 	if err != nil {
-		return err
+		return 0, err
 	}
-	return call(ctx, c.client, c.baseURL+path, tok, method, payload, dest)
+	res, err := c.client.Do(newRequest(ctx, c.baseURL+path, tok, method, payload))
+	if err != nil {
+		return 0, fmt.Errorf("msgraph: request: %w", err)
+	}
+	defer drainClose(res.Body)
+	if res.StatusCode == http.StatusTooManyRequests || res.StatusCode == http.StatusServiceUnavailable {
+		return retryDelay(res), fmt.Errorf("msgraph: request throttled with status %d", res.StatusCode)
+	}
+	return 0, decodeResponse(res, dest)
 }
 
 // StatusError is a non-2xx Graph response other than 404. It carries Graph's
@@ -401,6 +472,12 @@ func (e *StatusError) Is(target error) bool {
 // response into dest (nil for a response without a body). 404 maps to
 // ErrNotFound, any other non-2xx to a *StatusError.
 func call(ctx context.Context, client *http.Client, rawURL, token, method string, payload, dest any) error {
+	return respond(client, newRequest(ctx, rawURL, token, method, payload), dest)
+}
+
+// newRequest builds an authenticated Graph request with a JSON body when
+// payload is set.
+func newRequest(ctx context.Context, rawURL, token, method string, payload any) *http.Request {
 	var body io.Reader
 	if payload != nil {
 		body = bytes.NewReader(mustJSON(json.Marshal(payload)))
@@ -411,7 +488,7 @@ func call(ctx context.Context, client *http.Client, rawURL, token, method string
 	if payload != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	return respond(client, req, dest)
+	return req
 }
 
 // respond sends req and reads Graph's answer into dest (nil to ignore it).
@@ -421,6 +498,11 @@ func respond(client *http.Client, req *http.Request, dest any) error {
 		return fmt.Errorf("msgraph: request: %w", err)
 	}
 	defer drainClose(res.Body)
+	return decodeResponse(res, dest)
+}
+
+// decodeResponse maps a Graph response to dest or an error.
+func decodeResponse(res *http.Response, dest any) error {
 	if res.StatusCode == http.StatusNotFound {
 		return ErrNotFound
 	}

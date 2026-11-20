@@ -357,6 +357,7 @@ function rowLabel(row: ActivityRow, emojiMap: Record<string, string> | undefined
       if (item.mentionKind === 'all') return 'mentioned @all';
       if (item.mentionKind === 'here') return 'mentioned @here';
       if (item.mentionKind === 'keyword') return 'used one of your keywords';
+      if (item.mentionKind === 'usergroup') return `mentioned @${item.userGroupHandle || 'a group you belong to'}`;
       return 'mentioned you';
     default:
       // A reminder (or a type this client doesn't know) has nothing to add.

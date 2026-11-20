@@ -58,6 +58,11 @@ export const MentionKindAll: MentionKind = "all"; // @all / @channel
 export const MentionKindHere: MentionKind = "here"; // @here
 export const MentionKindKeyword: MentionKind = "keyword"; // matched one of the user's notification keywords
 /**
+ * MentionKindUserGroup: mentioned through a user group they belong to
+ * (UserGroupID / UserGroupHandle name it).
+ */
+export const MentionKindUserGroup: MentionKind = "usergroup";
+/**
  * ActivityItem is one entry in a user's personal activity stream (Slack-style
  * Activity tab). It is a denormalized hint: it carries enough context (preview
  * + parent + message id) to render a row and deep-link to the source message
@@ -113,6 +118,12 @@ export interface ActivityItem {
    * MentionKind is set on ActivityMention items.
    */
   mentionKind?: MentionKind;
+  /**
+   * UserGroupID / UserGroupHandle name the group of a MentionKindUserGroup
+   * item; the handle is snapshotted so the row renders without a lookup.
+   */
+  userGroupID?: string;
+  userGroupHandle?: string;
 }
 /**
  * ActivityFeedItem is an ActivityItem as listed to its owner: the stored item
@@ -3469,6 +3480,128 @@ export interface MarkUnreadResult {
   unreadCount: number /* int64 */;
   threadRootID?: string;
   seenAt?: string /* RFC3339 */;
+}
+
+//////////
+// source: usergroup.go
+
+/**
+ * UserGroupIDPrefix starts every user-group ID. A group is mentioned with the
+ * same "@[id|label]" token as a person, so the prefix is what tells a mention
+ * parser it names a group (ULID user IDs and "bot-" IDs never start with it).
+ */
+export const UserGroupIDPrefix = "group-";
+/**
+ * UserGroup is a named set of people mentioned together through its handle
+ * (Slack-style "@oncall"). Groups come from the Microsoft 365 (Entra ID)
+ * department field: one per department and one per squad, created and kept
+ * in sync by the directory sweep. A disabled group keeps its members and its
+ * handle but is not mentionable.
+ */
+export interface UserGroup {
+  id: string;
+  handle: string;
+  name: string;
+  description: string;
+  disabled: boolean;
+  memberCount: number /* int */;
+  createdBy: string;
+  createdAt: string /* RFC3339 */;
+  updatedAt: string /* RFC3339 */;
+  /**
+   * Source is the department or squad the members come from.
+   */
+  source: UserGroupSource;
+  /**
+   * AdminEdited is set once an admin changes the name or description: the
+   * sweep then never overwrites them.
+   */
+  adminEdited?: boolean;
+  /**
+   * SyncSkipped counts the people Microsoft 365 lists for the source who
+   * aren't group members in ex (no ex account yet, a guest or deactivated).
+   */
+  syncSkipped?: number /* int */;
+  /**
+   * SyncState flags something about the source an admin should know (""
+   * when there's nothing).
+   */
+  syncState?: UserGroupSyncState;
+}
+/**
+ * UserGroupSourceKind says what a group follows.
+ */
+export type UserGroupSourceKind = string;
+export const UserGroupSourceDepartment: UserGroupSourceKind = "department";
+export const UserGroupSourceSquad: UserGroupSourceKind = "squad";
+/**
+ * UserGroupSource is the department or squad a group's members come from.
+ * Key identifies it (case- and spacing-insensitive): "dept:<department>" or
+ * "squad:<squad>".
+ */
+export interface UserGroupSource {
+  kind: UserGroupSourceKind;
+  /**
+   * Department is the department's name; for a squad, the department most
+   * of its members list.
+   */
+  department?: string;
+  squad?: string;
+  key: string;
+}
+/**
+ * UserGroupSyncState flags a group's source for admins.
+ */
+export type UserGroupSyncState = string;
+/**
+ * UserGroupSyncSourceMissing: nobody in Microsoft 365 has the department or
+ * squad any more, so the group has no members; an admin can disable it.
+ */
+export const UserGroupSyncSourceMissing: UserGroupSyncState = "source-missing";
+/**
+ * UserGroupSyncStatus is the last directory sweep's group sync, for admins.
+ */
+export interface UserGroupSyncStatus {
+  /**
+   * LastSyncedAt is when the last sweep finished; nil before the first.
+   */
+  lastSyncedAt?: string /* RFC3339 */;
+  /**
+   * Held is set while a sweep was held because far fewer departments came
+   * back than the time before; the next sweep applies if it agrees.
+   */
+  held?: boolean;
+  /**
+   * Readable is how many people had a readable department.
+   */
+  readable: number /* int */;
+  anomalies: DepartmentAnomalyReport;
+}
+/**
+ * DepartmentAnomalyReport summarises the department values the parser read
+ * only partly: a count per kind, and up to a few example values.
+ */
+export interface DepartmentAnomalyReport {
+  people: number /* int */;
+  counts: { [key: string]: number /* int */};
+  examples: DepartmentAnomaly[];
+}
+/**
+ * DepartmentAnomaly is one unusual department value and how many people
+ * have it.
+ */
+export interface DepartmentAnomaly {
+  value: string;
+  kinds: string[];
+  people: number /* int */;
+}
+/**
+ * UserGroupDetail is a group with its member IDs. The members are rows of
+ * their own (one per member), so a group has no size limit. Version is the
+ * group row's optimistic-concurrency counter.
+ */
+export interface UserGroupDetail extends UserGroup {
+  memberIds: string[];
 }
 
 //////////

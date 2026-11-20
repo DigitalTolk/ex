@@ -12,6 +12,7 @@ import type { SlashCommand } from './extensions/slashCommands';
 import { useConnectors } from '@/hooks/useConnectors';
 import { useSkills } from '@/hooks/useAgents';
 import { useProjects } from '@/hooks/useProjects';
+import { useUserGroups } from '@/hooks/useUserGroups';
 import { skillPickToken } from '@/lib/picks';
 import type { UserChannel } from '@/types';
 import { withoutDeactivated } from '@/lib/deactivated';
@@ -100,6 +101,13 @@ export const MarkdownComposer = memo(forwardRef<WysiwygEditorHandle, Props>(func
     [allProjects],
   );
 
+  // …and the enabled USER GROUPS ("@oncall"). Guests can't mention groups.
+  const { data: allUserGroups } = useUserGroups(false, !!auth?.user && auth.user.systemRole !== 'guest');
+  const mentionUserGroups = useMemo(
+    () => (allUserGroups ?? []).map((g) => ({ id: g.id, handle: g.handle, name: g.name, memberCount: g.memberCount })),
+    [allUserGroups],
+  );
+
   // Partition the @-mention list by channel membership only when we actually
   // know the roster — otherwise a mid-load empty set would mislabel everyone.
   const memberIds = useMemo<Set<string> | null>(
@@ -123,6 +131,7 @@ export const MarkdownComposer = memo(forwardRef<WysiwygEditorHandle, Props>(func
       online: () => usePresenceStore.getState().online,
       memberIds: () => memberIds,
       channels: () => channels,
+      userGroups: () => mentionUserGroups,
       customEmojis: () => customEmojis,
       skinTone: () => skinTone,
       commands: slashCommands,
@@ -134,6 +143,7 @@ export const MarkdownComposer = memo(forwardRef<WysiwygEditorHandle, Props>(func
       users,
       memberIds,
       channels,
+      mentionUserGroups,
       customEmojis,
       skinTone,
       slashCommands,

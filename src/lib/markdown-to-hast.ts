@@ -1,6 +1,6 @@
 import type { HastNode } from '@/types';
 import { EMOJI_SHORTCODE_RE, EMOJI_SHORTCODE_TONED_RE } from './emoji-shortcodes';
-import { USER_MENTION_RE, GROUP_MENTION_RE, CHANNEL_MENTION_RE } from './mention-syntax';
+import { MENTION_TOKEN_RE, GROUP_MENTION_RE, CHANNEL_MENTION_RE, mentionTokenFromMatch } from './mention-syntax';
 
 // markdownToHast is the client-side fallback parser: it turns a raw
 // markdown body into the SAME hast vocabulary the backend emits
@@ -78,15 +78,15 @@ function leadKind(re: RegExp, build: (m: RegExpExecArray) => HastNode[]): Inline
 }
 
 const INLINE_KINDS: InlineKind[] = [
-  // user mention: @[USER_ID|Display Name] — before the link matcher so
+  // user / user-group mention: @[ID|Label] — before the link matcher so
   // "@[id|name]" isn't mistaken for "@" followed by a [link](url).
-  kind(USER_MENTION_RE, (m) => [
-    el('ex-mention-user', {
-      'data-user-id': m[1].trim(),
-      'data-name': m[2].trim(),
-      'data-value': m[0],
-    }),
-  ]),
+  kind(MENTION_TOKEN_RE, (m) => {
+    const t = mentionTokenFromMatch(m);
+    if (t.kind === 'usergroup') {
+      return [el('ex-mention-usergroup', { 'data-usergroup-id': t.id, 'data-handle': t.label.trim(), 'data-value': m[0] })];
+    }
+    return [el('ex-mention-user', { 'data-user-id': t.id, 'data-name': t.label.trim(), 'data-value': m[0] })];
+  }),
 
   // channel mention: ~[CHANNEL_ID|slug]
   kind(CHANNEL_MENTION_RE, (m) => [
