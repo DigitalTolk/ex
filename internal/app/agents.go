@@ -44,6 +44,7 @@ func (a *App) buildAgents(ctx context.Context) error {
 	ag.runnerTokens.SetPublisher(in.pubsub)
 	c.users.SetRunnerRevoker(ag.runnerTokens)
 	c.auth.SetRunnerRevoker(ag.runnerTokens)
+	ag.runnerTokens.UseWorkbenchURL(cfg.WorkbenchURL, cfg.WorkbenchToken, cfg.BaseURL)
 
 	// Agents-as-users + the run orchestrator. Additive: agents ride the
 	// existing user rows, runs/timelines are new RUN# items, fan-out uses the
@@ -89,6 +90,7 @@ func (a *App) buildAgents(ctx context.Context) error {
 	// Metabase) may be reached on a private 10.x address; no other host may.
 	agents.ConfigureConnectorDomains(ctx, cfg.ConnectorPrivateDomains)
 	ag.orch.SetConnectorRegistry(ag.connectors)
+	ag.orch.SetGitHost(cfg.AgentGitHost)
 	ag.engine = newServerEngine(cfg, ag.orch, ag.connectors)
 	if ag.engine != nil {
 		ag.orch.SetServerEngine(ag.engine)

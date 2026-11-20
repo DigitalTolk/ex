@@ -117,6 +117,20 @@ describe('MessageAttachments browser', () => {
     expect(openSpy).toHaveBeenCalledWith('v-1');
   });
 
+  it("plays a phone's .mov like an MP4", async () => {
+    const movie = att({
+      id: 'v-2', filename: 'IMG_0042.MOV', contentType: 'video/quicktime',
+      thumbnailURL: 'https://thumbs/v-2', width: 1080, height: 1920,
+    });
+    batch = { map: mapOf(movie), isLoading: false };
+    await mount(<MessageAttachments ids={['v-2']} {...base()} />);
+    const thumb = document.querySelector('[data-testid="message-image-thumb"]') as HTMLButtonElement;
+    expect(thumb.getAttribute('aria-label')).toBe('Play video IMG_0042.MOV');
+    expect(thumb.querySelector('[data-testid="message-video-play"]')).not.toBeNull();
+    thumb.click();
+    expect(openSpy).toHaveBeenCalledWith('v-2');
+  });
+
   it('keeps a video without a poster as a file card', async () => {
     batch = { map: mapOf(att({ id: 'v-1', filename: 'clip.mp4', contentType: 'video/mp4' })), isLoading: false };
     await mount(<MessageAttachments ids={['v-1']} {...base()} />);

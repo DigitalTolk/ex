@@ -24,6 +24,10 @@ var ErrStaleApproval = errors.New("store: approval no longer pending")
 type approvalItem struct {
 	PK string `dynamodbav:"PK"`
 	SK string `dynamodbav:"SK"`
+	// GSI2 keys are present only while the approval is pending: they put it
+	// in its invoker's pending list. Settling removes them.
+	GSI2PK string `dynamodbav:"GSI2PK,omitempty"`
+	GSI2SK string `dynamodbav:"GSI2SK,omitempty"`
 	model.Approval
 }
 
@@ -33,6 +37,9 @@ func (s *RunStore) PutApproval(ctx context.Context, a *model.Approval) error {
 		return errors.New("store: approval requires runID and id")
 	}
 	item := approvalItem{PK: runPK(a.RunID), SK: approvalSK(a.ID), Approval: *a}
+	if a.State == model.ApprovalPending && a.InvokerID != "" {
+		item.GSI2PK, item.GSI2SK = pendingApprovalsGSI2PK(a.InvokerID), approvalSK(a.ID)
+	}
 	av := mustAttrs(attributevalue.MarshalMap(item))
 	if _, err := s.Client.PutItem(ctx, &dynamodb.PutItemInput{
 		TableName:           aws.String(s.Table),
@@ -61,7 +68,7 @@ func (s *RunStore) SettleApproval(ctx context.Context, runID, approvalID, state,
 	_, err := s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
 		TableName:           aws.String(s.Table),
 		Key:                 compositeKey(runPK(runID), approvalSK(approvalID)),
-		UpdateExpression:    aws.String("SET #st = :st, decidedBy = :by, decidedAt = :at, #ch = :ch, note = :note"),
+		UpdateExpression:    aws.String("SET #st = :st, decidedBy = :by, decidedAt = :at, #ch = :ch, note = :note REMOVE GSI2PK, GSI2SK"),
 		ConditionExpression: aws.String("#st = :pending"),
 		ExpressionAttributeNames: map[string]string{
 			"#st": "state",
@@ -121,6 +128,29 @@ func (s *RunStore) ListApprovals(ctx context.Context, runID string) ([]*model.Ap
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
 	}, "approvals")
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*model.Approval, 0, len(items))
+	for _, item := range items {
+		out = append(out, &item.Approval)
+	}
+	return out, nil
+}
+
+// ListPendingApprovals returns the approvals still waiting on invokerID, in
+// creation (ULID) order. Rows past their deadline are included: expiring
+// them is the caller's job, the same lazy expiry a poll does.
+func (s *RunStore) ListPendingApprovals(ctx context.Context, invokerID string) ([]*model.Approval, error) {
+	keyCond := expression.Key("GSI2PK").Equal(expression.Value(pendingApprovalsGSI2PK(invokerID)))
+	expr := mustExpr(expression.NewBuilder().WithKeyCondition(keyCond).Build())
+	items, err := queryAllOf[approvalItem](ctx, s.DB, &dynamodb.QueryInput{
+		TableName:                 aws.String(s.Table),
+		IndexName:                 aws.String("GSI2"),
+		KeyConditionExpression:    expr.KeyCondition(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	}, "pending approvals")
 	if err != nil {
 		return nil, err
 	}

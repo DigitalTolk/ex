@@ -65,6 +65,15 @@ describe('RunnersDialog', () => {
     await waitFor(() => expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/runner-tokens/rt1', { method: 'DELETE' }));
   });
 
+  it('shows the agent workbench as a server, a computer as a laptop', async () => {
+    const workbench = { ...mac, id: 'rt2', label: 'Agent workbench', workbench: true };
+    mockApiFetch.mockResolvedValue({ runners: [mac, workbench] });
+    renderDialog();
+    expect(await screen.findByText('Agent workbench')).toBeInTheDocument();
+    expect(screen.getByTestId('runner-row-rt2').querySelector('.lucide-server-cog')).not.toBeNull();
+    expect(screen.getByTestId('runner-row-rt1').querySelector('.lucide-laptop')).not.toBeNull();
+  });
+
   it('reports a failed disconnect', async () => {
     mockApiFetch.mockImplementation((_path: string, init?: RequestInit) =>
       init?.method === 'DELETE' ? Promise.reject(new Error('server said no')) : Promise.resolve({ runners: [mac] }),

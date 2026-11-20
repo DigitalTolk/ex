@@ -89,6 +89,14 @@ describe('MobileTabBar', () => {
     expect(tab).toHaveAttribute('aria-expanded', 'false');
   });
 
+  it('holds Home, Activity, Search and You (Agents & tools leads the Home list instead)', () => {
+    renderBar();
+    const order = Array.from(screen.getByTestId('mobile-tab-bar').querySelectorAll('[data-testid^="mobile-tab-"]')).map(
+      (el) => el.getAttribute('data-testid'),
+    );
+    expect(order).toEqual(['mobile-tab-home', 'mobile-tab-activity', 'mobile-tab-search', 'mobile-tab-you']);
+  });
+
   it('hides (but stays mounted) while the keyboard is up', () => {
     renderBar({ hidden: true });
     expect(screen.getByTestId('mobile-tab-bar')).toHaveClass('hidden');

@@ -310,8 +310,8 @@ export function Sidebar({ onClose }: SidebarProps) {
         {/* The top padding is the gap under the list's header, kept inside
             the scroller so rows scroll right up to it. */}
         <div className="w-full min-w-0 space-y-1 p-2 pt-1 mobile:pt-2 mobile:pb-[calc(var(--bottom-safe-inset,env(safe-area-inset-bottom))+0.5rem)]">
-          {/* Phone: the pages lead the list (its tab bar holds Home and
-              Activity), then a break before the channels and DMs. On desktop
+          {/* Phone: the pages lead the list, Agents & tools last (its tab bar
+              holds Home and Activity), then a break before the channels and DMs. On desktop
               every page lives on the rail, so the list holds only chats,
               channels and their categories. */}
           {isMobile && (

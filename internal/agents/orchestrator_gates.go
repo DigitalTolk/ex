@@ -68,7 +68,7 @@ type ApprovalRequest struct {
 	Purpose string
 }
 
-// RequestApproval opens a pending approval and parks the run's state on ⛔.
+// RequestApproval opens a pending approval and parks the run's state on ✋.
 // The MCP server polls ApprovalStatus until a decision or the deadline.
 func (o *Orchestrator) RequestApproval(ctx context.Context, run *model.Run, req ApprovalRequest) (*model.Approval, error) {
 	summary := strings.TrimSpace(req.Summary)
@@ -127,7 +127,7 @@ func (o *Orchestrator) RequestApproval(ctx context.Context, run *model.Run, req 
 		"approvalID": a.ID, "summary": summary, "risk": risk, "kind": kind,
 		"purpose": req.Purpose, "deadline": deadline, "options": options,
 	})
-	o.setState(ctx, run, service.StateEmojiBlocked)
+	o.setState(ctx, run, service.StateEmojiAwaiting)
 	// Published ONLY to the invoker's private inbox — an approval is a
 	// decision that belongs to whoever's machine/permissions are at stake;
 	// other channel members must never see (or be able to act on) it. There
@@ -176,7 +176,7 @@ func (o *Orchestrator) ProposeReply(ctx context.Context, run *model.Run, text, t
 	o.appendEvent(ctx, run, now.UnixNano(), run.AgentID, "reply.proposed", map[string]any{
 		"approvalID": a.ID, "chars": len(text),
 	})
-	o.setState(ctx, run, service.StateEmojiBlocked)
+	o.setState(ctx, run, service.StateEmojiAwaiting)
 	o.publishApproval(ctx, run, a)
 	return a, nil
 }
@@ -429,15 +429,10 @@ func (o *Orchestrator) consumeApproval(ctx context.Context, a *model.Approval) b
 // publishApproval fans the approval to the INVOKER'S PRIVATE INBOX only —
 // never the channel topic. Only the person whose machine/permissions are at
 // stake may see or decide it; other members receive nothing.
-func (o *Orchestrator) publishApproval(ctx context.Context, run *model.Run, a *model.Approval) {
-	// Resolve the agent's name once, for a freshly-requested gate only: the
-	// client titles its desktop alert from this frame, and a settle/expiry
-	// frame only clears a card so it needs no name.
-	agentName := ""
-	if a.State == model.ApprovalPending {
-		agentName = o.agentDisplayName(ctx, run.AgentID)
-	}
-	events.Publish(ctx, o.pub, pubsub.UserChannel(a.InvokerID), events.EventRunApproval, map[string]any{
+// approvalFrame is one approval as the client gets it: the run.approval
+// event, and each entry of the pending list a page loads.
+func approvalFrame(run *model.Run, a *model.Approval, agentName string) map[string]any {
+	return map[string]any{
 		"approvalID": a.ID,
 		"runID":      run.ID,
 		"agentID":    run.AgentID,
@@ -452,7 +447,7 @@ func (o *Orchestrator) publishApproval(ctx context.Context, run *model.Run, a *m
 		"risk":      a.Risk,
 		"kind":      a.Kind,
 		// Purpose lets the card recognise a server-raised connector gate
-		// ("connector:<slug>") and offer "always allow <slug>" — the same
+		// ("connector:<slug>") and offer "always allow <slug>": the same
 		// dial as the Connectors page's agent-use setting, one click away.
 		"purpose":  a.Purpose,
 		"options":  a.Options,
@@ -463,7 +458,52 @@ func (o *Orchestrator) publishApproval(ctx context.Context, run *model.Run, a *m
 		// message it answers, so the card can render an editable draft.
 		"replyText":        a.ReplyText,
 		"replyToMessageID": a.ReplyToMessageID,
-	})
+	}
+}
+
+// PendingApprovals lists what is still waiting on userID: the approvals,
+// questions and draft replies whose cards a page that loads or reconnects
+// would otherwise never see, since each card arrives once, as an event. One
+// past its deadline is expired on the way (which tells any open page to
+// drop it), never listed.
+func (o *Orchestrator) PendingApprovals(ctx context.Context, userID string) ([]map[string]any, error) {
+	pending, err := o.runs.ListPendingApprovals(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	out := []map[string]any{}
+	names := map[string]string{}
+	for _, a := range pending {
+		if o.now().After(a.Deadline) {
+			if _, err := o.ApprovalStatus(ctx, a.RunID, a.ID); err != nil {
+				slog.WarnContext(ctx, "pending approvals: expiring a lapsed one failed", "runID", a.RunID, "approvalID", a.ID, "error", err)
+			}
+			continue
+		}
+		run, err := o.runs.GetRun(ctx, a.RunID)
+		if err != nil {
+			slog.WarnContext(ctx, "pending approvals: run unreadable; card left out", "runID", a.RunID, "approvalID", a.ID, "error", err)
+			continue
+		}
+		name, ok := names[run.AgentID]
+		if !ok {
+			name = o.agentDisplayName(ctx, run.AgentID)
+			names[run.AgentID] = name
+		}
+		out = append(out, approvalFrame(run, a, name))
+	}
+	return out, nil
+}
+
+func (o *Orchestrator) publishApproval(ctx context.Context, run *model.Run, a *model.Approval) {
+	// Resolve the agent's name once, for a freshly-requested gate only: the
+	// client titles its desktop alert from this frame, and a settle/expiry
+	// frame only clears a card so it needs no name.
+	agentName := ""
+	if a.State == model.ApprovalPending {
+		agentName = o.agentDisplayName(ctx, run.AgentID)
+	}
+	events.Publish(ctx, o.pub, pubsub.UserChannel(a.InvokerID), events.EventRunApproval, approvalFrame(run, a, agentName))
 	// A blocking decision the user must make — deliver a distinct alert (desktop
 	// + mobile) so they notice even away from the thread, not just the live
 	// card. Only for a freshly-requested approval (state pending), never on

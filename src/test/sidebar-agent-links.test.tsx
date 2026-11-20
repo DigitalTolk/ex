@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { Sidebar } from '@/components/layout/Sidebar';
@@ -50,12 +50,12 @@ vi.mock('@/lib/api', () => ({
   ApiError: class extends Error { status = 0; },
 }));
 
-function renderAt(path: string) {
+function renderAt(path: string, onClose = vi.fn()) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
       <MemoryRouter initialEntries={[path]}>
-        <Sidebar onClose={vi.fn()} />
+        <Sidebar onClose={onClose} />
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -63,8 +63,8 @@ function renderAt(path: string) {
 
 // The AI hub's one entry lives on the desktop icon rail (SidebarRail tests
 // cover it lighting up on every hub route). The channel list itself carries
-// no page links on desktop, and the phone list has no Agents entry: the hub
-// isn't built for a phone yet.
+// no page links on desktop; on a phone, which has no rail, "Agents & tools"
+// is the last of the pages that lead the list, right under Drafts.
 describe('Sidebar and the Agents hub entry', () => {
   afterEach(() => {
     isMobileRef.value = false;
@@ -77,12 +77,22 @@ describe('Sidebar and the Agents hub entry', () => {
     }
   });
 
-  it('has no Agents entry on a phone, where the other pages stay', () => {
+  it('lists Agents & tools under Drafts on a phone, and leaves the list for it', () => {
     isMobileRef.value = true;
-    renderAt('/activity');
-    expect(screen.queryByRole('link', { name: 'Agents' })).not.toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Drafts' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Threads' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Directory' })).toBeInTheDocument();
+    const onClose = vi.fn();
+    renderAt('/activity', onClose);
+    const pages = screen.getAllByRole('link').map((l) => l.textContent?.trim());
+    expect(pages.slice(0, 4)).toEqual(['Threads', 'Directory', 'Drafts', 'Agents & tools']);
+    const agents = screen.getByRole('link', { name: 'Agents & tools' });
+    expect(agents).toHaveAttribute('href', '/agents');
+    expect(agents).not.toHaveAttribute('aria-current');
+    fireEvent.click(agents);
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it.each([['/agents'], ['/skills'], ['/connectors/cliffhub']])('lights Agents & tools on a phone at %s', (path) => {
+    isMobileRef.value = true;
+    renderAt(path);
+    expect(screen.getByRole('link', { name: 'Agents & tools' }).className).toContain('font-semibold');
   });
 });

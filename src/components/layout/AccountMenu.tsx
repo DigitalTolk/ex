@@ -30,6 +30,7 @@ import { useIsMobile } from '@/hooks/useIsMobile';
 import { isAdmin, isGuest } from '@/lib/roles';
 import { getCapacitorPlugin, isNativePlatform } from '@/lib/capacitor';
 import { SettingsDialog } from '@/components/settings/SettingsDialog';
+import { MobilePauseNotifications, PausedMark } from './DoNotDisturbButton';
 import { CustomEmojiDialog } from '@/components/emoji/CustomEmojiDialog';
 import { UserStatusDialog } from '@/components/UserStatusDialog';
 import { UserStatusIndicator } from '@/components/UserStatusIndicator';
@@ -270,6 +271,7 @@ export function AccountMenu({ variant = 'footer' }: AccountMenuProps) {
             <AvatarFallback className="bg-foreground/10 text-foreground text-xs">{initials}</AvatarFallback>
           </Avatar>
           <PresenceDot online={userOnline} size={8} inset={0} />
+          <PausedMark />
         </span>
         <span>You</span>
       </button>
@@ -422,6 +424,7 @@ export function AccountMenu({ variant = 'footer' }: AccountMenuProps) {
               </button>
             </div>
           )}
+          <MobilePauseNotifications />
           <nav className="flex flex-col gap-1" aria-label="Account menu">
             {menuActions.map((action, idx) => (
               <span key={action.key}>
