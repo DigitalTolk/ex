@@ -236,3 +236,53 @@ func TestOIDCCallbackStoresObjectIDWithoutDirectory(t *testing.T) {
 		}
 	})
 }
+
+// The directory is the source of truth for a person's name, department and
+// job title: a login stores them over the ID token's name claim and tells
+// open clients.
+func TestOIDCCallbackDirectoryNameDepartmentAndTitle(t *testing.T) {
+	env := setupAuthService()
+	pub := newMockPublisher()
+	env.svc.SetPublisher(pub)
+	existing := &model.User{
+		ID: "existing-user", Email: "oidc@example.com", DisplayName: "OIDC User",
+		SystemRole: model.SystemRoleMember, Status: "active",
+	}
+	env.users.users[existing.ID] = existing
+	env.users.emailIndex[existing.Email] = existing
+	env.svc.SetDirectory(&stubDirectoryLookup{profile: &DirectoryProfile{
+		DisplayName: "Olga Directory",
+		Department:  "Finance",
+		JobTitle:    "Controller",
+	}})
+
+	_, _, user, err := env.svc.HandleOIDCCallback(context.Background(), "auth-code", "state", "nonce")
+	if err != nil {
+		t.Fatalf("HandleOIDCCallback: %v", err)
+	}
+	stored := env.users.users[existing.ID]
+	for _, u := range []*model.User{user, stored} {
+		if u.DisplayName != "Olga Directory" || u.Department != "Finance" || u.JobTitle != "Controller" {
+			t.Errorf("user = name %q department %q title %q, want the directory's", u.DisplayName, u.Department, u.JobTitle)
+		}
+	}
+	updates := userUpdatedEvents(t, pub)
+	if len(updates) != 1 || updates[0]["department"] != "Finance" || updates[0]["jobTitle"] != "Controller" ||
+		updates[0]["displayName"] != "Olga Directory" {
+		t.Errorf("user.updated = %v, want the directory's name, department and title", updates)
+	}
+}
+
+func TestOIDCCallbackNewUserTakesTheDirectoryName(t *testing.T) {
+	env := setupAuthService()
+	env.users.hasUsersVal = true
+	env.svc.SetDirectory(&stubDirectoryLookup{profile: &DirectoryProfile{DisplayName: "Dir Name", Department: "Legal"}})
+
+	_, _, user, err := env.svc.HandleOIDCCallback(context.Background(), "auth-code", "state", "nonce")
+	if err != nil {
+		t.Fatalf("HandleOIDCCallback: %v", err)
+	}
+	if stored := env.users.users[user.ID]; stored.DisplayName != "Dir Name" || stored.Department != "Legal" {
+		t.Errorf("stored = name %q department %q, want the directory's", stored.DisplayName, stored.Department)
+	}
+}

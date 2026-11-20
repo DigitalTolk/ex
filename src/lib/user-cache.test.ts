@@ -43,3 +43,20 @@ describe('applyUserUpdatedEvent: account status', () => {
     expect(invalidate).not.toHaveBeenCalled();
   });
 });
+
+describe('applyUserUpdatedEvent: directory sync', () => {
+  it('patches a renamed user\'s name, department and title into every cached copy', () => {
+    const qc = new QueryClient();
+    qc.setQueryData(queryKeys.user('u-2'), { id: 'u-2', displayName: 'Old', department: 'Sales', jobTitle: 'Rep' });
+
+    applyUserUpdatedEvent(qc, { id: 'u-2', displayName: 'New', department: 'Engineering', jobTitle: '' }, 'u-me');
+
+    expect(qc.getQueryData(queryKeys.user('u-2'))).toEqual({
+      id: 'u-2',
+      displayName: 'New',
+      department: 'Engineering',
+      // "" is the directory clearing it.
+      jobTitle: '',
+    });
+  });
+});

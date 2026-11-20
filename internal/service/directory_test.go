@@ -220,3 +220,19 @@ func TestLookupProfileManagerWithoutAnyEmail(t *testing.T) {
 		t.Errorf("manager = %+v, want name only", dp.Manager)
 	}
 }
+
+func TestLookupProfileMapsNameDepartmentAndTitle(t *testing.T) {
+	graph := &stubGraph{
+		profile: &msgraph.UserProfile{
+			ID: "oid-1", DisplayName: " Alice Andersson ", Department: " Engineering ", JobTitle: "Developer ",
+		},
+		managerErr: msgraph.ErrNotFound,
+	}
+	dp, err := NewMSDirectoryService(graph, newMockUserStore()).LookupProfile(context.Background(), "a@example.com", "oid-1")
+	if err != nil {
+		t.Fatalf("LookupProfile: %v", err)
+	}
+	if dp.DisplayName != "Alice Andersson" || dp.Department != "Engineering" || dp.JobTitle != "Developer" {
+		t.Errorf("profile = %+v, want trimmed name, department and title", dp)
+	}
+}

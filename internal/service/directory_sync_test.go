@@ -264,3 +264,78 @@ func TestDirectorySyncSweepSkipsBots(t *testing.T) {
 		t.Errorf("bot status = %q, want it left active", got)
 	}
 }
+
+// A name, department or job title changed in Entra reaches everyone without
+// waiting for the owner's next login: the sweep writes it, reindexes the
+// renamed user for search and broadcasts the new values.
+func TestDirectorySyncSweepSyncsNameDepartmentAndTitle(t *testing.T) {
+	dir := &stubDirectoryLookup{profile: &DirectoryProfile{
+		ObjectID:    "oid-1",
+		DisplayName: "Alice Andersson",
+		Phone:       "+1",
+		Department:  "Engineering",
+		JobTitle:    "Staff Engineer",
+		Manager:     &model.UserManager{DisplayName: "Boss"},
+	}}
+	u := oidcUser("u1", "a@x.se", "+1")
+	u.DisplayName, u.MSObjectID = "Alice Smith", "oid-1"
+	u.Department, u.JobTitle = "Sales", "Engineer"
+	u.Manager = &model.UserManager{DisplayName: "Boss"}
+	env := setupDirectorySync(dir, []*model.User{u})
+	idx := &stubUserIndexer{}
+	env.svc.SetIndexer(idx)
+
+	env.svc.Sweep(context.Background(), time.Hour)
+
+	got := env.users.users["u1"]
+	if got.DisplayName != "Alice Andersson" || got.Department != "Engineering" || got.JobTitle != "Staff Engineer" {
+		t.Fatalf("not synced: name=%q department=%q title=%q", got.DisplayName, got.Department, got.JobTitle)
+	}
+	if len(idx.indexed) != 1 || idx.indexed[0] != "u1" {
+		t.Errorf("indexed = %v, want the renamed user reindexed", idx.indexed)
+	}
+	updates := userUpdatedEvents(t, env.pub)
+	if len(updates) != 1 {
+		t.Fatalf("user.updated events = %d, want 1", len(updates))
+	}
+	ev := updates[0]
+	if ev["displayName"] != "Alice Andersson" || ev["department"] != "Engineering" || ev["jobTitle"] != "Staff Engineer" {
+		t.Errorf("event = %v, want the new name, department and title", ev)
+	}
+}
+
+func TestDirectorySyncSweepEachDirectoryFieldCountsAsAChange(t *testing.T) {
+	base := func() *model.User {
+		u := oidcUser("u1", "a@x.se", "+1")
+		u.DisplayName, u.MSObjectID, u.Department, u.JobTitle = "Alice", "oid-1", "Eng", "Dev"
+		return u
+	}
+	profile := func() *DirectoryProfile {
+		return &DirectoryProfile{ObjectID: "oid-1", DisplayName: "Alice", Phone: "+1", Department: "Eng", JobTitle: "Dev"}
+	}
+	for name, edit := range map[string]func(*DirectoryProfile){
+		"unchanged":  func(*DirectoryProfile) {},
+		"department": func(dp *DirectoryProfile) { dp.Department = "Ops" },
+		"job title":  func(dp *DirectoryProfile) { dp.JobTitle = "Lead" },
+		"name":       func(dp *DirectoryProfile) { dp.DisplayName = "Alicia" },
+		// The directory reporting no name never blanks the stored one.
+		"no name": func(dp *DirectoryProfile) { dp.DisplayName = "" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			dp := profile()
+			edit(dp)
+			env := setupDirectorySync(&stubDirectoryLookup{profile: dp}, []*model.User{base()})
+			env.svc.Sweep(context.Background(), time.Hour)
+			want := 1
+			if name == "unchanged" || name == "no name" {
+				want = 0
+			}
+			if got := len(userUpdatedEvents(t, env.pub)); got != want {
+				t.Errorf("user.updated events = %d, want %d", got, want)
+			}
+			if env.users.users["u1"].DisplayName == "" {
+				t.Error("stored name was blanked")
+			}
+		})
+	}
+}

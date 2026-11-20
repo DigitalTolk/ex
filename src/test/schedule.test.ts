@@ -23,6 +23,11 @@ describe('timeZoneOptions', () => {
     expect(timeZoneOptions('')).toEqual(['UTC', 'Asia/Tokyo', 'Europe/Stockholm']);
   });
 
+  it('lists renamed zones under their current name, once', () => {
+    vi.spyOn(Intl, 'supportedValuesOf').mockReturnValue(['Europe/Kiev', 'Europe/Stockholm']);
+    expect(timeZoneOptions('Europe/Kyiv')).toEqual(['UTC', 'Europe/Kyiv', 'Europe/Stockholm']);
+  });
+
   it('still offers UTC and the viewer zone on an engine without the zone list', () => {
     vi.spyOn(Intl, 'supportedValuesOf').mockImplementation(() => {
       throw new TypeError('unsupported');

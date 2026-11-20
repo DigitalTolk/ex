@@ -95,9 +95,12 @@ export const userUpdatedSchema = z.object({
   displayName: z.string().optional(),
   avatarURL: z.string().optional(),
   status: z.string().optional(),
-  // Directory attributes (MS365 login sync). manager is a small object or
-  // explicit null (cleared in the directory); phone "" means cleared.
+  // Directory attributes (MS365 sync). manager is a small object or
+  // explicit null (cleared in the directory); "" phone, department or job
+  // title means cleared.
   phone: z.string().optional(),
+  department: z.string().optional(),
+  jobTitle: z.string().optional(),
   manager: z
     .object({ displayName: z.string(), email: z.string().optional(), userID: z.string().optional() })
     .nullable()

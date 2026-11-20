@@ -13,8 +13,8 @@ import (
 )
 
 // Periodic employee-directory re-sync. Login-time enrichment only refreshes a
-// profile when its owner signs in — with month-long sessions, a phone number
-// or manager changed in Entra while someone is on vacation would go stale for
+// profile when its owner signs in — with month-long sessions, a name, phone
+// number, department, job title or manager changed in Entra while someone is on vacation would go stale for
 // everyone else. This sweep re-reads the directory for every OIDC user on an
 // interval; the first sweep runs at boot, which doubles as the initial
 // backfill for a workspace that enabled the integration after users existed.
@@ -78,7 +78,13 @@ type DirectorySyncService struct {
 	// again.
 	accounts DirectoryAccountLister
 	status   DirectoryStatusSetter
+	// indexer keeps user search current when a sweep renames someone.
+	// Optional: only when search is configured.
+	indexer UserIndexer
 }
+
+// SetIndexer wires the user search index. Optional.
+func (s *DirectorySyncService) SetIndexer(i UserIndexer) { s.indexer = i }
 
 // SetStatusSync wires offboarding: where account standing comes from and
 // what applies it.
@@ -331,23 +337,27 @@ func (s *DirectorySyncService) syncUser(ctx context.Context, user *model.User) (
 	if dp == nil {
 		return false, nil
 	}
-	if user.Phone == dp.Phone && user.Manager.Equal(dp.Manager) &&
-		(dp.ObjectID == "" || user.MSObjectID == dp.ObjectID) {
+	if !dp.differsFrom(user) {
 		return false, nil
 	}
 	applyDirectoryProfile(user, dp)
 	user.UpdatedAt = time.Now()
+	fields := dp.fields()
 	// Field-level: the copy came from the sweep's page read, and writing all
 	// of it back would undo a status change made since (the status sweep
 	// deactivating this very account, say).
 	if err := s.users.PatchUser(ctx, user.ID, store.UserPatch{
-		Directory:  &store.UserDirectoryFields{Phone: user.Phone, Manager: user.Manager},
-		MSObjectID: &user.MSObjectID,
-		UpdatedAt:  user.UpdatedAt,
+		DisplayName: &user.DisplayName,
+		Directory:   &fields,
+		MSObjectID:  &user.MSObjectID,
+		UpdatedAt:   user.UpdatedAt,
 	}); err != nil {
 		return false, err
 	}
 	forgetCachedUser(ctx, s.cache, user.ID)
+	// A renamed user must be findable (mentions, people search) by the new
+	// name without waiting for their next login.
+	IndexUser(ctx, s.indexer, user)
 	publishUserDirectoryUpdated(ctx, s.publisher, user)
 	return true, nil
 }
@@ -361,6 +371,8 @@ func publishUserDirectoryUpdated(ctx context.Context, p Publisher, user *model.U
 		"displayName": user.DisplayName,
 		"avatarURL":   user.AvatarURL,
 		"phone":       user.Phone,
+		"department":  user.Department,
+		"jobTitle":    user.JobTitle,
 		"manager":     user.Manager,
 	})
 }

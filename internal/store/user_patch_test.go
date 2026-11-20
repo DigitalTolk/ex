@@ -79,7 +79,7 @@ func TestUserStore_PatchUserEveryField(t *testing.T) {
 		OIDCSubject:       strp("sub-1"),
 		ExpectOIDCSubject: strp(""),
 		DeactivatedBy:     strp(model.DeactivatedByAdmin),
-		Directory:         &UserDirectoryFields{Phone: "+46 2", Manager: &model.UserManager{DisplayName: "New Boss"}},
+		Directory:         &UserDirectoryFields{Phone: "+46 2", Department: "Ops", JobTitle: "Lead", Manager: &model.UserManager{DisplayName: "New Boss"}},
 		UpdatedAt:         now,
 	})
 	if err != nil {
@@ -90,6 +90,7 @@ func TestUserStore_PatchUserEveryField(t *testing.T) {
 		got.AuthProvider != oidc || got.PasswordHash != "" || got.MSObjectID != "oid-1" ||
 		got.OIDCIssuer != "https://issuer.example.com" || got.OIDCSubject != "sub-1" ||
 		got.DeactivatedBy != model.DeactivatedByAdmin || got.Phone != "+46 2" ||
+		got.Department != "Ops" || got.JobTitle != "Lead" ||
 		got.Manager == nil || got.Manager.DisplayName != "New Boss" || !got.UpdatedAt.Equal(now) {
 		t.Fatalf("patch not applied: %+v", got)
 	}
@@ -103,7 +104,7 @@ func TestUserStore_PatchUserEveryField(t *testing.T) {
 		t.Fatalf("patch removals: %v", err)
 	}
 	got, _ = s.GetUser(ctx, "u-all")
-	if got.TimeZone != "" || got.MSObjectID != "" || got.DeactivatedBy != "" || got.Phone != "" || got.Manager != nil {
+	if got.TimeZone != "" || got.MSObjectID != "" || got.DeactivatedBy != "" || got.Phone != "" || got.Department != "" || got.JobTitle != "" || got.Manager != nil {
 		t.Fatalf("removals not applied: %+v", got)
 	}
 }

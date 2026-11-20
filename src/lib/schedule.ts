@@ -8,6 +8,8 @@
 // express still render readably here, so a spec written by other means (or a
 // future advanced field) never shows as gibberish.
 
+import { canonicalTimeZone } from '@/lib/user-time';
+
 export type Cadence = 'daily' | 'weekdays' | 'weekly';
 
 export const WEEKDAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
@@ -15,11 +17,11 @@ export const WEEKDAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] a
 // timeZoneOptions is what the form's zone picker offers: every IANA zone the
 // browser knows, plus UTC and the given zones (the viewer's own, an edited
 // order's), which the list can omit — V8 leaves out "UTC" and reports some
-// zones under legacy names.
+// zones under legacy names, which are listed under their current ones.
 export function timeZoneOptions(...current: string[]): string[] {
   let zones: string[] = [];
   try {
-    zones = Intl.supportedValuesOf('timeZone');
+    zones = [...new Set(Intl.supportedValuesOf('timeZone').map(canonicalTimeZone))];
   } catch {
     // Older engine: the picker still offers UTC and the given zones.
   }

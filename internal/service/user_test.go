@@ -969,6 +969,41 @@ func TestUserService_PatchTimeZoneIfChanged(t *testing.T) {
 	}
 }
 
+// A browser on an older time-zone database still reports Kyiv under its
+// retired spelling; the profile stores (and so shows) the current name, and a
+// profile saved before the fix heals on the next report.
+func TestUserService_PatchTimeZoneIfChanged_StoresCurrentZoneNames(t *testing.T) {
+	users := newMockUserStore()
+	users.users["u-kyiv"] = &model.User{ID: "u-kyiv", Email: "k@example.com", DisplayName: "K", TimeZone: "Europe/Kiev"}
+	pub := newMockPublisher()
+	svc := NewUserService(users, newMockCache(), nil, pub)
+
+	got, err := svc.PatchTimeZoneIfChanged(context.Background(), "u-kyiv", "Europe/Kiev")
+	if err != nil {
+		t.Fatalf("PatchTimeZoneIfChanged: %v", err)
+	}
+	if got.TimeZone != "Europe/Kyiv" || users.users["u-kyiv"].TimeZone != "Europe/Kyiv" {
+		t.Fatalf("TimeZone = %q (stored %q), want Europe/Kyiv", got.TimeZone, users.users["u-kyiv"].TimeZone)
+	}
+	if len(pub.published) != 1 {
+		t.Fatalf("published = %d, want 1 user.updated", len(pub.published))
+	}
+}
+
+func TestNormalizeWritableTimeZone_CurrentNames(t *testing.T) {
+	for in, want := range map[string]string{
+		"Europe/Kiev":       "Europe/Kyiv",
+		"Europe/Zaporozhye": "Europe/Kyiv",
+		"Asia/Calcutta":     "Asia/Kolkata",
+		" Europe/Kyiv ":     "Europe/Kyiv",
+		"Europe/Stockholm":  "Europe/Stockholm",
+	} {
+		if got, ok := normalizeWritableTimeZone(in); !ok || got != want {
+			t.Errorf("normalizeWritableTimeZone(%q) = %q, %v; want %q", in, got, ok, want)
+		}
+	}
+}
+
 func TestUserService_SetUserStatusMessage_PersistsExpiredStatusForSweeper(t *testing.T) {
 	users := newMockUserStore()
 	users.users["u-status-expired"] = &model.User{

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  canonicalTimeZone,
   formatLastSeen,
   formatLocalTime,
   formatTimeZoneName,
@@ -78,7 +79,7 @@ describe('user-time helpers', () => {
 
   it('detects the browser timezone', () => {
     const detected = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
-    expect(localTimeZone()).toBe(detected);
+    expect(localTimeZone()).toBe(canonicalTimeZone(detected));
   });
 
   it('formats IANA timezone names for display', () => {
@@ -86,6 +87,12 @@ describe('user-time helpers', () => {
     expect(formatTimeZoneName('UTC')).toBe('UTC');
     expect(formatTimeZoneName('Not/AZone')).toBeNull();
     expect(formatTimeZoneName()).toBeNull();
+  });
+
+  it('shows renamed zones under their current name (Kyiv, not Kiev)', () => {
+    expect(formatTimeZoneName('Europe/Kiev')).toBe('Kyiv, Europe');
+    expect(formatTimeZoneName('Europe/Kyiv')).toBe('Kyiv, Europe');
+    expect(formatTimeZoneName('Asia/Calcutta')).toBe('Kolkata, Asia');
   });
 });
 describe('localTimeZone', () => {
@@ -96,6 +103,13 @@ describe('localTimeZone', () => {
       DateTimeFormat: () => ({ resolvedOptions: () => ({ timeZone: 'Asia/Kolkata' }) }),
     });
     expect(localTimeZone()).toBe('Asia/Kolkata');
+  });
+
+  it('reports a zone the browser knows by a retired name under its current one', () => {
+    vi.stubGlobal('Intl', {
+      DateTimeFormat: () => ({ resolvedOptions: () => ({ timeZone: 'Europe/Kiev' }) }),
+    });
+    expect(localTimeZone()).toBe('Europe/Kyiv');
   });
 
   it('degrades to empty (server decides) when the browser cannot say', () => {

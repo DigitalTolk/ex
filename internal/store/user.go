@@ -290,8 +290,8 @@ type UserPatch struct {
 	ExpectOIDCSubject *string
 	// DeactivatedBy records who deactivated the account ("" clears it).
 	DeactivatedBy *string
-	// Directory writes the directory-owned attributes (phone + manager)
-	// together.
+	// Directory writes the directory-owned attributes (phone, department,
+	// job title + manager) together.
 	Directory *UserDirectoryFields
 	// UpdatedAt is written when non-zero.
 	UpdatedAt time.Time
@@ -299,8 +299,10 @@ type UserPatch struct {
 
 // UserDirectoryFields are the directory-synced profile attributes.
 type UserDirectoryFields struct {
-	Phone   string
-	Manager *model.UserManager
+	Phone      string
+	Department string
+	JobTitle   string
+	Manager    *model.UserManager
 }
 
 // PatchUser applies p to the existing user id (ErrNotFound when there is
@@ -355,6 +357,8 @@ func (s *UserStoreImpl) PatchUser(ctx context.Context, id string, p UserPatch) e
 	}
 	if p.Directory != nil {
 		setOrRemove("phone", p.Directory.Phone)
+		setOrRemove("department", p.Directory.Department)
+		setOrRemove("jobTitle", p.Directory.JobTitle)
 		if p.Directory.Manager == nil {
 			upd = upd.Remove(expression.Name("manager"))
 		} else {

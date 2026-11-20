@@ -145,6 +145,8 @@ func applyUserPatchForTest(u *model.User, p store.UserPatch) error {
 	}
 	if p.Directory != nil {
 		u.Phone = p.Directory.Phone
+		u.Department = p.Directory.Department
+		u.JobTitle = p.Directory.JobTitle
 		u.Manager = p.Directory.Manager
 	}
 	if !p.UpdatedAt.IsZero() {

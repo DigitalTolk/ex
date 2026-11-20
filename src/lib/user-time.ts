@@ -32,12 +32,38 @@ export function formatLocalTime(timeZone: string, at = new Date()): string {
   return format.format(at);
 }
 
-// localTimeZone is the viewer's IANA zone — what "8am" means to them. A
-// browser that can't report one gives '' and the server decides (the
-// profile's zone, then UTC).
+// Zones the IANA database renamed. Browsers on an older zone database (and
+// V8's zone list) still report the retired spelling — "Europe/Kiev" — so it
+// would show on profiles; the server applies the same map
+// (canonicalTimeZones in internal/service/user.go) to what it stores.
+const renamedTimeZones: Record<string, string> = {
+  'Europe/Kiev': 'Europe/Kyiv',
+  'Europe/Uzhgorod': 'Europe/Kyiv',
+  'Europe/Zaporozhye': 'Europe/Kyiv',
+  'Asia/Calcutta': 'Asia/Kolkata',
+  'Asia/Saigon': 'Asia/Ho_Chi_Minh',
+  'Asia/Katmandu': 'Asia/Kathmandu',
+  'Asia/Rangoon': 'Asia/Yangon',
+  'Asia/Dacca': 'Asia/Dhaka',
+  'Asia/Thimbu': 'Asia/Thimphu',
+  'Asia/Ulan_Bator': 'Asia/Ulaanbaatar',
+  'Atlantic/Faeroe': 'Atlantic/Faroe',
+  'America/Godthab': 'America/Nuuk',
+  'Pacific/Enderbury': 'Pacific/Kanton',
+};
+
+// canonicalTimeZone is a zone's current IANA name ("Europe/Kiev" →
+// "Europe/Kyiv"); any other value comes back unchanged.
+export function canonicalTimeZone(timeZone: string): string {
+  return renamedTimeZones[timeZone] ?? timeZone;
+}
+
+// localTimeZone is the viewer's IANA zone — what "8am" means to them — under
+// its current name. A browser that can't report one gives '' and the server
+// decides (the profile's zone, then UTC).
 export function localTimeZone(): string {
   try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+    return canonicalTimeZone(Intl.DateTimeFormat().resolvedOptions().timeZone || '');
   } catch {
     return '';
   }
@@ -62,7 +88,7 @@ export function isValidTimeZone(timeZone?: string | null): timeZone is string {
 
 export function formatTimeZoneName(timeZone?: string): string | null {
   if (!isValidTimeZone(timeZone)) return null;
-  const parts = timeZone.split('/');
+  const parts = canonicalTimeZone(timeZone).split('/');
   if (parts.length === 1) return parts[0].replaceAll('_', ' ');
   /* istanbul ignore next -- parts comes from a non-empty string split, so .at(-1) is always a string; the ?? timeZone arm is defensive. */
   const city = parts.at(-1)?.replaceAll('_', ' ') ?? timeZone;

@@ -86,8 +86,10 @@ describe('DirectoriesPage', () => {
         systemRole: 'member',
         status: 'active',
         phone: '+46 70 123 45 67',
+        jobTitle: 'Staff Engineer',
+        department: 'Engineering',
         manager: { displayName: 'Boss Person', email: 'boss@b.c', userID: 'u-9' },
-        timeZone: 'Asia/Tokyo',
+        timeZone: 'Europe/Kiev',
         lastSeenAt: '2026-07-13T10:00:00Z',
       },
       { id: 'u-3', email: 'c@b.c', displayName: 'Cara', systemRole: 'member', status: 'active' },
@@ -101,15 +103,22 @@ describe('DirectoriesPage', () => {
     expect(tel).not.toBeNull();
     expect(tel!.textContent).toBe('+46 70 123 45 67');
     expect(screen.getByTestId('directory-meta-manager').textContent).toContain('Boss Person');
+    expect(screen.getByTestId('directory-meta-title').textContent).toContain('Staff Engineer');
+    expect(screen.getByTestId('directory-meta-department').textContent).toContain('Engineering');
+    // A zone stored under its retired name shows under the current one.
+    expect(screen.getByTestId('members-grid').textContent).toContain('Kyiv, Europe');
+    expect(screen.getByTestId('members-grid').textContent).not.toContain('Kiev');
 
     // Cara has no synced attributes — exactly one of each row exists.
     expect(screen.getAllByTestId('directory-meta-phone')).toHaveLength(1);
     expect(screen.getAllByTestId('directory-meta-manager')).toHaveLength(1);
+    expect(screen.getAllByTestId('directory-meta-title')).toHaveLength(1);
+    expect(screen.getAllByTestId('directory-meta-department')).toHaveLength(1);
 
     // Row order matches the hover card: contact info, then the time group.
     const card = phoneRow.closest('dl')!;
     const labels = Array.from(card.querySelectorAll('dt')).map((d) => d.textContent);
-    expect(labels).toEqual(['Phone', 'Manager', 'Local time', 'Timezone', 'Last seen']);
+    expect(labels).toEqual(['Phone', 'Title', 'Department', 'Manager', 'Local time', 'Timezone', 'Last seen']);
   });
 
   it('shows a generic error when an admin role change rejects with a non-Error', async () => {
