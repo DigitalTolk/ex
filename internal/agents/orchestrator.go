@@ -4026,6 +4026,9 @@ func failNotice(reason string) string {
 	case "turn_limit":
 		return "❌ stopped: ran out of steps before reaching an answer. Ask again with more to go on " +
 			"(which data, field or period to use), or split the question up."
+	case "model_not_enabled":
+		return "❌ stopped: the model set for this agent (" + detail + ") isn't enabled on this server. " +
+			"Pick another model in the agent's settings, or ask an admin to enable this one."
 	}
 	if head == "" {
 		return "❌ stopped before finishing, for an unrecorded reason. Ask again and I'll retry."
