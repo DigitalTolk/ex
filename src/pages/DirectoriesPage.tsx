@@ -428,6 +428,14 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
                       </dd>
                     </div>
                   )}
+                  {u.squad && (
+                    <div className="md:flex md:justify-between md:gap-2" data-testid="directory-meta-squad">
+                      <dt className="font-medium text-muted-foreground md:font-normal">Squad</dt>
+                      <dd className="mt-0.5 min-w-0 truncate text-foreground md:mt-0 md:text-right md:text-muted-foreground">
+                        {u.squad}
+                      </dd>
+                    </div>
+                  )}
                   {u.manager && (
                     <div className="md:flex md:justify-between md:gap-2" data-testid="directory-meta-manager">
                       <dt className="font-medium text-muted-foreground md:font-normal">Manager</dt>

@@ -387,6 +387,7 @@ func publishUserDirectoryUpdated(ctx context.Context, p Publisher, user *model.U
 		"avatarURL":   user.AvatarURL,
 		"phone":       user.Phone,
 		"department":  user.Department,
+		"squad":       user.Squad,
 		"jobTitle":    user.JobTitle,
 		"manager":     user.Manager,
 	})

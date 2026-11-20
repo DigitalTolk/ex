@@ -251,3 +251,31 @@ func TestLookupProfileCapsTheDirectoryName(t *testing.T) {
 		t.Errorf("name is %d runes, want %d", got, MaxUserDisplayNameLen)
 	}
 }
+
+// The directory's department carries the squads too, as Cliffhub's sync
+// writes them ("Department - Squad", several squads joined with ", "); ex
+// keeps the two apart.
+func TestLookupProfileSplitsDepartmentAndSquad(t *testing.T) {
+	for _, c := range []struct{ in, department, squad string }{
+		{"Engineering - Platform", "Engineering", "Platform"},
+		{"Engineering - Platform, SRE", "Engineering", "Platform, SRE"},
+		{" Engineering  -  Platform ", "Engineering", "Platform"},
+		// Only the first separator splits: a squad may itself contain one.
+		{"Engineering - Data - Ingest", "Engineering", "Data - Ingest"},
+		{"Engineering", "Engineering", ""},
+		// A hyphen inside a word is no separator.
+		{"Sales-Ops", "Sales-Ops", ""},
+		{"Engineering - ", "Engineering", ""},
+		{" - Platform", "", "Platform"},
+		{"", "", ""},
+	} {
+		graph := &stubGraph{profile: &msgraph.UserProfile{ID: "oid-1", Department: c.in}, managerErr: msgraph.ErrNotFound}
+		dp, err := NewMSDirectoryService(graph, newMockUserStore()).LookupProfile(context.Background(), "a@example.com", "oid-1")
+		if err != nil {
+			t.Fatalf("LookupProfile(%q): %v", c.in, err)
+		}
+		if dp.Department != c.department || dp.Squad != c.squad {
+			t.Errorf("%q → department %q squad %q, want %q / %q", c.in, dp.Department, dp.Squad, c.department, c.squad)
+		}
+	}
+}

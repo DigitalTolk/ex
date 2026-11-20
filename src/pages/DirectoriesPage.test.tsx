@@ -88,6 +88,7 @@ describe('DirectoriesPage', () => {
         phone: '+46 70 123 45 67',
         jobTitle: 'Staff Engineer',
         department: 'Engineering',
+        squad: 'Platform, SRE',
         manager: { displayName: 'Boss Person', email: 'boss@b.c', userID: 'u-9' },
         timeZone: 'Europe/Kiev',
         lastSeenAt: '2026-07-13T10:00:00Z',
@@ -105,6 +106,8 @@ describe('DirectoriesPage', () => {
     expect(screen.getByTestId('directory-meta-manager').textContent).toContain('Boss Person');
     expect(screen.getByTestId('directory-meta-title').textContent).toContain('Staff Engineer');
     expect(screen.getByTestId('directory-meta-department').textContent).toContain('Engineering');
+    expect(screen.getByTestId('directory-meta-department').textContent).not.toContain('Platform');
+    expect(screen.getByTestId('directory-meta-squad').textContent).toContain('Platform, SRE');
     // A zone stored under its retired name shows under the current one.
     expect(screen.getByTestId('members-grid').textContent).toContain('Kyiv, Europe');
     expect(screen.getByTestId('members-grid').textContent).not.toContain('Kiev');
@@ -114,11 +117,12 @@ describe('DirectoriesPage', () => {
     expect(screen.getAllByTestId('directory-meta-manager')).toHaveLength(1);
     expect(screen.getAllByTestId('directory-meta-title')).toHaveLength(1);
     expect(screen.getAllByTestId('directory-meta-department')).toHaveLength(1);
+    expect(screen.getAllByTestId('directory-meta-squad')).toHaveLength(1);
 
     // Row order matches the hover card: contact info, then the time group.
     const card = phoneRow.closest('dl')!;
     const labels = Array.from(card.querySelectorAll('dt')).map((d) => d.textContent);
-    expect(labels).toEqual(['Phone', 'Title', 'Department', 'Manager', 'Local time', 'Timezone', 'Last seen']);
+    expect(labels).toEqual(['Phone', 'Title', 'Department', 'Squad', 'Manager', 'Local time', 'Timezone', 'Last seen']);
   });
 
   it('shows a generic error when an admin role change rejects with a non-Error', async () => {

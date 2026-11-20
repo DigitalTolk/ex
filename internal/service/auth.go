@@ -947,6 +947,7 @@ func applyDirectoryProfile(user *model.User, dp *DirectoryProfile) {
 	}
 	user.Phone = dp.Phone
 	user.Department = dp.Department
+	user.Squad = dp.Squad
 	user.JobTitle = dp.JobTitle
 	user.Manager = dp.Manager
 	if dp.ObjectID != "" {

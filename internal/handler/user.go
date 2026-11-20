@@ -299,6 +299,7 @@ func publicUserFields(r *http.Request, u *model.User) JSON {
 		// facts, visible to any member (like email above).
 		"phone":      u.Phone,
 		"department": u.Department,
+		"squad":      u.Squad,
 		"jobTitle":   u.JobTitle,
 		"manager":    u.Manager,
 	}

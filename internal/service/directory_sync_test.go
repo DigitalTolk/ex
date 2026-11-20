@@ -274,6 +274,7 @@ func TestDirectorySyncSweepSyncsNameDepartmentAndTitle(t *testing.T) {
 		DisplayName: "Alice Andersson",
 		Phone:       "+1",
 		Department:  "Engineering",
+		Squad:       "Platform",
 		JobTitle:    "Staff Engineer",
 		Manager:     &model.UserManager{DisplayName: "Boss"},
 	}}
@@ -288,8 +289,8 @@ func TestDirectorySyncSweepSyncsNameDepartmentAndTitle(t *testing.T) {
 	env.svc.Sweep(context.Background(), time.Hour)
 
 	got := env.users.users["u1"]
-	if got.DisplayName != "Alice Andersson" || got.Department != "Engineering" || got.JobTitle != "Staff Engineer" {
-		t.Fatalf("not synced: name=%q department=%q title=%q", got.DisplayName, got.Department, got.JobTitle)
+	if got.DisplayName != "Alice Andersson" || got.Department != "Engineering" || got.Squad != "Platform" || got.JobTitle != "Staff Engineer" {
+		t.Fatalf("not synced: name=%q department=%q squad=%q title=%q", got.DisplayName, got.Department, got.Squad, got.JobTitle)
 	}
 	if len(idx.indexed) != 1 || idx.indexed[0] != "u1" {
 		t.Errorf("indexed = %v, want the renamed user reindexed", idx.indexed)
@@ -299,7 +300,7 @@ func TestDirectorySyncSweepSyncsNameDepartmentAndTitle(t *testing.T) {
 		t.Fatalf("user.updated events = %d, want 1", len(updates))
 	}
 	ev := updates[0]
-	if ev["displayName"] != "Alice Andersson" || ev["department"] != "Engineering" || ev["jobTitle"] != "Staff Engineer" {
+	if ev["displayName"] != "Alice Andersson" || ev["department"] != "Engineering" || ev["squad"] != "Platform" || ev["jobTitle"] != "Staff Engineer" {
 		t.Errorf("event = %v, want the new name, department and title", ev)
 	}
 }
@@ -316,6 +317,7 @@ func TestDirectorySyncSweepEachDirectoryFieldCountsAsAChange(t *testing.T) {
 	for name, edit := range map[string]func(*DirectoryProfile){
 		"unchanged":  func(*DirectoryProfile) {},
 		"department": func(dp *DirectoryProfile) { dp.Department = "Ops" },
+		"squad":      func(dp *DirectoryProfile) { dp.Squad = "Platform" },
 		"job title":  func(dp *DirectoryProfile) { dp.JobTitle = "Lead" },
 		"name":       func(dp *DirectoryProfile) { dp.DisplayName = "Alicia" },
 		// The directory reporting no name never blanks the stored one.

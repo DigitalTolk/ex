@@ -67,12 +67,15 @@ type User struct {
 	// deactivated, tokenless, and its username free for another bot.
 	BotDeletedAt *time.Time `json:"-" dynamodbav:"botDeletedAt,omitempty"`
 
-	// Phone, Department, JobTitle and Manager are directory attributes
-	// synced from Microsoft 365 (at SSO login and by the periodic sweep) when
-	// the Graph integration is enabled. They are owned by the directory
-	// (read-only in the app) and shown on profile surfaces.
+	// Phone, Department, Squad, JobTitle and Manager are directory
+	// attributes synced from Microsoft 365 (at SSO login and by the periodic
+	// sweep) when the Graph integration is enabled. They are owned by the
+	// directory (read-only in the app) and shown on profile surfaces. The
+	// directory holds department and squad in one field ("Department -
+	// Squad"); ex keeps them apart.
 	Phone      string       `json:"phone,omitempty" dynamodbav:"phone,omitempty"`
 	Department string       `json:"department,omitempty" dynamodbav:"department,omitempty"`
+	Squad      string       `json:"squad,omitempty" dynamodbav:"squad,omitempty"`
 	JobTitle   string       `json:"jobTitle,omitempty" dynamodbav:"jobTitle,omitempty"`
 	Manager    *UserManager `json:"manager,omitempty" dynamodbav:"manager,omitempty"`
 

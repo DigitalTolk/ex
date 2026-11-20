@@ -291,7 +291,7 @@ type UserPatch struct {
 	// DeactivatedBy records who deactivated the account ("" clears it).
 	DeactivatedBy *string
 	// Directory writes the directory-owned attributes (phone, department,
-	// job title + manager) together.
+	// squad, job title + manager) together.
 	Directory *UserDirectoryFields
 	// UpdatedAt is written when non-zero.
 	UpdatedAt time.Time
@@ -301,6 +301,7 @@ type UserPatch struct {
 type UserDirectoryFields struct {
 	Phone      string
 	Department string
+	Squad      string
 	JobTitle   string
 	Manager    *model.UserManager
 }
@@ -358,6 +359,7 @@ func (s *UserStoreImpl) PatchUser(ctx context.Context, id string, p UserPatch) e
 	if p.Directory != nil {
 		setOrRemove("phone", p.Directory.Phone)
 		setOrRemove("department", p.Directory.Department)
+		setOrRemove("squad", p.Directory.Squad)
 		setOrRemove("jobTitle", p.Directory.JobTitle)
 		if p.Directory.Manager == nil {
 			upd = upd.Remove(expression.Name("manager"))

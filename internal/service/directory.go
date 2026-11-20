@@ -23,13 +23,16 @@ type DirectoryProfile struct {
 	DisplayName string
 	Phone       string
 	Department  string
-	JobTitle    string
+	// Squad is the squad (or squads, joined with ", ") the directory lists
+	// after the department.
+	Squad    string
+	JobTitle string
 	Manager     *model.UserManager
 }
 
 // fields is the directory-owned attribute set a profile writes.
 func (dp *DirectoryProfile) fields() store.UserDirectoryFields {
-	return store.UserDirectoryFields{Phone: dp.Phone, Department: dp.Department, JobTitle: dp.JobTitle, Manager: dp.Manager}
+	return store.UserDirectoryFields{Phone: dp.Phone, Department: dp.Department, Squad: dp.Squad, JobTitle: dp.JobTitle, Manager: dp.Manager}
 }
 
 // differsFrom reports whether applying dp would change anything on user —
@@ -37,6 +40,7 @@ func (dp *DirectoryProfile) fields() store.UserDirectoryFields {
 func (dp *DirectoryProfile) differsFrom(user *model.User) bool {
 	return user.Phone != dp.Phone ||
 		user.Department != dp.Department ||
+		user.Squad != dp.Squad ||
 		user.JobTitle != dp.JobTitle ||
 		!user.Manager.Equal(dp.Manager) ||
 		(dp.DisplayName != "" && user.DisplayName != dp.DisplayName) ||
@@ -97,11 +101,13 @@ func (s *MSDirectoryService) LookupProfile(ctx context.Context, email, objectID 
 		return nil, fmt.Errorf("directory: get user profile: %w", err)
 	}
 
+	department, squad := splitDepartment(profile.Department)
 	dp := &DirectoryProfile{
 		ObjectID:    profile.ID,
 		DisplayName: directoryName(profile.DisplayName),
 		Phone:       profile.Phone(),
-		Department:  strings.TrimSpace(profile.Department),
+		Department:  department,
+		Squad:       squad,
 		JobTitle:    strings.TrimSpace(profile.JobTitle),
 	}
 
@@ -166,4 +172,13 @@ func directoryName(name string) string {
 		name = strings.TrimSpace(string([]rune(name)[:MaxUserDisplayNameLen]))
 	}
 	return name
+}
+
+// splitDepartment parses the directory's department field, which Cliffhub's
+// sync writes as "Department - Squad" (several squads joined with ", "). The
+// first " - " splits: a squad may contain one, and a hyphen inside a word
+// ("Sales-Ops") is no separator. A value without one is all department.
+func splitDepartment(value string) (department, squad string) {
+	department, squad, _ = strings.Cut(" "+strings.TrimSpace(value)+" ", " - ")
+	return strings.TrimSpace(department), strings.TrimSpace(squad)
 }

@@ -206,7 +206,7 @@ func TestUserReadsHideContactDetailsFromGuests(t *testing.T) {
 	jwtMgr := testJWT()
 	users := newMockUserStore()
 	guest := &model.User{ID: "g-1", Email: "guest@example.com", SystemRole: model.SystemRoleGuest, Status: "active", AuthProvider: model.AuthProviderGuest}
-	member := &model.User{ID: "m-1", Email: "member@corp.example", DisplayName: "Member", Phone: "+46 70 1", Department: "Finance Ops", JobTitle: "Controller", Manager: &model.UserManager{DisplayName: "Boss"}, SystemRole: model.SystemRoleMember, Status: "active"}
+	member := &model.User{ID: "m-1", Email: "member@corp.example", DisplayName: "Member", Phone: "+46 70 1", Department: "Finance Ops", Squad: "Payables", JobTitle: "Controller", Manager: &model.UserManager{DisplayName: "Boss"}, SystemRole: model.SystemRoleMember, Status: "active"}
 	users.users[guest.ID], users.users[member.ID] = guest, member
 	users.emailIndex[guest.Email], users.emailIndex[member.Email] = guest, member
 	router := routerWithUsers(t, users, jwtMgr)
@@ -225,7 +225,7 @@ func TestUserReadsHideContactDetailsFromGuests(t *testing.T) {
 		}
 		body := rec.Body.String()
 		if strings.Contains(body, "member@corp.example") || strings.Contains(body, "+46 70 1") || strings.Contains(body, "Boss") ||
-			strings.Contains(body, "Finance Ops") || strings.Contains(body, "Controller") {
+			strings.Contains(body, "Finance Ops") || strings.Contains(body, "Payables") || strings.Contains(body, "Controller") {
 			t.Fatalf("%s %s leaked contact details to a guest: %s", target.method, target.path, body)
 		}
 		if !strings.Contains(body, `"m-1"`) {
@@ -238,7 +238,7 @@ func TestUserReadsHideContactDetailsFromGuests(t *testing.T) {
 		rec := httptest.NewRecorder()
 		router.ServeHTTP(rec, reqAs(t, jwtMgr, member, http.MethodGet, path, ""))
 		body := rec.Body.String()
-		if !strings.Contains(body, "member@corp.example") || !strings.Contains(body, `"department":"Finance Ops"`) || !strings.Contains(body, `"jobTitle":"Controller"`) {
+		if !strings.Contains(body, "member@corp.example") || !strings.Contains(body, `"department":"Finance Ops"`) || !strings.Contains(body, `"squad":"Payables"`) || !strings.Contains(body, `"jobTitle":"Controller"`) {
 			t.Fatalf("GET %s: members lost the profile's directory details: %s", path, body)
 		}
 	}

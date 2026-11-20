@@ -3364,13 +3364,16 @@ export interface User {
    */
   botDescription?: string;
   /**
-   * Phone, Department, JobTitle and Manager are directory attributes
-   * synced from Microsoft 365 (at SSO login and by the periodic sweep) when
-   * the Graph integration is enabled. They are owned by the directory
-   * (read-only in the app) and shown on profile surfaces.
+   * Phone, Department, Squad, JobTitle and Manager are directory
+   * attributes synced from Microsoft 365 (at SSO login and by the periodic
+   * sweep) when the Graph integration is enabled. They are owned by the
+   * directory (read-only in the app) and shown on profile surfaces. The
+   * directory holds department and squad in one field ("Department -
+   * Squad"); ex keeps them apart.
    */
   phone?: string;
   department?: string;
+  squad?: string;
   jobTitle?: string;
   manager?: UserManager;
   /**

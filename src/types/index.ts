@@ -17,6 +17,7 @@ export interface User {
   // Directory attributes synced from Microsoft 365 (read-only).
   phone?: string;
   department?: string;
+  squad?: string;
   jobTitle?: string;
   manager?: UserManager;
   // A machine account (a webhook's, the reminder bot's or an API bot), its

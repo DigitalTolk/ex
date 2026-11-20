@@ -1165,18 +1165,20 @@ describe('ChatPage WebSocket handlers', () => {
     });
   });
 
-  it('onUserUpdated patches synced directory fields (phone, department, title, manager) on the authenticated user', () => {
+  it('onUserUpdated patches synced directory fields (phone, department, squad, title, manager) on the authenticated user', () => {
     renderAt('/');
     (capturedOptions.onUserUpdated as (d: unknown) => void)({
       id: 'u-me',
       phone: '+46 70 123 45 67',
       department: 'Engineering',
+      squad: 'Platform',
       jobTitle: 'Developer',
       manager: { displayName: 'Boss', email: 'boss@example.com', userID: 'u-boss' },
     });
     expect(patchUserMock).toHaveBeenCalledWith({
       phone: '+46 70 123 45 67',
       department: 'Engineering',
+      squad: 'Platform',
       jobTitle: 'Developer',
       manager: { displayName: 'Boss', email: 'boss@example.com', userID: 'u-boss' },
     });
