@@ -1,7 +1,7 @@
 // Package msgraph is a minimal Microsoft Graph client. The app-only
 // (client-credentials) Client covers exactly the slices of Graph the app uses
 // as itself: directory
-// profile reads (phone + manager, synced onto Ex profiles at SSO login) and
+// profile reads (name, phone, department, job title + manager, synced onto Ex profiles at SSO login) and
 // creating Teams online meetings on behalf of a user (the /mstmeetings slash
 // command). Because the workspace already authenticates through the same
 // Azure AD app registration, no per-user account linking or token storage is
@@ -136,6 +136,8 @@ type UserProfile struct {
 	UserPrincipalName string   `json:"userPrincipalName"`
 	MobilePhone       string   `json:"mobilePhone"`
 	BusinessPhones    []string `json:"businessPhones"`
+	Department        string   `json:"department"`
+	JobTitle          string   `json:"jobTitle"`
 }
 
 // Phone returns the best single display number: mobile first, then the first
@@ -159,7 +161,7 @@ func (p *UserProfile) EmailAddress() string {
 	return p.UserPrincipalName
 }
 
-const profileSelect = "?$select=id,displayName,mail,userPrincipalName,mobilePhone,businessPhones"
+const profileSelect = "?$select=id,displayName,mail,userPrincipalName,mobilePhone,businessPhones,department,jobTitle"
 
 // GetUserProfile fetches a user's directory profile. key is an AAD object ID
 // or a userPrincipalName. ErrNotFound when the user isn't in the directory.

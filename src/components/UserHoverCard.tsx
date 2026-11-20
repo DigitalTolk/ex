@@ -261,6 +261,30 @@ function UserHoverCardContent({
                 </dd>
               </div>
             )}
+            {userDetails?.jobTitle && (
+              <div className="flex justify-between gap-3">
+                <dt className="text-muted-foreground">Title</dt>
+                <dd className="min-w-0 text-right">
+                  <span className="break-words">{userDetails.jobTitle}</span>
+                </dd>
+              </div>
+            )}
+            {userDetails?.department && (
+              <div className="flex justify-between gap-3">
+                <dt className="text-muted-foreground">Department</dt>
+                <dd className="min-w-0 text-right">
+                  <span className="break-words">{userDetails.department}</span>
+                </dd>
+              </div>
+            )}
+            {userDetails?.squad && (
+              <div className="flex justify-between gap-3">
+                <dt className="text-muted-foreground">Squad</dt>
+                <dd className="min-w-0 text-right">
+                  <span className="break-words">{userDetails.squad}</span>
+                </dd>
+              </div>
+            )}
             {userDetails?.manager && (
               <div className="flex justify-between gap-3">
                 <dt className="text-muted-foreground">Manager</dt>

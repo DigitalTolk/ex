@@ -214,6 +214,12 @@ func TestRunExtras_SDKErrorArms(t *testing.T) {
 			t.Fatalf("ListApprovals: want errInjected, got %v", err)
 		}
 	})
+	t.Run("ListPendingApprovals QueryError", func(t *testing.T) {
+		s := NewRunStore(withFault(db, func(f *faultClient) { f.failQuery = true }))
+		if _, err := s.ListPendingApprovals(ctx, "user-e"); !errors.Is(err, errInjected) {
+			t.Fatalf("ListPendingApprovals: want errInjected, got %v", err)
+		}
+	})
 	t.Run("PutArtifact PutItemError", func(t *testing.T) {
 		s := NewRunStore(withFault(db, func(f *faultClient) { f.failPutItem = true }))
 		if err := s.PutArtifact(ctx, mkArtifactFixture("art-e", "run-e")); !errors.Is(err, errInjected) {
