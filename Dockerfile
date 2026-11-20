@@ -15,7 +15,7 @@
 # the guaranteed-fresh rebuild stays fast.
 
 # Stage 1: Build frontend
-FROM node:24-trixie@sha256:8c761eca2bf7eec965f946cf47b8090143cb41f45f2f8699af0cc0298d2d2d19 AS frontend
+FROM node:24-trixie@sha256:6e5d4c38403930b420404f190be8563396dca2bd156a6cb4722707b0efcf6fc1 AS frontend
 WORKDIR /app/frontend
 COPY package.json package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci
@@ -25,7 +25,7 @@ COPY src/ ./src/
 RUN npm run build
 
 # Stage 2: Build Go binary
-FROM golang:1.27-trixie@sha256:c65ecfe613b539ac74c62a4c3b2c27e8f8a6076384c8f27e8a3c0f3be17cc385 AS backend
+FROM golang:1.27-trixie@sha256:f18c3d73a184fb0582828510722e723b63a93f7188d11dd223d9be6f6880e65d AS backend
 ARG GIT_TAG=""
 ARG GIT_SHA=""
 WORKDIR /app
@@ -57,7 +57,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # libc here. `-tags=nodynamic` keeps github.com/gen2brain/webp on its built-in
 # codec — without it the library links libc to look for a system libwebp, and
 # the binary would not start (internal/service/webp_static_build_test.go).
-FROM gcr.io/distroless/static-debian13:nonroot@sha256:25ac8f0c3b2334a9eb05452266bd4697864a8c8ef0ef71e5e6480d7f92868329
+FROM gcr.io/distroless/static-debian13:nonroot@sha256:aafe993665bf6200db38a02c11a9351e782a84b6a45e7f33b6695638c88e3931
 # Install to /usr/local/bin (the conventional FHS home for a locally-built
 # binary) rather than dropping it at the filesystem root. distroless sets a
 # standard PATH that includes /usr/local/bin, and Docker's exec form resolves
