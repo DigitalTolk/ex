@@ -23,8 +23,10 @@ import { useEscapeClose } from '@/hooks/useEscapeClose';
 import { useAttachmentsBatch } from '@/hooks/useAttachments';
 import { useFrequentEmojis } from '@/hooks/useEmoji';
 import { useIsMobile } from '@/hooks/useIsMobile';
-import { useEditMessage, useSendMessage, type SendMessageInput } from '@/hooks/useMessages';
+import { useSendMessage, type SendMessageInput } from '@/hooks/useMessages';
+import { useEditSave } from '@/hooks/useEditSave';
 import { useComposerSchedule } from '@/hooks/useScheduledMessages';
+import { useThreadParticipantIds } from '@/hooks/useThreadParticipantIds';
 import { markThreadSeen, noteThreadReadPosition, threadHasUnseen, useFollowThread, useThreadFollowing, useThreadMessages, useThreadSeenAtOpen, useUnfollowThread } from '@/hooks/useThreads';
 import { isAtBottom, isReadHeld, keepReadSession, markUnreadSeen, scheduleEndReadSession, setAtBottom, threadReadKey, useUnreadAnchor, useUnreadSeen } from '@/lib/read-position';
 import { attachScrollHoverPause } from '@/lib/scroll-hover-pause';
@@ -77,6 +79,7 @@ export function ThreadPanel({
   readOnly,
 }: ThreadPanelProps) {
   const { data, isLoading } = useThreadMessages({ channelId, conversationId, threadRootID });
+  const threadParticipantIds = useThreadParticipantIds(data);
   const { dismissing, settled, motionProps } = useSwipeDismiss('right', onClose);
   // Shares the persisted "right panel" width with SidePanel; resizable from
   // the left edge on desktop, resettable from profile settings.
@@ -206,7 +209,6 @@ export function ThreadPanel({
   const draftAttachments = useDraftAttachmentChips(draft?.attachmentIDs);
   const saveDraft = useSaveDraft();
   const saveDraftMutate = saveDraft.mutate;
-  const editMessage = useEditMessage();
   const editAttachmentIDs = activeEditingMessage?.attachmentIDs ?? [];
   // Pass the access context so the server authorizes the resolve — without
   // it the batch returns nothing, the edit composer opens with no attachment
@@ -525,32 +527,17 @@ export function ThreadPanel({
     [send, threadRootID, checkMentions],
   );
 
+  // Save from the composer while an edit is open (a phone): the composer
+  // keeps the text until it lands (see useEditSave).
+  const closeEdit = useCallback(() => setEditingMessage(null), []);
+  const { saveEdit, saving: editSaving } = useEditSave({ channelId, conversationId }, closeEdit);
   const handleEditMessage = useCallback(
     (value: SendMessageInput) => {
       /* istanbul ignore next -- handleEditMessage is only wired as the composer's onSend while editingMessage is set (mobile edit mode), so it is never called with a null editingMessage; defensive. */
       if (!editingMessage) return;
-      const currentAttachmentIDs = editingMessage.attachmentIDs ?? [];
-      const nextAttachmentIDs = value.attachmentIDs ?? [];
-      const same =
-        value.body === editingMessage.body &&
-        nextAttachmentIDs.length === currentAttachmentIDs.length &&
-        nextAttachmentIDs.every((id, idx) => id === currentAttachmentIDs[idx]);
-      if (same || (!value.body.trim() && nextAttachmentIDs.length === 0)) {
-        setEditingMessage(null);
-        return;
-      }
-      editMessage.mutate(
-        {
-          messageId: editingMessage.id,
-          body: value.body,
-          attachmentIDs: nextAttachmentIDs,
-          channelId,
-          conversationId,
-        },
-        { onSuccess: () => setEditingMessage(null) },
-      );
+      return saveEdit(editingMessage, { body: value.body, attachmentIDs: value.attachmentIDs ?? [] });
     },
-    [channelId, conversationId, editMessage, editingMessage],
+    [saveEdit, editingMessage],
   );
 
   return (
@@ -663,7 +650,7 @@ export function ThreadPanel({
             onSchedule={schedule.onSchedule}
             scheduledCount={schedule.scheduledCount}
             onCancel={activeEditingMessage ? () => setEditingMessage(null) : undefined}
-            disabled={!!activeEditingMessage && editMessage.isPending}
+            disabled={!!activeEditingMessage && editSaving}
             placeholder={activeEditingMessage ? 'Edit message...' : 'Reply...'}
             focusKey={activeEditingMessage ? `edit-${activeEditingMessage.id}` : threadRootID}
             initialBody={activeEditingMessage?.body ?? draft?.body ?? ''}
@@ -674,6 +661,7 @@ export function ThreadPanel({
             typingParentID={activeEditingMessage ? undefined : channelId ?? conversationId}
             typingParentType={activeEditingMessage ? undefined : channelId ? 'channel' : 'conversation'}
             typingThreadRootID={activeEditingMessage ? undefined : threadRootID}
+            mentionThreadIds={activeEditingMessage ? undefined : threadParticipantIds}
             lastOwnMessageId={activeEditingMessage ? undefined : lastOwnMessageId}
             aboveInput={
               activeEditingMessage ? undefined : (

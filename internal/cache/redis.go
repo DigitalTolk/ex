@@ -104,6 +104,37 @@ redis.call('EXPIRE', KEYS[1], ttl)
 return 1
 `)
 
+// People a user mentions or messages: a per-user sorted set the composer's
+// @-list ranks by, "colleagues I work with" first. Like the emoji shelf it
+// decays per event, not per day (each send scales every score by
+// peopleFreqDecay before adding its own), so it follows current habits. It
+// keeps only the top peopleFreqKeep, so a send costs a bounded script.
+const (
+	peopleFreqKeyPrefix = "people:freq:"
+	peopleFreqTTL       = 365 * 24 * time.Hour
+	peopleFreqDecay     = 0.97
+	peopleFreqKeep      = 100
+)
+
+// peopleFreqIncrScript, per send: scale every score by the decay, add each
+// person's weight (ARGV pairs from 4 on), drop all but the top `keep`, and
+// refresh the TTL.
+var peopleFreqIncrScript = redis.NewScript(`
+local decay = tonumber(ARGV[1])
+local ttl = tonumber(ARGV[2])
+local keep = tonumber(ARGV[3])
+local flat = redis.call('ZRANGE', KEYS[1], 0, -1, 'WITHSCORES')
+for i = 1, #flat, 2 do
+  redis.call('ZADD', KEYS[1], tonumber(flat[i + 1]) * decay, flat[i])
+end
+for i = 4, #ARGV, 2 do
+  redis.call('ZINCRBY', KEYS[1], tonumber(ARGV[i + 1]), ARGV[i])
+end
+redis.call('ZREMRANGEBYRANK', KEYS[1], 0, -(keep + 1))
+redis.call('EXPIRE', KEYS[1], ttl)
+return 1
+`)
+
 // RedisCache wraps a Redis client to provide typed caching operations.
 type RedisCache struct {
 	client *redis.Client
@@ -605,6 +636,40 @@ func (c *RedisCache) FrequentEmojis(ctx context.Context, userID string, limit in
 	pipe.Expire(ctx, key, emojiFreqTTL)
 	if _, err := pipe.Exec(ctx); err != nil {
 		return nil, fmt.Errorf("emoji freq list %q: %w", userID, err)
+	}
+	return rangeCmd.Result()
+}
+
+// RecordPeopleContact adds one send's contacts to userID's people ranking:
+// each person's weight (a mention, a DM partner) on top of the decayed
+// history. Nothing to record is a no-op.
+func (c *RedisCache) RecordPeopleContact(ctx context.Context, userID string, weights map[string]float64) error {
+	if len(weights) == 0 {
+		return nil
+	}
+	args := make([]any, 0, 3+2*len(weights))
+	args = append(args, peopleFreqDecay, int(peopleFreqTTL.Seconds()), peopleFreqKeep)
+	for id, w := range weights {
+		args = append(args, id, w)
+	}
+	if err := redisx.RunScript(ctx, c.client, peopleFreqIncrScript, []string{peopleFreqKeyPrefix + userID}, args...).Err(); err != nil {
+		return fmt.Errorf("people freq record %q: %w", userID, err)
+	}
+	return nil
+}
+
+// FrequentPeople returns up to limit of the people userID mentions or
+// messages most, highest first. Reading refreshes the TTL, as for emoji.
+func (c *RedisCache) FrequentPeople(ctx context.Context, userID string, limit int) ([]string, error) {
+	if limit <= 0 {
+		return []string{}, nil
+	}
+	key := peopleFreqKeyPrefix + userID
+	pipe := c.client.Pipeline()
+	rangeCmd := pipe.ZRangeArgs(ctx, redis.ZRangeArgs{Key: key, Start: 0, Stop: int64(limit - 1), Rev: true})
+	pipe.Expire(ctx, key, peopleFreqTTL)
+	if _, err := pipe.Exec(ctx); err != nil {
+		return nil, fmt.Errorf("people freq list %q: %w", userID, err)
 	}
 	return rangeCmd.Result()
 }

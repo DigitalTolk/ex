@@ -174,9 +174,9 @@ describe.runIf(window.__EX_FORCE_DEVICE__ === 'desktop')('dragging the desktop w
       ['the bar left of the search field', bar.left, search.left, bar.top, bar.bottom],
       ['the bar right of the search field', search.right, bar.right, bar.top, bar.bottom],
     ] as const;
-    // The bar's own buttons (Back, Forward) and the header's "+" are for
-    // clicking.
-    const controls = Array.from(document.querySelectorAll('[data-testid="app-shell-header"] button, [data-testid="sidebar-column-header"] button'))
+    // The bar's own buttons (Back, Forward), the header's "+" and the mark
+    // itself (the way home) are for clicking.
+    const controls = Array.from(document.querySelectorAll('[data-testid="app-shell-header"] button, [data-testid="sidebar-column-header"] button, [data-testid="sidebar-rail-home"]'))
       .map((b) => b.getBoundingClientRect())
       .filter((r) => r.width > 0);
     expect(controls.length).toBeGreaterThanOrEqual(3);

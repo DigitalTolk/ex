@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"encoding/base64"
+	"log/slog"
 	"slices"
 	"strings"
 	"testing"
@@ -79,12 +80,27 @@ func TestLoadSharePoint(t *testing.T) {
 			}
 		})
 	}
-	for _, bad := range []string{"not base64!", base64.StdEncoding.EncodeToString([]byte("short"))} {
-		t.Run("refuses key "+bad, func(t *testing.T) {
+	// The secret store seeds a new secret with a placeholder ("bar") until its
+	// real value is set: the app must still boot, with sharing off and an
+	// error in the log saying why.
+	for _, bad := range []string{"bar", "not base64!", base64.StdEncoding.EncodeToString([]byte("short"))} {
+		t.Run("boots with sharing off on key "+bad, func(t *testing.T) {
 			sso(t)
 			t.Setenv("MS_TOKEN_KEY", bad)
-			if _, err := Load(); err == nil || !strings.Contains(err.Error(), "invalid MS_TOKEN_KEY") {
-				t.Fatalf("err = %v", err)
+			var logs bytes.Buffer
+			prev := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+			t.Cleanup(func() { slog.SetDefault(prev) })
+
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if cfg.SharePointEnabled() || len(cfg.SharePointTokenKey()) != 0 || cfg.SharePointScopes() != nil {
+				t.Fatal("sharing must be off with an invalid MS_TOKEN_KEY")
+			}
+			if !strings.Contains(logs.String(), "level=ERROR") || !strings.Contains(logs.String(), "MS_TOKEN_KEY") {
+				t.Fatalf("want an error log naming MS_TOKEN_KEY, got %q", logs.String())
 			}
 		})
 	}

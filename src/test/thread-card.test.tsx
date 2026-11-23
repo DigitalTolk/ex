@@ -14,15 +14,14 @@ vi.mock('@/lib/api', () => ({
 }));
 
 const sendMutate = vi.fn();
-// Invoke onSuccess like a real successful mutation so the onSuccess handler
-// (which clears edit mode) is exercised.
-const editMutate = vi.fn((_vars: unknown, opts?: { onSuccess?: () => void }) => {
-  opts?.onSuccess?.();
-});
+// A save that lands, unless a test makes it fail.
+const editMutate = vi.fn((_vars: unknown): Promise<unknown> => Promise.resolve({}));
 vi.mock('@/hooks/useMessages', () => ({
   useSendMessage: () => ({ mutate: sendMutate, isPending: false }),
-  useEditMessage: () => ({ mutate: editMutate, isPending: false }),
+  useEditMessage: () => ({ mutateAsync: editMutate, isPending: false }),
 }));
+const showToastMock = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/toast', async (orig) => ({ ...(await orig<typeof import('@/lib/toast')>()), showToast: showToastMock }));
 
 const isMobileRef = vi.hoisted(() => ({ value: false }));
 vi.mock('@/hooks/useIsMobile', () => ({ useIsMobile: () => isMobileRef.value }));
@@ -892,7 +891,7 @@ describe('ThreadCard — viewport gating', () => {
     }
   });
 
-  it('edits a thread reply via the card composer on mobile (body-only, preserving attachments)', async () => {
+  async function openMobileEdit() {
     isMobileRef.value = true;
     apiFetchMock.mockImplementation((url: string) => {
       if (url.includes('/messages/msg-root/thread')) {
@@ -918,16 +917,77 @@ describe('ThreadCard — viewport gating', () => {
       expect(lastMessageInputProps.current?.initialBody).toBe('old body');
       expect(lastMessageInputProps.current?.submitLabel).toBe('Save');
     });
-    const onSend = lastMessageInputProps.current!.onSend as (v: { body: string; attachmentIDs: string[] }) => void;
-    act(() => {
-      onSend({ body: 'edited body', attachmentIDs: [] });
+    return lastMessageInputProps.current!.onSend as (v: { body: string; attachmentIDs?: string[] }) => Promise<unknown> | undefined;
+  }
+
+  it('edits a thread reply via the card composer on mobile, with its files', async () => {
+    const onSend = await openMobileEdit();
+    await act(async () => {
+      await onSend({ body: 'edited body', attachmentIDs: [] });
     });
     expect(editMutate).toHaveBeenCalledTimes(1);
-    const [vars] = editMutate.mock.calls[0] as [Record<string, unknown>, unknown];
-    expect(vars).toMatchObject({ messageId: 'r0', body: 'edited body', channelId: 'ch-1' });
-    // Body-only: NO attachmentIDs key, so the server preserves the originals
-    // rather than stripping them.
-    expect(vars).not.toHaveProperty('attachmentIDs');
+    expect(editMutate.mock.calls[0][0]).toMatchObject({ messageId: 'r0', body: 'edited body', channelId: 'ch-1', attachmentIDs: [] });
+    await waitFor(() => expect(lastMessageInputProps.current?.submitLabel).toBeUndefined());
+  });
+
+  // Regression: the card's edit was body-only, so a file added while editing
+  // was dropped, and an edit that only added a file closed without saving.
+  it('saves a file added while editing, even with the text unchanged', async () => {
+    const onSend = await openMobileEdit();
+    await act(async () => {
+      await onSend({ body: 'old body', attachmentIDs: ['att-new'] });
+    });
+    expect(editMutate.mock.calls[0][0]).toMatchObject({ messageId: 'r0', body: 'old body', attachmentIDs: ['att-new'] });
+  });
+
+  it('keeps the edit open and says so when the save is refused', async () => {
+    editMutate.mockImplementationOnce(() => Promise.reject(new Error('refused')));
+    const onSend = await openMobileEdit();
+    await act(async () => {
+      await expect(onSend({ body: 'edited body', attachmentIDs: ['att-new'] })).rejects.toThrow('refused');
+    });
+    expect(showToastMock).toHaveBeenCalledWith("Couldn't save your edit. It's still there, so you can try again.");
+    expect(lastMessageInputProps.current?.submitLabel).toBe('Save');
+  });
+
+  // A reply with a file opens its edit with that file in it, once the file
+  // is resolved; until then the composer waits, so a save can't drop it.
+  it('opens a mobile edit with the reply\'s files, after they load', async () => {
+    isMobileRef.value = true;
+    let resolveFiles!: (v: unknown) => void;
+    apiFetchMock.mockImplementation((url: string) => {
+      if (url.includes('/messages/msg-root/thread')) {
+        return Promise.resolve([
+          { ...makeMessage('msg-root', 'root'), authorID: 'u-me' },
+          { ...makeMessage('r0', 'old body'), authorID: 'u-me', parentID: 'ch-1', parentMessageID: 'msg-root', attachmentIDs: ['att-1'] },
+        ]);
+      }
+      if (url.startsWith('/api/v1/attachments?')) return new Promise((resolve) => { resolveFiles = resolve; });
+      return Promise.resolve([]);
+    });
+    renderCard(makeSummary({ replyCount: 1 }));
+    await Promise.resolve();
+    act(() => {
+      FakeObserver.instances[0].fire(true);
+    });
+    const editBtn = await screen.findByTestId('edit-r0');
+    act(() => {
+      editBtn.click();
+    });
+    expect(await screen.findByText('Loading message editor…')).toBeInTheDocument();
+    await act(async () => {
+      resolveFiles([{ id: 'att-1', filename: 'notes.txt', contentType: 'text/plain', size: 5 }]);
+    });
+    await waitFor(() => expect(lastMessageInputProps.current?.submitLabel).toBe('Save'));
+    expect(lastMessageInputProps.current?.initialDrafts).toEqual([
+      expect.objectContaining({ id: 'att-1', filename: 'notes.txt' }),
+    ]);
+    // A save without an attachment list sends an empty one.
+    const onSend = lastMessageInputProps.current!.onSend as (v: { body: string; attachmentIDs?: string[] }) => Promise<unknown> | undefined;
+    await act(async () => {
+      await onSend({ body: 'new body' });
+    });
+    expect(editMutate.mock.calls[0][0]).toMatchObject({ messageId: 'r0', body: 'new body', attachmentIDs: [] });
   });
 
   it('an unchanged or empty edit just closes the editor without mutating', async () => {

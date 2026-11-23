@@ -102,7 +102,7 @@ func TestEmojiService_Create_ServesAServerOwnedCopy(t *testing.T) {
 	upload := append(encodePNG(t, solidImage(40, 30)), []byte("<script>alert(1)</script>")...)
 	svc, bucket, _ := emojiFixture(t, upload, "image/png")
 
-	e, err := svc.Create(context.Background(), "u1", "fire", emojiUploadKey, false)
+	e, err := svc.Create(context.Background(), "u1", "blob-fire", emojiUploadKey, false)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -197,21 +197,21 @@ func TestEmojiService_Create_KeepFailures(t *testing.T) {
 	t.Run("storing the copy fails", func(t *testing.T) {
 		svc, bucket, _ := emojiFixture(t, encodePNG(t, solidImage(4, 4)), "image/png")
 		bucket.putErr = errors.New("s3 down")
-		if _, err := svc.Create(ctx, "u1", "fire", emojiUploadKey, false); err == nil {
+		if _, err := svc.Create(ctx, "u1", "blob-fire", emojiUploadKey, false); err == nil {
 			t.Fatal("expected the store error")
 		}
 	})
 	t.Run("removing the upload fails", func(t *testing.T) {
 		svc, bucket, _ := emojiFixture(t, encodePNG(t, solidImage(4, 4)), "image/png")
 		bucket.delErr = errors.New("s3 down")
-		if _, err := svc.Create(ctx, "u1", "fire", emojiUploadKey, false); err != nil {
+		if _, err := svc.Create(ctx, "u1", "blob-fire", emojiUploadKey, false); err != nil {
 			t.Fatalf("a leftover upload failed the create: %v", err)
 		}
 	})
 	t.Run("the name is taken", func(t *testing.T) {
 		svc, bucket, store := emojiFixture(t, encodePNG(t, solidImage(4, 4)), "image/png")
-		store.items["fire"] = &model.CustomEmoji{Name: "fire"}
-		if _, err := svc.Create(ctx, "u1", "fire", emojiUploadKey, false); err == nil {
+		store.items["blob-fire"] = &model.CustomEmoji{Name: "blob-fire"}
+		if _, err := svc.Create(ctx, "u1", "blob-fire", emojiUploadKey, false); err == nil {
 			t.Fatal("expected a duplicate-name error")
 		}
 		for key := range bucket.objects {
@@ -222,16 +222,16 @@ func TestEmojiService_Create_KeepFailures(t *testing.T) {
 	})
 	t.Run("the name is taken and removing the copy fails", func(t *testing.T) {
 		svc, bucket, store := emojiFixture(t, encodePNG(t, solidImage(4, 4)), "image/png")
-		store.items["fire"] = &model.CustomEmoji{Name: "fire"}
+		store.items["blob-fire"] = &model.CustomEmoji{Name: "blob-fire"}
 		bucket.delErr = errors.New("s3 down")
-		if _, err := svc.Create(ctx, "u1", "fire", emojiUploadKey, false); err == nil {
+		if _, err := svc.Create(ctx, "u1", "blob-fire", emojiUploadKey, false); err == nil {
 			t.Fatal("expected a duplicate-name error")
 		}
 	})
 	t.Run("a picture that does not decode", func(t *testing.T) {
 		// A valid PNG header over garbage: DecodeConfig passes, Decode not.
 		svc, _, _ := emojiFixture(t, append(pngHeader(4, 4), []byte("garbage")...), "image/png")
-		if _, err := svc.Create(ctx, "u1", "fire", emojiUploadKey, false); err == nil {
+		if _, err := svc.Create(ctx, "u1", "blob-fire", emojiUploadKey, false); err == nil {
 			t.Fatal("an undecodable emoji was accepted")
 		}
 	})
@@ -243,7 +243,7 @@ func TestEmojiService_Create_KeepFailures(t *testing.T) {
 		defer imageDecodeBudget.Release(maxImageDecodeBytes)
 		cctx, cancel := context.WithCancel(ctx)
 		cancel()
-		if _, err := svc.Create(cctx, "u1", "fire", emojiUploadKey, false); err == nil {
+		if _, err := svc.Create(cctx, "u1", "blob-fire", emojiUploadKey, false); err == nil {
 			t.Fatal("expected the cancelled wait to fail the create")
 		}
 	})

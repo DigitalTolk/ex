@@ -160,6 +160,25 @@ describe('CustomEmojiPage', () => {
     expect(uploadMutateAsync).not.toHaveBeenCalled();
   });
 
+  // Regression: a custom emoji could take a standard emoji's name and stand
+  // in for it. The form says so as the name is typed, and won't save.
+  it('refuses a standard emoji\'s name or a taken one as it is typed', () => {
+    useEmojisMock.mockReturnValue({ data: [{ name: 'partyparrot', imageURL: 'https://x.test/p.png', createdBy: 'u-1' }] });
+    renderPage();
+    chooseFile();
+    const field = screen.getByLabelText('Emoji shortcode');
+    fireEvent.change(field, { target: { value: 'smile' } });
+    expect(screen.getByTestId('emoji-name-clash')).toHaveTextContent(':smile: is already a standard emoji. Pick another name.');
+    expect(screen.getByRole('button', { name: /^Save$/ })).toBeDisabled();
+    fireEvent.change(field, { target: { value: 'partyparrot' } });
+    expect(screen.getByTestId('emoji-name-clash')).toHaveTextContent("There's already a custom emoji called :partyparrot:.");
+    expect(screen.getByRole('button', { name: /^Save$/ })).toBeDisabled();
+    fireEvent.change(field, { target: { value: 'partyparrot2' } });
+    expect(screen.queryByTestId('emoji-name-clash')).toBeNull();
+    expect(screen.getByRole('button', { name: /^Save$/ })).toBeEnabled();
+    expect(uploadMutateAsync).not.toHaveBeenCalled();
+  });
+
   it('uploads on Save and resets the form on success', async () => {
     uploadMutateAsync.mockResolvedValueOnce({ name: 'ok' });
     renderPage();

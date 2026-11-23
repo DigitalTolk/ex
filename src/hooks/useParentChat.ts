@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { MessageInputValue } from '@/components/chat/MessageInput';
-import { useEditMessage, useSendMessage } from '@/hooks/useMessages';
+import { useSendMessage } from '@/hooks/useMessages';
+import { useEditSave } from '@/hooks/useEditSave';
 import { useComposerSchedule } from '@/hooks/useScheduledMessages';
 import { useDraftAttachmentChips, useDraftForScope, useSaveDraft } from '@/hooks/useDrafts';
 import { useEditingMessage } from '@/hooks/useEditingMessage';
@@ -44,7 +45,6 @@ export function useParentChat({ kind, id, userID, beforeSend, showingOlder, show
   const draftAttachments = useDraftAttachmentChips(draft?.attachmentIDs);
   const editing = useEditingMessage(id, kind);
   const { editingMessage, setEditingMessage } = editing;
-  const editMessage = useEditMessage();
   const saveDraftMutate = useSaveDraft().mutate;
 
   const handleDraftChange = useCallback(
@@ -96,33 +96,21 @@ export function useParentChat({ kind, id, userID, beforeSend, showingOlder, show
     [beforeSend, showingOlder, jumpToLatest, sendMutate],
   );
 
-  const editMutate = editMessage.mutate;
+  // The composer's Save while an edit is open: returns the save, so the
+  // composer keeps the text until it lands (see useEditSave).
+  const closeEdit = useCallback(() => setEditingMessage(null), [setEditingMessage]);
+  const { saveEdit, saving: editSaving } = useEditSave(
+    kind === 'channel' ? { channelId: id } : { conversationId: id },
+    closeEdit,
+  );
   const handleEditMessage = useCallback(
     (value: ComposedMessage) => {
       /* v8 ignore next 2 -- only wired as the composer's onSend while an edit is open (activeEditingMessage, hence editingMessage, is set), so it never runs without one */
       /* istanbul ignore next -- see v8 note above */
       if (!editingMessage) return;
-      const currentAttachmentIDs = editingMessage.attachmentIDs ?? [];
-      const same =
-        value.body === editingMessage.body &&
-        value.attachmentIDs.length === currentAttachmentIDs.length &&
-        value.attachmentIDs.every((attID, idx) => attID === currentAttachmentIDs[idx]);
-      // An unchanged edit, or one emptied of everything, just closes.
-      if (same || (!value.body.trim() && value.attachmentIDs.length === 0)) {
-        setEditingMessage(null);
-        return;
-      }
-      editMutate(
-        {
-          messageId: editingMessage.id,
-          body: value.body,
-          attachmentIDs: value.attachmentIDs,
-          ...(kind === 'channel' ? { channelId: id } : { conversationId: id }),
-        },
-        { onSuccess: () => setEditingMessage(null) },
-      );
+      return saveEdit(editingMessage, value);
     },
-    [editMutate, editingMessage, id, kind, setEditingMessage],
+    [saveEdit, editingMessage],
   );
 
   // The open chat is this tab's active parent until it closes.
@@ -142,7 +130,7 @@ export function useParentChat({ kind, id, userID, beforeSend, showingOlder, show
     draft,
     draftAttachments,
     editing,
-    editMessage,
+    editSaving,
     handleDraftChange,
     handleSendMessage,
     handleEditMessage,

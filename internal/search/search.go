@@ -3,6 +3,7 @@ package search
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/DigitalTolk/ex/internal/model"
 )
@@ -27,9 +28,41 @@ type MessageQuery struct {
 	// the single parent (must be a member of AllowedParentIDs to have
 	// any effect — the AllowedParentIDs filter still applies).
 	InParentID string
-	Sort       string
-	Limit      int
+	// After and Before, when set, keep messages created at or after After
+	// and before Before (the date modifiers on:, after:, before:, which the
+	// client turns into its own day's start and end).
+	After  time.Time
+	Before time.Time
+	Sort   string
+	Limit  int
 }
+
+// filtered reports whether the query narrows by anything but its words: a
+// search with no words still makes sense then ("everything Ada wrote
+// yesterday").
+func (o MessageQuery) filtered() bool {
+	return o.FromUserID != "" || o.InParentID != "" || !o.After.IsZero() || !o.Before.IsZero()
+}
+
+// dateFilter is the created-at range of a message or file query, or nil.
+// A range in filter context is a cached bitset over the date field: it
+// narrows the documents before any scoring, so a date never slows a search.
+func (o MessageQuery) dateFilter() any {
+	if o.After.IsZero() && o.Before.IsZero() {
+		return nil
+	}
+	r := map[string]any{"format": "strict_date_time"}
+	if !o.After.IsZero() {
+		r["gte"] = o.After.UTC().Format(rangeTimeLayout)
+	}
+	if !o.Before.IsZero() {
+		r["lt"] = o.Before.UTC().Format(rangeTimeLayout)
+	}
+	return map[string]any{"range": map[string]any{"createdAt": r}}
+}
+
+// rangeTimeLayout matches OpenSearch's strict_date_time (milliseconds, Z).
+const rangeTimeLayout = "2006-01-02T15:04:05.000Z07:00"
 
 // ChannelQuery bundles optional filters for channel search. AllowedChannelIDs
 // lists the private channels the caller belongs to; public channels always
@@ -155,7 +188,7 @@ func (s *Service) Messages(ctx context.Context, opts MessageQuery) (*SearchResul
 	if len(opts.AllowedParentIDs) == 0 {
 		return &SearchResult{Hits: []SearchHit{}}, nil
 	}
-	if rawQ == "" && opts.FromUserID == "" && opts.InParentID == "" {
+	if rawQ == "" && !opts.filtered() {
 		return &SearchResult{Hits: []SearchHit{}}, nil
 	}
 	must := messageMust(rawQ)
@@ -196,7 +229,7 @@ func (s *Service) Files(ctx context.Context, opts MessageQuery) (*SearchResult, 
 	if len(opts.AllowedParentIDs) == 0 {
 		return &SearchResult{Hits: []SearchHit{}}, nil
 	}
-	if q == "" && opts.FromUserID == "" && opts.InParentID == "" {
+	if q == "" && !opts.filtered() {
 		return &SearchResult{Hits: []SearchHit{}}, nil
 	}
 	filters := []any{
@@ -207,6 +240,9 @@ func (s *Service) Files(ctx context.Context, opts MessageQuery) (*SearchResult, 
 	}
 	if opts.InParentID != "" {
 		filters = append(filters, map[string]any{"term": map[string]any{"parentIds": opts.InParentID}})
+	}
+	if dates := opts.dateFilter(); dates != nil {
+		filters = append(filters, dates)
 	}
 	var fileMust any = map[string]any{"match_all": map[string]any{}}
 	if q != "" {
@@ -261,6 +297,9 @@ func buildMessageBody(must any, opts MessageQuery) map[string]any {
 	}
 	if opts.InParentID != "" {
 		filters = append(filters, map[string]any{"term": map[string]any{"parentId": opts.InParentID}})
+	}
+	if dates := opts.dateFilter(); dates != nil {
+		filters = append(filters, dates)
 	}
 	return map[string]any{
 		"size": clampLimit(opts.Limit),

@@ -17,7 +17,7 @@ func TestEmojiService_List_SharesOneCatalogRead(t *testing.T) {
 	svc.SetCatalogCache(newMockCache())
 	svc.SetSigner(&fakeEmojiSigner{urls: map[string]string{"uploads/u1/fire.png": "https://cdn.example/fire.png"}})
 	users.users["u1"] = &model.User{ID: "u1", SystemRole: model.SystemRoleAdmin}
-	emojis.items["fire"] = &model.CustomEmoji{Name: "fire", ImageKey: "uploads/u1/fire.png", CreatedBy: "u1"}
+	emojis.items["blob-fire"] = &model.CustomEmoji{Name: "blob-fire", ImageKey: "uploads/u1/fire.png", CreatedBy: "u1"}
 	ctx := context.Background()
 
 	for range 2 {
@@ -30,16 +30,16 @@ func TestEmojiService_List_SharesOneCatalogRead(t *testing.T) {
 		t.Fatalf("catalog read %d times, want 1", emojis.listCalls)
 	}
 
-	if _, err := svc.Create(ctx, "u1", "rocket", "uploads/u1/rocket.png", false); err != nil {
+	if _, err := svc.Create(ctx, "u1", "blob-rocket", "uploads/u1/rocket.png", false); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	if got, err := svc.List(ctx); err != nil || len(got) != 2 {
 		t.Fatalf("catalog after Create = %+v (err %v), want 2", got, err)
 	}
-	if err := svc.Delete(ctx, "u1", "fire"); err != nil {
+	if err := svc.Delete(ctx, "u1", "blob-fire"); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	if got, err := svc.List(ctx); err != nil || len(got) != 1 || got[0].Name != "rocket" {
+	if got, err := svc.List(ctx); err != nil || len(got) != 1 || got[0].Name != "blob-rocket" {
 		t.Fatalf("catalog after Delete = %+v (err %v), want rocket", got, err)
 	}
 	if emojis.listCalls != 3 {
@@ -50,7 +50,7 @@ func TestEmojiService_List_SharesOneCatalogRead(t *testing.T) {
 // Without the cache, or with Redis down, the catalog is read from the store.
 func TestEmojiService_List_Uncached(t *testing.T) {
 	svc, emojis, _, _ := setupEmojiSvc()
-	emojis.items["fire"] = &model.CustomEmoji{Name: "fire"}
+	emojis.items["blob-fire"] = &model.CustomEmoji{Name: "blob-fire"}
 	down := newMockCache()
 	down.getErr, down.setErr = errors.New("redis down"), errors.New("redis down")
 	svc.SetCatalogCache(down)

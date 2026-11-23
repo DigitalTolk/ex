@@ -193,6 +193,8 @@ Setup:
 
 Keep `MS_TOKEN_KEY` stable: a new key makes every stored token unreadable until each user signs in again. Links posted before the feature was on, and links in ~general, are not shared.
 
+A value that isn't the base64 of 32 bytes (such as the placeholder a secret store is seeded with) doesn't stop the app: it starts with sharing off and logs an error naming `MS_TOKEN_KEY`.
+
 ## Transactional Email
 
 Two flows send mail: **guest invitations** and **password resets**. Message

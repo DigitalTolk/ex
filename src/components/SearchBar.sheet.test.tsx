@@ -25,9 +25,12 @@ vi.mock('@/hooks/useChannels', () => ({
   useChannelBySlug: (slug?: string) => useChannelBySlugMock(slug as never),
   useUserChannels: () => ({ data: [] }),
 }));
+// The roster a from: modifier resolves against.
+const allUsersMock = vi.hoisted(() => ({ data: [] as { id: string; displayName: string; email?: string }[], isLoading: false }));
 vi.mock('@/hooks/useConversations', () => ({
   useUserConversations: () => conversationsMock,
   useOpenDM: () => ({ openDM: openDMMock, isPending: false }),
+  useAllUsers: () => allUsersMock,
 }));
 vi.mock('@/hooks/useSearch', () => ({
   useSearchUsers: () => ({ data: userHitsMock, isLoading: false }),
@@ -75,14 +78,34 @@ beforeEach(() => {
   channelHitsMock.hits = [];
   userHitsMock.hits = [];
   conversationsMock.data = [];
+  allUsersMock.data = [];
 });
 
 describe('SearchBar sheet variant', () => {
-  it('shows just the field (no hint copy) with no recent searches, and the leading slot', () => {
+  it('shows the search options (no hint copy) with no recent searches, and the leading slot', () => {
     renderSheet();
-    expect(screen.queryByTestId('recent-searches')).not.toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Search options' })).toBeInTheDocument();
+    expect(screen.queryByTestId('recent-search')).not.toBeInTheDocument();
     expect(screen.queryByText(/Search messages, channels and people/)).not.toBeInTheDocument();
     expect(screen.getByTestId('leading')).toBeInTheDocument();
+    // Plain buttons here, never lit: the sheet has no keyboard list.
+    const from = screen.getByTestId('search-option-from');
+    expect(from).not.toHaveAttribute('role');
+    expect(from.className).not.toContain('bg-muted');
+  });
+
+  // On a phone: tap an option, pick a name, type the words; a name typed
+  // out in full lets the Search key run it.
+  it('starts a modifier from a tapped option, and runs a search with a whole name typed', () => {
+    allUsersMock.data = [{ id: 'u-c', displayName: 'Carol', email: 'carol@example.com' }];
+    renderSheet();
+    const input = screen.getByTestId('searchbar-input') as HTMLInputElement;
+    fireEvent.click(screen.getByTestId('search-option-from'));
+    expect(input.value).toBe('from:');
+    fireEvent.change(input, { target: { value: 'deploy from:carol' } });
+    expect(screen.queryByTestId('search-modifier-option')).toBeNull();
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(useSearchMessagesMock).toHaveBeenLastCalledWith('deploy', true, 20, { in: undefined, from: 'u-c', after: undefined, before: undefined });
   });
 
   it('lists recent searches; tapping one runs it in place, × removes one, Clear removes all', () => {
@@ -117,7 +140,7 @@ describe('SearchBar sheet variant', () => {
     expect(screen.getAllByTestId('message-hit-card')).toHaveLength(2);
     expect(useRecentSearchesStore.getState().queries).toEqual(['release']);
     expect(lastLocation).toBe('/');
-    expect(useSearchMessagesMock).toHaveBeenLastCalledWith('release', true, 20, undefined);
+    expect(useSearchMessagesMock).toHaveBeenLastCalledWith('release', true, 20, { in: undefined, from: undefined });
     // The results are their own section, not options of the suggestion list.
     expect(screen.getByTestId('sheet-message-results').closest('[role="listbox"]')).toBeNull();
     // …and the only "Messages" region: the "search for…" group steps aside
@@ -141,6 +164,27 @@ describe('SearchBar sheet variant', () => {
     expect(useSearchMessagesMock).toHaveBeenLastCalledWith('deploy', true, 20, { in: 'ch-1' });
     expect(screen.queryByTestId('message-hit-card')).not.toBeInTheDocument();
     expect(screen.queryByTestId('sheet-message-empty')).not.toBeInTheDocument();
+  });
+
+  // Mattermost's modifiers: "datadog from:Günter" searches for datadog in
+  // what Günter wrote. Names match without case or accents.
+  it('reads from: and in: in a search', () => {
+    allUsersMock.data = [{ id: 'u-g', displayName: 'Günter Weber', email: 'gw@example.com' }];
+    conversationsMock.data = [{ conversationID: 'd-1', displayName: 'Ops team' }];
+    renderSheet();
+    const input = screen.getByTestId('searchbar-input');
+    fireEvent.change(input, { target: { value: 'datadog from:gunter in:"ops team"' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(useSearchMessagesMock).toHaveBeenLastCalledWith('datadog', true, 20, { in: 'd-1', from: 'u-g' });
+  });
+
+  it('says so when a modifier names no one, and searches nothing', () => {
+    renderSheet();
+    const input = screen.getByTestId('searchbar-input');
+    fireEvent.change(input, { target: { value: 'datadog from:nobody' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(screen.getByTestId('sheet-unmatched-modifier')).toHaveTextContent('Nothing matches “from:nobody”.');
+    expect(useSearchMessagesMock).toHaveBeenLastCalledWith('datadog', false, 20, { in: undefined, from: undefined });
   });
 
   it('says so when nothing matches; Enter runs it too', () => {
@@ -289,7 +333,9 @@ describe('SearchBar sheet variant', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Remove ~design from recently opened' }));
     expect(rows().map((r) => r.textContent)).toEqual(['Carol', 'Carol, Dan']);
     fireEvent.click(screen.getByTestId('recent-opened-clear'));
-    expect(screen.queryByTestId('recent-searches')).not.toBeInTheDocument();
+    // Only the search options are left.
+    expect(screen.queryByTestId('recent-opened')).not.toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Search options' })).toBeInTheDocument();
   });
 
   it('remembers what the desktop bar opens', () => {

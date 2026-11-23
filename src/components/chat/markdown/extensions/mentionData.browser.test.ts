@@ -93,6 +93,45 @@ describe('rankUsers', () => {
   });
 });
 
+describe('rankUsers: the people closest to the writer first', () => {
+  const names = (out: ReturnType<typeof rankUsers>) => out.map((s) => (s.kind === 'user' ? s.displayName : `@${s.group}`));
+
+  it('orders each section by who the writer mentions and messages most', () => {
+    const frequent = new Map([['u4', 0], ['u3', 1]]);
+    // Typing just "@": nobody is a prefix match ahead of anyone else.
+    expect(names(rankUsers('', { users, online: new Set(), memberIds: null, frequent }))).toEqual(['Calvin', 'Bob', 'Alice', 'Alan']);
+    // In a channel, members still lead; the ranking orders within each part.
+    const inChannel = rankUsers('', { users, online: new Set(), memberIds: new Set(['u1', 'u3']), frequent });
+    expect(names(inChannel)).toEqual(['Bob', 'Alice', 'Calvin', 'Alan']);
+  });
+
+  it('keeps a typed prefix ahead of a frequent contact, and presence after the ranking', () => {
+    const frequent = new Map([['u4', 0]]);
+    // "al": Alice and Alan start with it; Calvin only contains it.
+    expect(names(rankUsers('al', { users, online: new Set(['u2']), memberIds: null, frequent }))).toEqual(['Alan', 'Alice', 'Calvin']);
+    // A frequent contact beats an online one among equal matches.
+    expect(names(rankUsers('al', { users, online: new Set(['u2']), memberIds: null, frequent: new Map([['u1', 0]]) }))).toEqual(['Alice', 'Alan', 'Calvin']);
+  });
+
+  it('puts the thread\'s writers first, then the chat\'s members, then everyone else', () => {
+    const out = rankUsers('', { users, online: new Set(), memberIds: new Set(['u1', 'u2']), threadIds: new Set(['u2', 'u4']) });
+    expect(names(out)).toEqual(['Alan', 'Calvin', 'Alice', 'Bob']);
+    const flags = out.map((s) => (s.kind === 'user' ? [s.inThread, s.inChannel] : null));
+    expect(flags).toEqual([[true, true], [true, false], [false, true], [false, false]]);
+  });
+
+  it('partitions by the thread alone while the chat\'s members are unknown', () => {
+    const out = rankUsers('', { users, online: new Set(), memberIds: null, threadIds: new Set(['u3']) });
+    expect(names(out)).toEqual(['Bob', 'Alice', 'Alan', 'Calvin']);
+    expect(out[1].kind === 'user' && out[1].inChannel).toBe(false);
+  });
+
+  it('treats an empty thread like no thread', () => {
+    const out = rankUsers('', { users, online: new Set(), memberIds: null, threadIds: new Set() });
+    expect(out.every((s) => s.kind === 'user' && s.inChannel === undefined && s.inThread === undefined)).toBe(true);
+  });
+});
+
 describe('rankChannels', () => {
   const channels = [
     { channelID: 'c1', channelName: 'general', channelType: 'public' },

@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log/slog"
 	"reflect"
 	"strings"
 	"time"
@@ -348,8 +349,10 @@ func (c *Config) MSGraphEnabled() bool {
 	return c.MSTenantID != ""
 }
 
-// loadSharePoint checks the SharePoint settings, failing closed: a key set
-// without what sharing needs must abort boot, not run with sharing off.
+// loadSharePoint checks the SharePoint settings. A key set without what
+// sharing needs aborts boot. A key that isn't one (the placeholder a secret
+// store is seeded with before its real value is set) only turns sharing off,
+// loudly: the chat must start whatever that secret holds.
 func (c *Config) loadSharePoint() error {
 	hosts := c.MSSharePointHosts
 	c.MSSharePointHosts = nil
@@ -365,7 +368,8 @@ func (c *Config) loadSharePoint() error {
 		return errors.New("MS_TOKEN_KEY is set but SharePoint sharing also needs MS_TENANT_ID and OIDC_ISSUER")
 	}
 	if len(c.SharePointTokenKey()) != 32 {
-		return errors.New("invalid MS_TOKEN_KEY: must be the base64 of 32 random bytes (openssl rand -base64 32)")
+		slog.Error("MS_TOKEN_KEY is not the base64 of 32 random bytes (openssl rand -base64 32); SharePoint sharing is off until it is")
+		c.MSTokenKey = ""
 	}
 	return nil
 }
@@ -374,7 +378,7 @@ func (c *Config) loadSharePoint() error {
 func (c *Config) SharePointEnabled() bool { return c.MSTokenKey != "" }
 
 // SharePointTokenKey is the key that seals users' Microsoft tokens: MS_TOKEN_KEY
-// decoded (Load has checked it decodes to 32 bytes).
+// decoded (Load has dropped a key that doesn't decode to 32 bytes).
 func (c *Config) SharePointTokenKey() []byte {
 	key, _ := base64.StdEncoding.DecodeString(strings.TrimSpace(c.MSTokenKey))
 	return key

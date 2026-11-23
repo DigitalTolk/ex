@@ -2,6 +2,8 @@ import { Profiler, useEffect } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, act, within } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { queryKeys } from '@/lib/query-keys';
 import { SearchBar } from './SearchBar';
 import { usePresenceStore } from '@/stores/presence';
 import {
@@ -67,12 +69,25 @@ function LocationProbe() {
   return null;
 }
 
+// The roster from: suggests, as the app's cache holds it.
+const ROSTER = [
+  { id: 'u-carol', displayName: 'Carol Ng', email: 'carol@example.com' },
+  { id: 'u-cass', displayName: 'Cass Wu', email: 'cw@example.com' },
+  { id: 'u-bob', displayName: 'Bob Ray', email: 'bob@example.com' },
+];
+
 function renderBar(initialPath = '/') {
+  // The app always has a query client; the bar's own roster query (from:
+  // suggestions) reads from it.
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  qc.setQueryData(queryKeys.allUsers(), ROSTER);
   return render(
-    <MemoryRouter initialEntries={[initialPath]}>
-      <SearchBar />
-      <LocationProbe />
-    </MemoryRouter>,
+    <QueryClientProvider client={qc}>
+      <MemoryRouter initialEntries={[initialPath]}>
+        <SearchBar />
+        <LocationProbe />
+      </MemoryRouter>
+    </QueryClientProvider>,
   );
 }
 
@@ -120,13 +135,15 @@ describe('SearchBar', () => {
     expect(screen.getByTestId('searchbar-dropdown')).toBeInTheDocument();
   });
 
-  it('ignores ArrowUp/ArrowDown when there are no items', () => {
+  it('ignores ArrowUp/ArrowDown while the list is closed', () => {
     renderBar();
     const input = screen.getByTestId('searchbar-input');
-    fireEvent.focus(input); // open, but empty query → no items
-    fireEvent.keyDown(input, { key: 'ArrowDown' });
-    fireEvent.keyDown(input, { key: 'ArrowUp' });
+    fireEvent.focus(input);
+    fireEvent.keyDown(input, { key: 'Escape' }); // closed, still focused
+    expect(fireEvent.keyDown(input, { key: 'ArrowDown' })).toBe(true);
+    expect(fireEvent.keyDown(input, { key: 'ArrowUp' })).toBe(true);
     expect(screen.queryByTestId('searchbar-dropdown')).toBeNull();
+    expect(screen.queryByRole('listbox')).toBeNull();
   });
 
   it('cycles the highlight with ArrowDown/ArrowUp when suggestions exist', () => {
@@ -197,7 +214,9 @@ describe('SearchBar', () => {
       });
     });
 
-    const rows = () => screen.getAllByRole('option').map((o) => o.textContent);
+    // The recent rows, below the search options.
+    const recentOptions = () => screen.getAllByRole('option').filter((o) => !o.getAttribute('data-testid')?.startsWith('search-option-'));
+    const rows = () => recentOptions().map((o) => o.textContent);
 
     it('lists what was opened, then recent searches, when the empty field gets focus', () => {
       renderBar();
@@ -205,8 +224,10 @@ describe('SearchBar', () => {
       fireEvent.focus(screen.getByTestId('searchbar-input'));
       expect(screen.getByRole('listbox', { name: 'Recent' })).toBeInTheDocument();
       expect(rows()).toEqual(['~general', 'Bob, Carol', 'Bob', 'standup']);
-      // The first row is the one Enter opens.
-      expect(screen.getAllByRole('option')[0]).toHaveAttribute('aria-selected', 'true');
+      // The search options come first; the first recent row is the one
+      // Enter opens.
+      expect(screen.getByRole('group', { name: 'Search options' })).toHaveTextContent('from:Messages from a personin:Messages in a channel or DM');
+      expect(recentOptions()[0]).toHaveAttribute('aria-selected', 'true');
       // Typing swaps it for live results.
       fireEvent.change(screen.getByTestId('searchbar-input'), { target: { value: 'gen' } });
       expect(screen.queryByTestId('recent-searches')).toBeNull();
@@ -239,10 +260,13 @@ describe('SearchBar', () => {
       expect(lastLocation).toEqual({ pathname: '/search', search: '?q=standup' });
     });
 
-    it('ArrowUp from the first row wraps to the recent search, and Enter runs it', () => {
+    it('ArrowUp past the search options wraps to the recent search, and Enter runs it', () => {
       renderBar();
       const input = screen.getByTestId('searchbar-input');
       fireEvent.focus(input);
+      fireEvent.keyDown(input, { key: 'ArrowUp' });
+      expect(screen.getByTestId('search-option-in')).toHaveAttribute('aria-selected', 'true');
+      fireEvent.keyDown(input, { key: 'ArrowUp' });
       fireEvent.keyDown(input, { key: 'ArrowUp' });
       fireEvent.keyDown(input, { key: 'Enter' });
       expect(lastLocation).toEqual({ pathname: '/search', search: '?q=standup' });
@@ -252,7 +276,7 @@ describe('SearchBar', () => {
       renderBar();
       fireEvent.focus(screen.getByTestId('searchbar-input'));
       fireEvent.mouseEnter(screen.getAllByTestId('recent-opened')[2].parentElement!);
-      expect(screen.getAllByRole('option')[2]).toHaveAttribute('aria-selected', 'true');
+      expect(recentOptions()[2]).toHaveAttribute('aria-selected', 'true');
       fireEvent.mouseEnter(screen.getByTestId('recent-search').parentElement!);
       expect(screen.getByTestId('recent-search')).toHaveAttribute('aria-selected', 'true');
       const remove = screen.getByRole('button', { name: 'Remove ~general from recently opened' });
@@ -264,14 +288,144 @@ describe('SearchBar', () => {
       const clear = screen.getByTestId('recent-opened-clear');
       expect(fireEvent.mouseDown(clear)).toBe(false);
       fireEvent.click(clear);
-      expect(screen.queryByTestId('recent-searches')).toBeNull();
+      // Only the search options are left.
+      expect(rows()).toEqual([]);
+      expect(screen.getByTestId('search-option-from')).toBeInTheDocument();
     });
 
-    it('shows nothing with no history', () => {
+    it('shows just the search options with no history, none picked until arrowed to', () => {
       act(() => resetRecentSearchesSessionState());
       renderBar();
-      fireEvent.focus(screen.getByTestId('searchbar-input'));
-      expect(screen.queryByTestId('recent-searches')).toBeNull();
+      const field = screen.getByTestId('searchbar-input') as HTMLInputElement;
+      fireEvent.focus(field);
+      expect(rows()).toEqual([]);
+      expect(screen.getAllByRole('option').map((o) => o.getAttribute('data-testid'))).toEqual(['search-option-from', 'search-option-in']);
+      expect(screen.getAllByRole('option').every((o) => o.getAttribute('aria-selected') === 'false')).toBe(true);
+      expect(field).not.toHaveAttribute('aria-activedescendant');
+      // Enter alone does nothing; the arrows pick an option from either end.
+      fireEvent.keyDown(field, { key: 'Enter' });
+      expect(field.value).toBe('');
+      fireEvent.keyDown(field, { key: 'ArrowUp' });
+      expect(screen.getByTestId('search-option-in')).toHaveAttribute('aria-selected', 'true');
+      fireEvent.mouseEnter(screen.getByTestId('search-option-from'));
+      expect(screen.getByTestId('search-option-from')).toHaveAttribute('aria-selected', 'true');
+      fireEvent.keyDown(field, { key: 'Enter' });
+      expect(field.value).toBe('from:');
+    });
+
+    it('ArrowDown with nothing picked starts at the first search option', () => {
+      act(() => resetRecentSearchesSessionState());
+      renderBar();
+      const field = screen.getByTestId('searchbar-input') as HTMLInputElement;
+      fireEvent.focus(field);
+      fireEvent.keyDown(field, { key: 'ArrowDown' });
+      expect(screen.getByTestId('search-option-from')).toHaveAttribute('aria-selected', 'true');
+    });
+  });
+
+  // Mattermost-style modifiers: typing from: or in: lists who or where, and
+  // picking one completes the word.
+  describe('search options', () => {
+    const input = () => screen.getByTestId('searchbar-input') as HTMLInputElement;
+    // A row's text, without the Tab hint the highlighted one carries.
+    const options = () => screen.getAllByTestId('search-modifier-option').map((o) => o.textContent?.replace(/Tab$/, ''));
+
+    it('starts a from: from the empty field, then suggests people as it is typed', () => {
+      renderBar();
+      fireEvent.focus(input());
+      expect(fireEvent.mouseDown(screen.getByTestId('search-option-from'))).toBe(false); // keeps the field focused
+      fireEvent.click(screen.getByTestId('search-option-from'));
+      expect(input().value).toBe('from:');
+      expect(options()).toEqual(['Bob Raybob@example.com', 'Carol Ngcarol@example.com', 'Cass Wucw@example.com']);
+      fireEvent.change(input(), { target: { value: 'from:ca' } });
+      expect(screen.getByRole('group', { name: 'From' })).toBeInTheDocument();
+      expect(options()).toEqual(['Carol Ngcarol@example.com', 'Cass Wucw@example.com']);
+      // The plain search rows step aside while a modifier is being typed.
+      expect(screen.queryByTestId('searchbar-show-results')).toBeNull();
+    });
+
+    it('Tab or Enter takes the highlighted name, ArrowDown and hover move it, a click takes one too', () => {
+      renderBar();
+      fireEvent.change(input(), { target: { value: 'deploy from:ca' } });
+      expect(screen.getAllByTestId('search-modifier-option')[0]).toHaveAttribute('aria-selected', 'true');
+      fireEvent.keyDown(input(), { key: 'Tab' });
+      expect(input().value).toBe('deploy from:Carol ');
+      fireEvent.change(input(), { target: { value: 'deploy from:ca' } });
+      fireEvent.keyDown(input(), { key: 'ArrowDown' });
+      fireEvent.keyDown(input(), { key: 'Enter' });
+      expect(input().value).toBe('deploy from:Cass ');
+      fireEvent.change(input(), { target: { value: 'from:"carol n' } });
+      fireEvent.mouseEnter(screen.getAllByTestId('search-modifier-option')[0]);
+      expect(fireEvent.mouseDown(screen.getAllByTestId('search-modifier-option')[0])).toBe(false); // keeps the field focused
+      fireEvent.click(screen.getAllByTestId('search-modifier-option')[0]);
+      expect(input().value).toBe('from:Carol ');
+      // Then the words, and Enter searches it all.
+      fireEvent.change(input(), { target: { value: 'from:Carol deploy' } });
+      fireEvent.keyDown(input(), { key: 'Enter' });
+      expect(lastLocation).toEqual({ pathname: '/search', search: '?q=from%3ACarol+deploy' });
+    });
+
+    it('suggests channels and DMs for in:', () => {
+      useUserChannelsMock.mockReturnValue({
+        data: [
+          { channelID: 'c-1', channelName: 'general', channelType: 'public' },
+          { channelID: 'c-2', channelName: 'gen-z', channelType: 'private' },
+        ],
+      } as never);
+      useUserConversationsMock.mockReturnValue({ data: [{ conversationID: 'd-1', displayName: 'Gene Hall', type: 'dm' }] });
+      renderBar();
+      fireEvent.change(input(), { target: { value: 'in:~gen' } });
+      expect(screen.getByRole('group', { name: 'In' })).toBeInTheDocument();
+      // Ordered by name, channels and DMs together.
+      expect(options()).toEqual(['~gen-z', 'Gene Hall', '~general']);
+      fireEvent.keyDown(input(), { key: 'Enter' });
+      expect(input().value).toBe('in:~gen-z ');
+      fireEvent.change(input(), { target: { value: 'in:gene' } });
+      fireEvent.keyDown(input(), { key: 'Tab' });
+      expect(input().value).toBe('in:"Gene Hall" ');
+    });
+
+    // Regression: with a channel hit around, typing "from:" rendered that
+    // channel's row while the list held only the people, and the bar crashed
+    // the page. The lookups leave the modifier being typed out.
+    it('does not crash on from: with channel and people hits around, nor look them up for it', () => {
+      useSearchChannelsMock.mockReturnValue({ data: { hits: [{ id: 'c-from', score: 1, _source: { name: 'from-the-field', slug: 'from-the-field' } }] }, isLoading: false });
+      useSearchUsersMock.mockReturnValue({ data: { hits: [{ id: 'u-x', score: 1, _source: { displayName: 'Fromm' } }] }, isLoading: false });
+      renderBar();
+      fireEvent.change(input(), { target: { value: 'deploy from:' } });
+      expect(options()).toHaveLength(3);
+      expect(screen.queryByRole('group', { name: 'Channels' })).toBeNull();
+      expect(screen.queryByRole('group', { name: 'People' })).toBeNull();
+      expect(useSearchChannelsMock).not.toHaveBeenCalledWith(expect.stringContaining('from'), expect.anything(), expect.anything());
+    });
+
+    it('suggests days for on:, before: and after:, and writes the one picked', () => {
+      renderBar();
+      fireEvent.change(input(), { target: { value: 'deploy on:' } });
+      expect(screen.getByRole('group', { name: 'On' })).toBeInTheDocument();
+      expect(options().slice(0, 2).map((o) => o?.split(/(?=[A-Z][a-z]{2},)/)[0])).toEqual(['Today', 'Yesterday']);
+      expect(options()).toHaveLength(7);
+      fireEvent.keyDown(input(), { key: 'Tab' });
+      expect(input().value).toBe('deploy on:today ');
+      fireEvent.change(input(), { target: { value: 'deploy before:yes' } });
+      expect(screen.getByRole('group', { name: 'Before' })).toBeInTheDocument();
+      fireEvent.keyDown(input(), { key: 'Enter' });
+      expect(input().value).toBe('deploy before:yesterday ');
+      fireEvent.change(input(), { target: { value: 'after:20' } });
+      expect(screen.getByRole('group', { name: 'After' })).toBeInTheDocument();
+      // A whole date typed out is done: no list, and Enter searches it.
+      fireEvent.change(input(), { target: { value: 'deploy after:2025-01-31' } });
+      expect(screen.queryByRole('group', { name: 'After' })).toBeNull();
+      fireEvent.keyDown(input(), { key: 'Enter' });
+      expect(lastLocation).toEqual({ pathname: '/search', search: '?q=deploy+after%3A2025-01-31' });
+    });
+
+    it('falls back to the plain search when nothing matches, and Tab is left alone', () => {
+      renderBar();
+      fireEvent.change(input(), { target: { value: 'from:zed' } });
+      expect(screen.queryByTestId('search-modifier-option')).toBeNull();
+      expect(screen.getByTestId('searchbar-show-results')).toBeInTheDocument();
+      expect(fireEvent.keyDown(input(), { key: 'Tab' })).toBe(true);
     });
   });
 
@@ -478,11 +632,13 @@ describe('SearchBar', () => {
       });
       const commits = { count: 0 };
       render(
-        <MemoryRouter>
-          <Profiler id="bar" onRender={() => { commits.count++; }}>
-            <SearchBar />
-          </Profiler>
-        </MemoryRouter>,
+        <QueryClientProvider client={new QueryClient()}>
+          <MemoryRouter>
+            <Profiler id="bar" onRender={() => { commits.count++; }}>
+              <SearchBar />
+            </Profiler>
+          </MemoryRouter>
+        </QueryClientProvider>,
       );
       fireEvent.change(screen.getByTestId('searchbar-input'), { target: { value: 'al' } });
       const row = screen.getByTestId('searchbar-user-u-1');

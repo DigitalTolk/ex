@@ -48,6 +48,12 @@ vi.mock('@/hooks/useAttachments', () => ({
   useAttachmentsBatch: (...args: unknown[]) => useAttachmentsBatchMock(...args),
 }));
 
+const showToastMock = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/toast', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/toast')>()),
+  showToast: (...args: unknown[]) => showToastMock(...args),
+}));
+
 vi.mock('@/hooks/useUnfurl', () => ({
   useUnfurl: () => ({ data: undefined, isLoading: false }),
 }));
@@ -137,6 +143,34 @@ describe('MessageItem desktop toolbar + menu branches', () => {
       expect(rowA.querySelector('[data-actions-pinned="true"]')).toBeNull();
     });
     expect(screen.container).toBeTruthy();
+  });
+
+  // Regression: a menu opening upward from a short row sits a pixel off the
+  // toolbar, so the way up to its options crosses the row above. Passing
+  // over another row on the way to the menu must not close it.
+  it('keeps the menu open when the pointer crosses another row on its way to the menu', async () => {
+    if (window.innerWidth <= 767) return;
+    await renderWithProviders(
+      <>
+        <MessageItem message={makeMessage({ id: 'above' })} authorName="Bob" isOwn={false} channelId="channel-1" currentUserId="user-1" />
+        <MessageItem message={makeMessage({ id: 'mine' })} authorName="Alice" isOwn channelId="channel-1" currentUserId="user-1" />
+      </>,
+    );
+    const mine = document.querySelector('[data-message-id="mine"]') as HTMLElement;
+    await hoverRow(mine);
+    await userEvent.click(mine.querySelector('[data-testid="message-actions-trigger"]') as HTMLButtonElement);
+    const item = await vi.waitFor(() => {
+      const el = document.querySelector('[role="menu"] [role="menuitem"]');
+      expect(el).not.toBeNull();
+      return el as HTMLElement;
+    });
+
+    // Through the row above, then onto the menu.
+    await userEvent.hover(document.querySelector('[data-message-id="above"]') as HTMLElement);
+    await userEvent.hover(item);
+    await new Promise((r) => setTimeout(r, 600));
+    expect(document.querySelector('[role="menu"]')).not.toBeNull();
+    expect(mine.querySelector('[data-actions-pinned="true"]')).not.toBeNull();
   });
 
   it('keeps the menu open when the hover notification is for its own row', async () => {
@@ -301,6 +335,27 @@ describe('MessageItem desktop toolbar + menu branches', () => {
     await vi.waitFor(() => {
       expect(mutateEdit).toHaveBeenCalled();
     });
+  });
+
+  // A refused save says so and leaves the edit box open with what was typed.
+  it('keeps the inline edit open and says so when the save is refused', async () => {
+    if (window.innerWidth <= 767) return;
+    showToastMock.mockClear();
+    mutateEdit.mockImplementationOnce((_vars: unknown, opts?: { onError?: (err: Error) => void }) => {
+      opts?.onError?.(new Error('refused'));
+    });
+    const screen = await renderWithProviders(
+      <MessageItem message={makeMessage({ body: 'original' })} authorName="Alice" isOwn channelId="channel-1" currentUserId="user-1" />,
+    );
+    dispatchEditMessage({ messageId: 'msg-1' });
+    await expect.element(screen.getByTestId('inline-edit')).toBeVisible();
+    const editor = screen.getByLabelText('Message input');
+    await editor.click();
+    await editor.fill('original edited');
+    await screen.getByRole('button', { name: 'Save' }).click();
+    await vi.waitFor(() => expect(showToastMock).toHaveBeenCalledWith("Couldn't save your edit. It's still there, so you can try again."));
+    expect(document.querySelector('[data-testid="inline-edit"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="inline-edit"]')?.textContent).toContain('original edited');
   });
 
   it('preserves attachments (sends attachmentIDs:undefined) when they did not all load into the editor', async () => {

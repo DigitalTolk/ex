@@ -124,6 +124,7 @@ func NewRouter(d *Deps) http.Handler {
 	mux.Handle("PUT /api/v1/users/me/notification-settings", middleware.WrapFunc(userH.SetMyNotificationSettings, authMW))
 	mux.Handle("PUT /api/v1/users/me/notification-snooze", middleware.WrapFunc(userH.SnoozeMyNotifications, authMW))
 	mux.Handle("POST /api/v1/users/me/avatar/upload-url", middleware.WrapFunc(userH.CreateAvatarUploadURL, authMW))
+	mux.Handle("GET /api/v1/users/me/frequent-people", middleware.WrapFunc(userH.ListFrequentPeople, authMW))
 	mux.Handle("POST /api/v1/users/batch", middleware.WrapFunc(userH.BatchGetUsers, authMW))
 	mux.Handle("GET /api/v1/users/{id}", middleware.WrapFunc(userH.GetUser, authMW))
 	mux.Handle("PATCH /api/v1/users/{id}/role", middleware.WrapFunc(userH.UpdateUserRole, authMW))
