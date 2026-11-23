@@ -3493,10 +3493,10 @@ export interface MarkUnreadResult {
 export const UserGroupIDPrefix = "group-";
 /**
  * UserGroup is a named set of people mentioned together through its handle
- * (Slack-style "@oncall"). Groups come from the Microsoft 365 (Entra ID)
- * department field: one per department and one per squad, created and kept
- * in sync by the directory sweep. A disabled group keeps its members and its
- * handle but is not mentionable.
+ * (Slack-style "@oncall"). Groups come from Microsoft 365 (Entra ID): each
+ * security group in the configured parent group is one user group, its
+ * display name the handle, kept in sync by the user-group sync. A disabled
+ * group keeps its members and its handle but is not mentionable.
  */
 export interface UserGroup {
   id: string;
@@ -3509,17 +3509,12 @@ export interface UserGroup {
   createdAt: string /* RFC3339 */;
   updatedAt: string /* RFC3339 */;
   /**
-   * Source is the department or squad the members come from.
+   * Source is the Entra group the group follows.
    */
   source: UserGroupSource;
   /**
-   * AdminEdited is set once an admin changes the name or description: the
-   * sweep then never overwrites them.
-   */
-  adminEdited?: boolean;
-  /**
-   * SyncSkipped counts the people Microsoft 365 lists for the source who
-   * aren't group members in ex (no ex account yet, a guest or deactivated).
+   * SyncSkipped counts the people in the Entra group who aren't group
+   * members in ex (no ex account, a guest, a bot or deactivated).
    */
   syncSkipped?: number /* int */;
   /**
@@ -3529,24 +3524,18 @@ export interface UserGroup {
   syncState?: UserGroupSyncState;
 }
 /**
- * UserGroupSourceKind says what a group follows.
+ * UserGroupSourceEntraGroup is the kind of a group that follows an Entra
+ * security group.
  */
-export type UserGroupSourceKind = string;
-export const UserGroupSourceDepartment: UserGroupSourceKind = "department";
-export const UserGroupSourceSquad: UserGroupSourceKind = "squad";
+export const UserGroupSourceEntraGroup = "entra-group";
 /**
- * UserGroupSource is the department or squad a group's members come from.
- * Key identifies it (case- and spacing-insensitive): "dept:<department>" or
- * "squad:<squad>".
+ * UserGroupSource is where a group's members come from. Key identifies it
+ * ("entra-group:<object id>") and is claimed, so one source backs at most one
+ * group; it never changes, so renaming the Entra group renames this group.
  */
 export interface UserGroupSource {
-  kind: UserGroupSourceKind;
-  /**
-   * Department is the department's name; for a squad, the department most
-   * of its members list.
-   */
-  department?: string;
-  squad?: string;
+  kind: string;
+  id: string;
   key: string;
 }
 /**
@@ -3554,46 +3543,63 @@ export interface UserGroupSource {
  */
 export type UserGroupSyncState = string;
 /**
- * UserGroupSyncSourceMissing: nobody in Microsoft 365 has the department or
- * squad any more, so the group has no members; an admin can disable it.
+ * UserGroupSyncSourceMissing: the Entra group left the parent group (or
+ * was deleted), so the group has no members; an admin can disable it.
  */
 export const UserGroupSyncSourceMissing: UserGroupSyncState = "source-missing";
 /**
- * UserGroupSyncStatus is the last directory sweep's group sync, for admins.
+ * UserGroupSyncHandleConflict: the Entra group was renamed to a handle ex
+ * can't use (invalid, reserved, or held by another group or a bot), so
+ * the group keeps its handle until that's fixed.
+ */
+export const UserGroupSyncHandleConflict: UserGroupSyncState = "handle-conflict";
+/**
+ * UserGroupSyncStatus is how the user-group sync went, for admins.
  */
 export interface UserGroupSyncStatus {
   /**
-   * LastSyncedAt is when the last sweep finished; nil before the first.
+   * Configured is false when no parent group is set, so nothing syncs.
+   */
+  configured: boolean;
+  /**
+   * IntervalMinutes is how often the scheduled sync runs.
+   */
+  intervalMinutes: number /* int */;
+  /**
+   * Running is set while a sync runs; StartedAt and Trigger ("scheduled"
+   * or "manual") describe it.
+   */
+  running: boolean;
+  startedAt?: string /* RFC3339 */;
+  trigger?: string;
+  /**
+   * LastSyncedAt is when the last successful sync finished; nil before
+   * the first.
    */
   lastSyncedAt?: string /* RFC3339 */;
   /**
-   * Held is set while a sweep was held because far fewer departments came
-   * back than the time before; the next sweep applies if it agrees.
+   * FinishedAt is when the last sync, successful or not, finished.
    */
-  held?: boolean;
+  finishedAt?: string /* RFC3339 */;
   /**
-   * Readable is how many people had a readable department.
+   * LastError says why the last sync failed; "" when it succeeded.
    */
-  readable: number /* int */;
-  anomalies: DepartmentAnomalyReport;
+  lastError?: string;
+  /**
+   * Skipped lists the Entra groups the last sync couldn't create or rename.
+   */
+  skipped: UserGroupSyncSkip[];
 }
 /**
- * DepartmentAnomalyReport summarises the department values the parser read
- * only partly: a count per kind, and up to a few example values.
+ * UserGroupSyncSkip is an Entra group a sync couldn't use as it is, and why.
  */
-export interface DepartmentAnomalyReport {
-  people: number /* int */;
-  counts: { [key: string]: number /* int */};
-  examples: DepartmentAnomaly[];
-}
-/**
- * DepartmentAnomaly is one unusual department value and how many people
- * have it.
- */
-export interface DepartmentAnomaly {
-  value: string;
-  kinds: string[];
-  people: number /* int */;
+export interface UserGroupSyncSkip {
+  /**
+   * GroupID is the ex group (when it exists), Name the Entra group's name.
+   */
+  groupId?: string;
+  name: string;
+  reason: string;
 }
 /**
  * UserGroupDetail is a group with its member IDs. The members are rows of

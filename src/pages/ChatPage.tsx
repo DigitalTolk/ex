@@ -433,6 +433,10 @@ export default function ChatPage() {
       // popovers and profiles' group lists all refetch.
       queryClient.invalidateQueries({ queryKey: queryKeys.userGroupsAll() });
     },
+    [EventType.UserGroupSync]: () => {
+      // A user-group sync started or ended: the admin sync report refetches.
+      queryClient.invalidateQueries({ queryKey: queryKeys.userGroupSync() });
+    },
     [EventType.ProjectChanged]: () => {
       // A project or its design references changed (any member, any device):
       // the list and every open project detail refetch.

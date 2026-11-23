@@ -89,19 +89,19 @@ func (s *MSDirectoryService) LookupProfile(ctx context.Context, email, objectID 
 	return dp, nil
 }
 
-// ListAccounts reports every directory account, keyed by AAD object id:
-// whether it can sign in and its department. An account deleted upstream is
-// absent.
-func (s *MSDirectoryService) ListAccounts(ctx context.Context) (map[string]DirectoryAccount, error) {
+// ListAccounts reports every directory account's standing, keyed by AAD
+// object id: true while it can sign in, false once it is disabled. An
+// account deleted upstream is absent.
+func (s *MSDirectoryService) ListAccounts(ctx context.Context) (map[string]bool, error) {
 	accounts, err := s.graph.ListUserAccounts(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("directory: list accounts: %w", err)
 	}
-	out := make(map[string]DirectoryAccount, len(accounts))
+	enabled := make(map[string]bool, len(accounts))
 	for _, a := range accounts {
-		out[a.ID] = DirectoryAccount{Enabled: a.Enabled(), Department: a.Department}
+		enabled[a.ID] = a.Enabled()
 	}
-	return out, nil
+	return enabled, nil
 }
 
 // managerRef converts a Graph profile into the stored manager reference,

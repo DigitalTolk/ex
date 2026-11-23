@@ -51,7 +51,7 @@ import DirectoriesPage from '@/pages/DirectoriesPage';
 const ONCALL = {
   id: 'group-oncall', handle: 'oncall', name: 'On-call engineers', description: 'Pages', disabled: false,
   memberCount: 2, createdBy: '', createdAt: '', updatedAt: '', memberIds: ['u-ann', 'u-gone'],
-  source: { kind: 'squad', squad: 'Oncall', department: 'Engineering', key: 'squad:oncall' },
+  source: { kind: 'entra-group', id: 'g-oncall', key: 'entra-group:g-oncall' },
 };
 const OFF = { ...ONCALL, id: 'group-off', handle: 'off', name: 'Old team', description: '', disabled: true, memberCount: 0, memberIds: [] };
 // One member nobody has a profile for.
@@ -67,10 +67,9 @@ function routeApi() {
     const key = `${init?.method ?? 'GET'} ${path}`;
     if (fail[key]) return Promise.reject(fail[key]);
     if (key === 'GET /api/v1/usergroup-permissions') return Promise.resolve({ canManage });
-    if (key === 'GET /api/v1/usergroup-sync') return Promise.resolve({ readable: 3, anomalies: { people: 0, counts: {}, examples: [] } });
+    if (key === 'GET /api/v1/usergroup-sync') return Promise.resolve({ configured: true, intervalMinutes: 30, running: false, skipped: [] });
     if (key === 'GET /api/v1/usergroups') return Promise.resolve(groups.filter((g) => !g.disabled));
     if (key === 'GET /api/v1/usergroups?includeDisabled=true') return Promise.resolve(groups);
-    if (path.startsWith('/api/v1/usergroup-handles/')) return Promise.resolve({ available: !path.endsWith('/taken') });
     const m = /^GET \/api\/v1\/usergroups\/([^/]+)$/.exec(key);
     if (m) return m[1] in detail ? Promise.resolve(detail[m[1]]) : Promise.reject(new Error('not found'));
     return Promise.resolve(ONCALL);
@@ -139,7 +138,7 @@ describe('Directory › Groups', () => {
   it('says so when there are no groups yet, and offers no way to create one, even to admins', async () => {
     groups = [];
     renderAt('/directory/groups');
-    expect(await screen.findByText("No user groups yet. They're made from Microsoft 365 departments and squads.")).toBeInTheDocument();
+    expect(await screen.findByText("No user groups yet. They come from Microsoft 365.")).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Create user group' })).not.toBeInTheDocument();
   });
 
@@ -154,74 +153,6 @@ describe('Directory › Groups', () => {
     renderAt('/directory/groups');
     expect(screen.queryByRole('tab', { name: 'Groups' })).not.toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Channels' })).toHaveAttribute('aria-selected', 'true');
-  });
-});
-
-async function openEdit() {
-  renderAt('/directory/groups?group=group-oncall');
-  fireEvent.click(await screen.findByRole('button', { name: 'Edit details' }));
-}
-
-describe("editing a user group's details", () => {
-  it('refuses a taken or malformed handle, and shows a failed save', async () => {
-    await openEdit();
-    expect(screen.getByText('Members always come from Microsoft 365. What you set here is kept as is.')).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText('Handle'), { target: { value: '@Taken' } });
-    expect(await screen.findByText('@taken is taken.')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
-
-    fireEvent.change(screen.getByLabelText('Handle'), { target: { value: '-x' } });
-    expect(await screen.findByText(/2 to 30 lowercase letters/)).toBeInTheDocument();
-
-    fireEvent.change(screen.getByLabelText('Handle'), { target: { value: 'pager' } });
-    expect(await screen.findByText('Messages that already mention @oncall will show @pager.')).toBeInTheDocument();
-    fail['PATCH /api/v1/usergroups/group-oncall'] = new Error('that handle is taken');
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled());
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('that handle is taken');
-
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-    expect(await screen.findByTestId('usergroup-detail')).toBeInTheDocument();
-  });
-
-  it('refuses a blank name and an overlong description', async () => {
-    await openEdit();
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: '  ' } });
-    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Pagers' } });
-    fireEvent.change(screen.getByLabelText('Description (optional)'), { target: { value: 'x'.repeat(300) } });
-    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
-  });
-
-  it('closes from its close button', async () => {
-    await openEdit();
-    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
-    await waitFor(() => expect(screen.queryByLabelText('Name')).not.toBeInTheDocument());
-  });
-
-  it('says nothing about a handle whose check failed', async () => {
-    fail['GET /api/v1/usergroup-handles/pager'] = new Error('offline');
-    await openEdit();
-    fireEvent.change(screen.getByLabelText('Handle'), { target: { value: 'pager' } });
-    await waitFor(() => expect(calls('GET /api/v1/usergroup-handles/pager')).toHaveLength(1));
-    await waitFor(() => expect(screen.getByText('Messages that already mention @oncall will show @pager.')).toBeInTheDocument());
-    expect(screen.queryByText(/is taken/)).not.toBeInTheDocument();
-  });
-
-  it('ignores the answer for a handle that was changed while it was being checked', async () => {
-    let answerSlow: (v: unknown) => void = () => {};
-    const routed = mockApiFetch.getMockImplementation()!;
-    mockApiFetch.mockImplementation((path: string, init?: Init) =>
-      path === '/api/v1/usergroup-handles/slow' ? new Promise((r) => { answerSlow = r; }) : routed(path, init),
-    );
-    await openEdit();
-    fireEvent.change(screen.getByLabelText('Handle'), { target: { value: 'slow' } });
-    await waitFor(() => expect(calls('GET /api/v1/usergroup-handles/slow')).toHaveLength(1));
-    fireEvent.change(screen.getByLabelText('Handle'), { target: { value: 'quick' } });
-    await waitFor(() => expect(calls('GET /api/v1/usergroup-handles/quick')).toHaveLength(1));
-    answerSlow({ available: false });
-    await waitFor(() => expect(screen.queryByText('@slow is taken.')).not.toBeInTheDocument());
-    expect(screen.getByText('Messages that already mention @oncall will show @quick.')).toBeInTheDocument();
   });
 });
 
@@ -266,29 +197,13 @@ describe('a user group', () => {
     await waitFor(() => expect(calls('POST /api/v1/usergroups/group-off/enable')).toHaveLength(1));
   });
 
-  it('edits the details, warning that old mentions show the new handle', async () => {
-    renderAt('/directory/groups?group=group-oncall');
-    fireEvent.click(await screen.findByRole('button', { name: 'Edit details' }));
-    expect(screen.getByLabelText('Handle')).toHaveValue('oncall');
-    fireEvent.change(screen.getByLabelText('Handle'), { target: { value: 'pager' } });
-    expect(screen.getByText('Messages that already mention @oncall will show @pager.')).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText('Description (optional)'), { target: { value: ' New ' } });
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled());
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-    await waitFor(() => expect(calls('PATCH /api/v1/usergroups/group-oncall')).toHaveLength(1));
-    expect(JSON.parse(calls('PATCH /api/v1/usergroups/group-oncall')[0][1].body)).toEqual({
-      handle: 'pager', name: 'On-call engineers', description: 'New',
-    });
-    // Back on the group.
-    expect(await screen.findByTestId('usergroup-detail')).toBeInTheDocument();
-  });
-
   it('is read-only for those who may not manage groups', async () => {
     canManage = false;
     renderAt('/directory/groups?group=group-oncall');
     await screen.findByTestId('usergroup-detail');
-    expect(screen.queryByRole('button', { name: 'Edit details' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Change Microsoft 365 group' })).not.toBeInTheDocument();
+    for (const name of ['Disable group', 'Enable group', 'Edit details']) {
+      expect(screen.queryByRole('button', { name })).not.toBeInTheDocument();
+    }
   });
 
   it('names a member it has no profile for by id, and counts one member', async () => {

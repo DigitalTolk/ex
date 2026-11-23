@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/DigitalTolk/ex/internal/middleware"
@@ -8,9 +9,8 @@ import (
 )
 
 // UserGroupHandler is the user-group API (/api/v1/usergroups). Every member
-// reads groups; admins edit their details and enable or disable them (the
-// service decides). Groups themselves come from the Microsoft 365 department
-// field. Guests are refused.
+// reads groups; admins enable or disable them and run the sync (the service
+// decides). Groups themselves come from Microsoft 365. Guests are refused.
 type UserGroupHandler struct {
 	svc *service.UserGroupService
 }
@@ -48,24 +48,13 @@ func (h *UserGroupHandler) Get(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, g)
 }
 
-// HandleAvailable answers GET /api/v1/usergroup-handles/{handle}.
-func (h *UserGroupHandler) HandleAvailable(w http.ResponseWriter, r *http.Request) {
-	ok, err := h.svc.HandleAvailable(r.Context(), userGroupActor(r), r.PathValue("handle"))
-	if err != nil {
-		writeServiceError(w, r, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]bool{"available": ok})
-}
-
 // Permissions answers GET /api/v1/usergroup-permissions: whether the caller
-// may edit groups (the directory shows its controls by it).
+// may manage groups (the directory shows its controls by it).
 func (h *UserGroupHandler) Permissions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"canManage": h.svc.CanManage(userGroupActor(r))})
 }
 
-// SyncStatus answers GET /api/v1/usergroup-sync: the last sweep's group sync
-// and the department values it read only partly (admins).
+// SyncStatus answers GET /api/v1/usergroup-sync: how the sync went (admins).
 func (h *UserGroupHandler) SyncStatus(w http.ResponseWriter, r *http.Request) {
 	status, err := h.svc.SyncStatus(r.Context(), userGroupActor(r))
 	if err != nil {
@@ -85,19 +74,19 @@ func (h *UserGroupHandler) ForUser(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, groups)
 }
 
-// Update answers PATCH /api/v1/usergroups/{id}.
-func (h *UserGroupHandler) Update(w http.ResponseWriter, r *http.Request) {
-	var body service.UserGroupPatch
-	if err := readJSON(r, &body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
-		return
-	}
-	g, err := h.svc.Update(r.Context(), userGroupActor(r), r.PathValue("id"), body)
-	if err != nil {
+// SyncNow answers POST /api/v1/usergroup-sync: starts a sync (admins). 202
+// with the status when one started or was already running; 429 with the
+// status right after a run.
+func (h *UserGroupHandler) SyncNow(w http.ResponseWriter, r *http.Request) {
+	status, err := h.svc.SyncNow(r.Context(), userGroupActor(r))
+	switch {
+	case errors.Is(err, service.ErrUserGroupSyncCooldown):
+		writeJSON(w, http.StatusTooManyRequests, status)
+	case err != nil:
 		writeServiceError(w, r, err)
-		return
+	default:
+		writeJSON(w, http.StatusAccepted, status)
 	}
-	writeJSON(w, http.StatusOK, g)
 }
 
 // Enable answers POST /api/v1/usergroups/{id}/enable.

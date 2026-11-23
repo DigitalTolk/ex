@@ -110,23 +110,13 @@ func TestSetStatusFromDirectoryGetError(t *testing.T) {
 // --- DirectorySyncService status sweep ---------------------------------------
 
 // fakeAccountLister is a programmable DirectoryAccountLister.
-// fakeAccountLister lists accounts by whether they can sign in, with an
-// optional department each.
 type fakeAccountLister struct {
-	accounts    map[string]bool
-	departments map[string]string
-	err         error
+	accounts map[string]bool
+	err      error
 }
 
-func (f *fakeAccountLister) ListAccounts(context.Context) (map[string]DirectoryAccount, error) {
-	if f.err != nil {
-		return nil, f.err
-	}
-	out := make(map[string]DirectoryAccount, len(f.accounts))
-	for id, enabled := range f.accounts {
-		out[id] = DirectoryAccount{Enabled: enabled, Department: f.departments[id]}
-	}
-	return out, nil
+func (f *fakeAccountLister) ListAccounts(context.Context) (map[string]bool, error) {
+	return f.accounts, f.err
 }
 
 type fakeStatusSetter struct {

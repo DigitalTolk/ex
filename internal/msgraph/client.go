@@ -234,9 +234,6 @@ type UserAccount struct {
 	// longer sign in). Graph returns it only when selected; nil means it
 	// wasn't reported, which never counts as disabled.
 	AccountEnabled *bool `json:"accountEnabled"`
-	// Department is the Entra department field ("Department - Squad, Squad"),
-	// which user groups follow; "" when unset.
-	Department string `json:"department"`
 }
 
 // Enabled reports whether the account can sign in. An unreported flag
@@ -246,29 +243,62 @@ func (a UserAccount) Enabled() bool {
 }
 
 // ListUserAccounts returns every user account in the tenant with its enabled
-// flag and department, following Graph's paging to the end: one call per 999
-// accounts, so a whole-tenant check stays cheap enough to run every few
-// minutes. A page link pointing anywhere but this client's Graph base URL is
-// refused rather than sent the bearer token.
+// flag, following Graph's paging to the end: one call per 999 accounts, so a
+// whole-tenant check stays cheap enough to run every few minutes.
 func (c *Client) ListUserAccounts(ctx context.Context) ([]UserAccount, error) {
-	var accounts []UserAccount
-	path := "/users?$select=id,accountEnabled,department&$top=999"
+	return listPages[UserAccount](ctx, c, "/users?$select=id,accountEnabled&$top=999")
+}
+
+// Group is a directory group as user groups read it.
+type Group struct {
+	ID          string `json:"id"`
+	DisplayName string `json:"displayName"`
+	Description string `json:"description"`
+}
+
+// ListMemberGroups returns the groups that are direct members of the group
+// parentID (users and other members are left out). ErrNotFound when parentID
+// doesn't exist.
+func (c *Client) ListMemberGroups(ctx context.Context, parentID string) ([]Group, error) {
+	return listPages[Group](ctx, c, "/groups/"+url.PathEscape(parentID)+"/members/microsoft.graph.group?$select=id,displayName,description&$top=999")
+}
+
+// ListMemberUserIDs returns the object IDs of the users who are direct
+// members of the group groupID (nested groups and other members are left
+// out).
+func (c *Client) ListMemberUserIDs(ctx context.Context, groupID string) ([]string, error) {
+	users, err := listPages[struct {
+		ID string `json:"id"`
+	}](ctx, c, "/groups/"+url.PathEscape(groupID)+"/members/microsoft.graph.user?$select=id&$top=999")
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, len(users))
+	for i, u := range users {
+		ids[i] = u.ID
+	}
+	return ids, nil
+}
+
+// listPages GETs path and every following page, returning all their values.
+func listPages[T any](ctx context.Context, c *Client, path string) ([]T, error) {
+	var all []T
 	for path != "" {
 		var page struct {
-			Value    []UserAccount `json:"value"`
-			NextLink string        `json:"@odata.nextLink"`
+			Value    []T    `json:"value"`
+			NextLink string `json:"@odata.nextLink"`
 		}
 		if err := c.doJSON(ctx, http.MethodGet, path, nil, &page); err != nil {
 			return nil, err
 		}
-		accounts = append(accounts, page.Value...)
+		all = append(all, page.Value...)
 		next, err := c.nextPath(page.NextLink)
 		if err != nil {
 			return nil, err
 		}
 		path = next
 	}
-	return accounts, nil
+	return all, nil
 }
 
 // nextPath turns a page's @odata.nextLink into the path of the next request

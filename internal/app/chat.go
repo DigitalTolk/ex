@@ -218,7 +218,7 @@ func (a *App) buildChat(ctx context.Context) error {
 	c.userGroups = service.NewUserGroupService(store.NewUserGroupStore(in.db), c.users, botStore, in.pubsub)
 	// A group mention reads the group from Redis; the store stays the source.
 	c.userGroups.SetCopies(cache.NewUserGroupCopies(in.cache.Client(), userGroupCopyTTL))
-	// The last sweep's group sync status, which admins read.
+	// The last sync's status, which admins read.
 	c.userGroups.SetSyncStatusCache(in.cache)
 	c.messages.SetUserGroups(c.userGroups)
 	c.mentions.SetUserGroups(c.userGroups)
@@ -251,10 +251,12 @@ func (a *App) buildChat(ctx context.Context) error {
 		// deactivated (sessions ended) by the next status sweep, minutes
 		// later, and reactivated once it can sign in again.
 		c.directorySync.SetStatusSync(directory, c.users)
-		// User groups follow the Entra department field: the same status
-		// sweep, which already lists every account, creates and syncs one
-		// group per department and per squad.
-		c.directorySync.SetUserGroupSync(c.userGroups)
+		// User groups come from the Entra security groups in one parent
+		// group: synced on their own schedule (and an admin's Sync now), one
+		// run at a time across instances.
+		if cfg.UserGroupEntraParentGroup != "" {
+			c.userGroups.SetSync(service.NewEntraGroupsSource(graph, cfg.UserGroupEntraParentGroup), in.users, in.cache, cfg.UserGroupSyncInterval, store.NewID)
+		}
 		c.commands.Register(service.NewTeamsMeetingCommand(service.TeamsMeetingDeps{
 			Meetings:      graph,
 			Sender:        c.messages,

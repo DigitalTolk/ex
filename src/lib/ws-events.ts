@@ -73,6 +73,7 @@ export const wsEventSchemas = {
   [EventType.WebhookChanged]: nudge,
   [EventType.BotChanged]: nudge,
   [EventType.UserGroupChanged]: userGroupChangedSchema,
+  [EventType.UserGroupSync]: nudge,
   [EventType.ProjectChanged]: nudge,
   [EventType.SettingsUpdated]: nudge,
   [EventType.RunnersChanged]: nudge,

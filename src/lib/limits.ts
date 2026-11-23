@@ -7,18 +7,6 @@ export const MAX_ATTACHMENTS_PER_MESSAGE = 10;
 export const MAX_CHANNEL_NAME_LEN = 32;
 export const MAX_CHANNEL_DESCRIPTION_LEN = 1000;
 export const MAX_DISTINCT_REACTIONS = 16;
-export const MAX_USER_GROUP_NAME_CHARS = 80;
-export const MAX_USER_GROUP_DESCRIPTION_CHARS = 250;
-
-// USER_GROUP_HANDLE_PATTERN is the handle the backend accepts: 2 to 30
-// lowercase letters, digits, '.', '-' or '_', starting with a letter or
-// digit. "all", "channel", "here" and "everyone" are reserved.
-export const USER_GROUP_HANDLE_PATTERN = /^[a-z0-9][a-z0-9._-]{1,29}$/;
-export const RESERVED_USER_GROUP_HANDLES: ReadonlySet<string> = new Set(['all', 'channel', 'here', 'everyone']);
-
-export function isValidUserGroupHandle(handle: string): boolean {
-  return USER_GROUP_HANDLE_PATTERN.test(handle) && !RESERVED_USER_GROUP_HANDLES.has(handle);
-}
 
 // CHANNEL_NAME_PATTERN is the slug-style identifier the backend accepts.
 // Lowercase ASCII letters, digits, hyphen — no leading/trailing hyphens

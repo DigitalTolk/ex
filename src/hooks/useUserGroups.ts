@@ -1,25 +1,20 @@
 import { useMemo } from 'react';
 import { skipToken, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { apiFetch } from '@/lib/api';
+import { ApiError, apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
 import type { UserGroup, UserGroupDetail, UserGroupSyncStatus } from '@/types/generated';
 
-// User groups ("@oncall"): one per Microsoft 365 department and one per
-// squad, made and kept in sync by the server. Every change also arrives as
+// User groups ("@oncall"): the Microsoft 365 security groups in one parent
+// group, made and kept in sync by the server. Every change also arrives as
 // usergroup.changed (ChatPage), which invalidates the whole 'usergroups'
-// prefix, so every open list and detail follows.
+// prefix, so every open list and detail follows; a sync starting or ending
+// arrives as usergroup.sync.
 
 export interface UserGroupPermissions {
   canManage: boolean;
 }
 
 const NO_PERMISSIONS: UserGroupPermissions = { canManage: false };
-
-export interface UserGroupPatch {
-  handle?: string;
-  name?: string;
-  description?: string;
-}
 
 const groupPath = (id: string) => `/api/v1/usergroups/${encodeURIComponent(id)}`;
 
@@ -64,7 +59,7 @@ export function useMyUserGroupIds(userId: string | undefined): ReadonlySet<strin
   return useMemo(() => (data ? new Set(data.map((g) => g.id)) : NO_GROUP_IDS), [data]);
 }
 
-// useUserGroupPermissions says whether the viewer may edit groups (admins).
+// useUserGroupPermissions says whether the viewer may manage groups (admins).
 export function useUserGroupPermissions(): UserGroupPermissions {
   const { data } = useQuery({
     queryKey: queryKeys.userGroupPermissions(),
@@ -74,29 +69,43 @@ export function useUserGroupPermissions(): UserGroupPermissions {
   return data ?? NO_PERMISSIONS;
 }
 
-// useCanManageUserGroups says whether the viewer may edit groups.
+// useCanManageUserGroups says whether the viewer may manage groups.
 export function useCanManageUserGroups() {
   return useUserGroupPermissions().canManage === true;
 }
 
-// useUserGroupSyncStatus reads the last directory sweep's group sync and the
-// department values it read only partly (admins; enabled for them only).
+const SYNC_STATUS_PATH = '/api/v1/usergroup-sync';
+
+// useUserGroupSyncStatus reads how the sync went (admins; enabled for them
+// only). While a sync runs it also polls, in case an event is missed.
 export function useUserGroupSyncStatus(enabled: boolean) {
   return useQuery({
     queryKey: queryKeys.userGroupSync(),
-    queryFn: enabled
-      ? async () => (await apiFetch<UserGroupSyncStatus>('/api/v1/usergroup-sync')) ?? NO_SYNC_STATUS
-      : skipToken,
+    queryFn: enabled ? async () => (await apiFetch<UserGroupSyncStatus>(SYNC_STATUS_PATH)) ?? NO_SYNC_STATUS : skipToken,
     staleTime: 60_000,
+    refetchInterval: (query) => (query.state.data?.running ? 3_000 : false),
   });
 }
 
-const NO_SYNC_STATUS: UserGroupSyncStatus = { readable: 0, anomalies: { people: 0, counts: {}, examples: [] } };
+const NO_SYNC_STATUS: UserGroupSyncStatus = { configured: false, intervalMinutes: 0, running: false, skipped: [] };
 
-// checkUserGroupHandle asks whether a handle is free (and well-formed).
-export async function checkUserGroupHandle(handle: string): Promise<boolean> {
-  const res = await apiFetch<{ available: boolean }>(`/api/v1/usergroup-handles/${encodeURIComponent(handle)}`);
-  return !!res?.available;
+// useSyncUserGroupsNow starts a sync (admins). Right after a run the server
+// answers 429 with the status, which shows the cooldown like any status.
+export function useSyncUserGroupsNow() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      try {
+        return await apiFetch<UserGroupSyncStatus>(SYNC_STATUS_PATH, { method: 'POST' });
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 429 && e.payload) return e.payload as UserGroupSyncStatus;
+        throw e;
+      }
+    },
+    onSuccess: (status) => {
+      if (status) qc.setQueryData(queryKeys.userGroupSync(), status);
+    },
+  });
 }
 
 function useInvalidatingMutation<V>(mutationFn: (vars: V) => Promise<UserGroupDetail>) {
@@ -105,12 +114,6 @@ function useInvalidatingMutation<V>(mutationFn: (vars: V) => Promise<UserGroupDe
     mutationFn,
     onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.userGroupsAll() }),
   });
-}
-
-export function useUpdateUserGroup() {
-  return useInvalidatingMutation(({ id, patch }: { id: string; patch: UserGroupPatch }) =>
-    apiFetch<UserGroupDetail>(groupPath(id), { method: 'PATCH', body: JSON.stringify(patch) }),
-  );
 }
 
 export function useSetUserGroupEnabled() {

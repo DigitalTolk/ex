@@ -11,8 +11,8 @@ import { UserGroupDetailDialog } from './UserGroupDetailDialog';
 import { UserGroupSyncReport } from './UserGroupSyncReport';
 
 // UserGroupsTab is Directory › Groups: every user group by handle (one per
-// Microsoft 365 department and squad), a search, and — for admins — the sync
-// report, editing and disabling. "?group=<id>" opens one group (the mention
+// Microsoft 365 group ex is connected to), a search, and — for admins — the
+// sync report and disabling. "?group=<id>" opens one group (the mention
 // card links here).
 export function UserGroupsTab() {
   const [query, setQuery] = useState('');
@@ -52,7 +52,7 @@ export function UserGroupsTab() {
         </div>
       ) : visible.length === 0 ? (
         <p className="text-sm text-muted-foreground">
-          {query ? 'No user groups match.' : "No user groups yet. They're made from Microsoft 365 departments and squads."}
+          {query ? 'No user groups match.' : "No user groups yet. They come from Microsoft 365."}
         </p>
       ) : (
         <ul className="space-y-1" aria-label="User groups">

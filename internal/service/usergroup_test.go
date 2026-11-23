@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/events"
-	"github.com/DigitalTolk/ex/internal/limits"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/pubsub"
 	"github.com/DigitalTolk/ex/internal/store"
@@ -39,6 +38,9 @@ type fakeUserGroupStore struct {
 	updates    int
 	// beforeApply runs as a member write starts (what happens meanwhile).
 	beforeApply func()
+	// takenOnUpdate is a handle the next update to it finds taken, as if
+	// claimed between the check and the write.
+	takenOnUpdate string
 }
 
 func newFakeUserGroupStore() *fakeUserGroupStore {
@@ -97,6 +99,10 @@ func (f *fakeUserGroupStore) UpdateUserGroup(_ context.Context, g, previous *mod
 		return store.ErrUserGroupChanged
 	}
 	if owner, taken := f.handles[g.Handle]; taken && owner != g.ID {
+		return store.ErrAlreadyExists
+	}
+	if g.Handle != previous.Handle && g.Handle == f.takenOnUpdate {
+		f.takenOnUpdate = ""
 		return store.ErrAlreadyExists
 	}
 	delete(f.handles, previous.Handle)
@@ -347,14 +353,14 @@ var (
 	ugGuest  = UserGroupActor{ID: "u-guest", Role: model.SystemRoleGuest}
 )
 
-// create puts squad group @handle, holding members, straight into the store
-// (the directory sync makes groups; these tests exercise the rest).
+// create puts group @handle, holding members, straight into the store (the
+// sync makes groups; these tests exercise the rest).
 func (f *userGroupFixture) create(t *testing.T, handle string, members ...string) *model.UserGroupDetail {
 	t.Helper()
 	ctx := context.Background()
 	g := &model.UserGroupDetail{UserGroup: model.UserGroup{
 		ID: model.UserGroupIDPrefix + handle, Handle: handle, Name: "Group " + handle, MemberCount: len(members),
-		Source: model.UserGroupSource{Kind: model.UserGroupSourceSquad, Squad: handle, Department: "Engineering", Key: "squad:" + handle},
+		Source: model.UserGroupSource{Kind: model.UserGroupSourceEntraGroup, ID: "eg-" + handle, Key: "entra-group:eg-" + handle},
 	}}
 	if err := f.store.CreateUserGroup(ctx, g); err != nil {
 		t.Fatalf("create %s: %v", handle, err)
@@ -387,24 +393,22 @@ func TestUserGroups_Permissions(t *testing.T) {
 		_, listErr := f.svc.List(ctx, actor, false)
 		_, getErr := f.svc.Get(ctx, actor, g.ID)
 		_, forErr := f.svc.GroupsForUser(ctx, actor, "u-1")
-		_, availErr := f.svc.HandleAvailable(ctx, actor, "x")
-		for name, err := range map[string]error{"List": listErr, "Get": getErr, "GroupsForUser": forErr, "HandleAvailable": availErr} {
+		for name, err := range map[string]error{"List": listErr, "Get": getErr, "GroupsForUser": forErr} {
 			if !errors.Is(err, ErrForbidden) {
 				t.Errorf("%s by %+v = %v, want forbidden", name, actor, err)
 			}
 		}
 	}
 
-	// Members read; only admins edit and read the sync status.
+	// Members read; only admins enable, disable and run or read the sync.
 	if _, err := f.svc.List(ctx, ugMember, false); err != nil {
 		t.Fatalf("member List: %v", err)
 	}
 	for _, actor := range []UserGroupActor{ugMember, ugGuest, {Role: model.SystemRoleAdmin}} {
-		name := "Renamed"
-		_, updateErr := f.svc.Update(ctx, actor, g.ID, UserGroupPatch{Name: &name})
 		_, enableErr := f.svc.SetEnabled(ctx, actor, g.ID, true)
 		_, statusErr := f.svc.SyncStatus(ctx, actor)
-		for op, err := range map[string]error{"Update": updateErr, "SetEnabled": enableErr, "SyncStatus": statusErr} {
+		_, nowErr := f.svc.SyncNow(ctx, actor)
+		for op, err := range map[string]error{"SetEnabled": enableErr, "SyncStatus": statusErr, "SyncNow": nowErr} {
 			if !errors.Is(err, ErrForbidden) {
 				t.Errorf("%+v %s = %v, want forbidden", actor, op, err)
 			}
@@ -412,82 +416,6 @@ func TestUserGroups_Permissions(t *testing.T) {
 	}
 	if f.svc.CanManage(ugMember) || !f.svc.CanManage(ugAdmin) || f.svc.CanManage(ugGuest) {
 		t.Error("CanManage disagrees with admins-only")
-	}
-}
-
-func TestUserGroups_HandleAvailable(t *testing.T) {
-	f := newUserGroupFixture()
-	ctx := context.Background()
-	f.create(t, "oncall")
-	for handle, want := range map[string]bool{"oncall": false, "@OnCall": false, "deploybot": false, "all": false, "x": false, "design": true} {
-		got, err := f.svc.HandleAvailable(ctx, ugMember, handle)
-		if err != nil || got != want {
-			t.Errorf("HandleAvailable(%q) = %v, %v; want %v", handle, got, err, want)
-		}
-	}
-	f.store.ownerErr = errors.New("boom")
-	if _, err := f.svc.HandleAvailable(ctx, ugMember, "design"); err == nil {
-		t.Error("HandleAvailable swallowed a store error")
-	}
-	f.store.ownerErr = nil
-	f.bots.err = errors.New("boom")
-	if _, err := f.svc.HandleAvailable(ctx, ugMember, "design"); err == nil {
-		t.Error("HandleAvailable swallowed a bot-store error")
-	}
-}
-
-func TestUserGroups_UpdateDetails(t *testing.T) {
-	f := newUserGroupFixture()
-	ctx := context.Background()
-	g := f.create(t, "oncall", "u-1")
-	f.create(t, "sre")
-	handle, name, desc := "On-Call", "Pager crew", "Who gets paged"
-	got, err := f.svc.Update(ctx, ugAdmin, g.ID, UserGroupPatch{Handle: &handle, Name: &name, Description: &desc})
-	if err != nil {
-		t.Fatalf("Update: %v", err)
-	}
-	if got.Handle != "on-call" || got.Name != name || got.Description != desc || got.MemberCount != 1 {
-		t.Fatalf("updated = %+v", got)
-	}
-	if _, held := f.store.handles["oncall"]; held {
-		t.Error("the previous handle is still claimed")
-	}
-	if !slices.Equal(f.store.members[g.ID], []string{"u-1"}) {
-		t.Errorf("editing details touched the members: %v", f.store.members[g.ID])
-	}
-	// Keeping its own handle is fine; taking another group's is not.
-	if _, err := f.svc.Update(ctx, ugAdmin, g.ID, UserGroupPatch{Handle: &handle}); err != nil {
-		t.Errorf("re-saving own handle: %v", err)
-	}
-	taken := "sre"
-	if _, err := f.svc.Update(ctx, ugAdmin, g.ID, UserGroupPatch{Handle: &taken}); !errors.Is(err, ErrUserGroupHandleTaken) {
-		t.Errorf("taking sre = %v, want handle taken", err)
-	}
-	bad, blank, long := "-", " ", strings.Repeat("d", limits.MaxUserGroupDescriptionChars+1)
-	for label, patch := range map[string]UserGroupPatch{"handle": {Handle: &bad}, "name": {Name: &blank}, "description": {Description: &long}} {
-		if _, err := f.svc.Update(ctx, ugAdmin, g.ID, patch); !errors.Is(err, ErrValidation) {
-			t.Errorf("bad %s: Update = %v, want validation error", label, err)
-		}
-	}
-	if _, err := f.svc.Update(ctx, ugAdmin, "group-missing", UserGroupPatch{Name: &name}); !errors.Is(err, ErrNotFound) {
-		t.Errorf("Update of a missing group = %v, want not found", err)
-	}
-	if _, err := f.svc.SetEnabled(ctx, ugAdmin, "group-missing", false); !errors.Is(err, ErrNotFound) {
-		t.Errorf("SetEnabled of a missing group = %v, want not found", err)
-	}
-	f.store.ownerErr = errors.New("boom")
-	if _, err := f.svc.Update(ctx, ugAdmin, g.ID, UserGroupPatch{Handle: &handle}); err == nil {
-		t.Error("Update swallowed a handle-check error")
-	}
-}
-
-func TestUserGroups_UpdateLosesHandleRaceAtWrite(t *testing.T) {
-	f := newUserGroupFixture()
-	g := f.create(t, "oncall")
-	f.store.updateErr = store.ErrAlreadyExists
-	handle := "fresh"
-	if _, err := f.svc.Update(context.Background(), ugAdmin, g.ID, UserGroupPatch{Handle: &handle}); !errors.Is(err, ErrUserGroupHandleTaken) {
-		t.Fatalf("Update = %v, want handle taken", err)
 	}
 }
 
@@ -514,14 +442,16 @@ func TestUserGroups_ConcurrentWritesRetryOnTheLatestVersion(t *testing.T) {
 	f := newUserGroupFixture()
 	ctx := context.Background()
 	g := f.create(t, "oncall", "u-1")
-	name := "Renamed"
 	f.store.conflicts = userGroupWriteAttempts - 1
-	if _, err := f.svc.Update(ctx, ugAdmin, g.ID, UserGroupPatch{Name: &name}); err != nil {
-		t.Fatalf("Update after %d conflicts: %v", userGroupWriteAttempts-1, err)
+	if _, err := f.svc.SetEnabled(ctx, ugAdmin, g.ID, false); err != nil {
+		t.Fatalf("SetEnabled after %d conflicts: %v", userGroupWriteAttempts-1, err)
 	}
 	f.store.conflicts = userGroupWriteAttempts
-	if _, err := f.svc.Update(ctx, ugAdmin, g.ID, UserGroupPatch{Name: &name}); err == nil || !errors.Is(err, store.ErrUserGroupChanged) {
-		t.Fatalf("Update past the retry budget = %v, want the conflict", err)
+	if _, err := f.svc.SetEnabled(ctx, ugAdmin, g.ID, true); err == nil || !errors.Is(err, store.ErrUserGroupChanged) {
+		t.Fatalf("SetEnabled past the retry budget = %v, want the conflict", err)
+	}
+	if _, err := f.svc.SetEnabled(ctx, ugAdmin, "group-missing", false); !errors.Is(err, ErrNotFound) {
+		t.Errorf("SetEnabled of a missing group = %v, want not found", err)
 	}
 }
 

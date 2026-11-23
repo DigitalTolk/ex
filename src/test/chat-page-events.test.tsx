@@ -960,6 +960,13 @@ describe('ChatPage WebSocket handlers', () => {
     expect(spy).toHaveBeenCalledWith({ queryKey: ['usergroups'] });
   });
 
+  it('onUserGroupSync refetches the sync status', () => {
+    const { qc } = renderAt('/');
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+    (capturedOptions.onUserGroupSync as (d: unknown) => void)(undefined);
+    expect(spy).toHaveBeenCalledWith({ queryKey: ['usergroups', 'sync'] });
+  });
+
   it('onSettingsUpdated also refetches who may manage user groups', () => {
     const { qc } = renderAt('/');
     const spy = vi.spyOn(qc, 'invalidateQueries');

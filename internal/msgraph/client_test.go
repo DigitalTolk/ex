@@ -577,16 +577,16 @@ func TestListUserAccounts(t *testing.T) {
 		if r.URL.Path != "/users" {
 			t.Errorf("path = %q, want /users", r.URL.Path)
 		}
-		if got := r.URL.Query().Get("$select"); got != "id,accountEnabled,department" {
-			t.Errorf("$select = %q, want id,accountEnabled,department", got)
+		if got := r.URL.Query().Get("$select"); got != "id,accountEnabled" {
+			t.Errorf("$select = %q, want id,accountEnabled", got)
 		}
 		if r.URL.Query().Get("$skiptoken") == "" {
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"value": []map[string]any{
-					{"id": "oid-on", "accountEnabled": true, "department": "Engineering - DOPE"},
+					{"id": "oid-on", "accountEnabled": true},
 					{"id": "oid-off", "accountEnabled": false},
 				},
-				"@odata.nextLink": graphURL + "/users?$select=id,accountEnabled,department&$top=999&$skiptoken=p2",
+				"@odata.nextLink": graphURL + "/users?$select=id,accountEnabled&$top=999&$skiptoken=p2",
 			})
 			return
 		}
@@ -603,9 +603,6 @@ func TestListUserAccounts(t *testing.T) {
 	got := map[string]bool{}
 	for _, a := range accounts {
 		got[a.ID] = a.Enabled()
-	}
-	if accounts[0].Department != "Engineering - DOPE" || accounts[1].Department != "" {
-		t.Errorf("departments = %q, %q", accounts[0].Department, accounts[1].Department)
 	}
 	want := map[string]bool{"oid-on": true, "oid-off": false, "oid-unreported": true}
 	if len(got) != len(want) {

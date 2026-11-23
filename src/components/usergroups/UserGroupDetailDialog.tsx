@@ -8,8 +8,6 @@ import { useAllUsers } from '@/hooks/useConversations';
 import { useSetUserGroupEnabled, useUserGroup } from '@/hooks/useUserGroups';
 import { errorMessage } from '@/lib/error-message';
 import { getInitials } from '@/lib/format';
-import type { UserGroupDetail } from '@/types/generated';
-import { UserGroupEditDialog } from './UserGroupEditDialog';
 
 interface Props {
   groupId: string;
@@ -19,28 +17,18 @@ interface Props {
 
 const people = (n: number) => `${n} ${n === 1 ? 'person' : 'people'}`;
 
-// sourceText says where a group's members come from.
-function sourceText(g: UserGroupDetail): string {
-  return g.source.kind === 'squad' ? `Squad ${g.source.squad} in ${g.source.department}` : `Department ${g.source.department}`;
-}
-
-// UserGroupDetailDialog shows one group: its handle, name, description, the
-// Microsoft 365 department or squad it follows, and its members. Admins edit
-// its details and disable or enable it.
+// UserGroupDetailDialog shows one group: its handle, name, description and
+// members, all from its Microsoft 365 group, and what an admin should know
+// about its sync. Admins disable or enable it; nothing else is edited in ex.
 export function UserGroupDetailDialog({ groupId, canManage, onClose }: Props) {
   const { data: group, isLoading } = useUserGroup(groupId);
   const { data: users = [] } = useAllUsers();
   const byId = useMemo(() => new Map(users.map((u) => [u.id, u])), [users]);
-  const [editing, setEditing] = useState(false);
   const [confirmDisable, setConfirmDisable] = useState(false);
   const [error, setError] = useState('');
   const setEnabled = useSetUserGroupEnabled();
 
   const onError = (e: unknown) => setError(errorMessage(e, 'Saving failed'));
-
-  if (editing && group) {
-    return <UserGroupEditDialog group={group} onClose={() => setEditing(false)} />;
-  }
 
   const members = group?.memberIds ?? [];
   return (
@@ -62,12 +50,12 @@ export function UserGroupDetailDialog({ groupId, canManage, onClose }: Props) {
                 {group.description && <p className="mt-1 text-sm text-muted-foreground">{group.description}</p>}
                 <div className="mt-2 space-y-0.5 text-sm text-muted-foreground" data-testid="usergroup-source">
                   <p>
-                    <Badge variant="secondary">Microsoft 365</Badge> {sourceText(group)}
+                    <Badge variant="secondary">Microsoft 365</Badge> Members come from its Microsoft 365 group.
                   </p>
                   {!!group.syncSkipped && (
                     <p>
-                      {people(group.syncSkipped)} in this {group.source.kind === 'squad' ? 'squad' : 'department'}{' '}
-                      {group.syncSkipped === 1 ? "isn't" : "aren't"} in ex yet.
+                      {people(group.syncSkipped)} in the Microsoft 365 group {group.syncSkipped === 1 ? "isn't" : "aren't"} in ex,
+                      or can't be in a group.
                     </p>
                   )}
                 </div>
@@ -75,8 +63,13 @@ export function UserGroupDetailDialog({ groupId, canManage, onClose }: Props) {
 
               {group.syncState === 'source-missing' && (
                 <p role="status" className="rounded-md border p-3 text-sm">
-                  No one in Microsoft 365 is in this {group.source.kind === 'squad' ? 'squad' : 'department'} any more. You can
-                  disable the group.
+                  This group is no longer in Microsoft 365, so it has no members. You can disable it.
+                </p>
+              )}
+              {group.syncState === 'handle-conflict' && (
+                <p role="status" className="rounded-md border p-3 text-sm">
+                  It was renamed to <span className="font-medium">{group.name}</span> in Microsoft 365, but that can't be its
+                  handle here, so it stays @{group.handle} until the name is changed there.
                 </p>
               )}
 
@@ -123,9 +116,6 @@ export function UserGroupDetailDialog({ groupId, canManage, onClose }: Props) {
                   Disable group
                 </Button>
               )}
-              <Button variant="outline" onClick={() => setEditing(true)}>
-                Edit details
-              </Button>
             </DialogFooter>
           )}
         </DialogContent>

@@ -3,18 +3,21 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import { queryKeys } from '@/lib/query-keys';
+import { ApiError } from '@/lib/api';
 
 const mockApiFetch = vi.fn();
-vi.mock('@/lib/api', () => ({ apiFetch: (...args: unknown[]) => mockApiFetch(...args) }));
+vi.mock('@/lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api')>()),
+  apiFetch: (...args: unknown[]) => mockApiFetch(...args),
+}));
 
 import {
   useUserGroupPermissions,
   useUserGroupSyncStatus,
-  checkUserGroupHandle,
+  useSyncUserGroupsNow,
   useCanManageUserGroups,
   useMyUserGroupIds,
   useSetUserGroupEnabled,
-  useUpdateUserGroup,
   useUserGroup,
   useUserGroups,
   useUserGroupsForUser,
@@ -86,13 +89,6 @@ describe('user-group queries', () => {
     await waitFor(() => expect(mockApiFetch).toHaveBeenCalledTimes(2));
     expect(no.result.current).toBe(false);
   });
-
-  it('checks a handle', async () => {
-    mockApiFetch.mockResolvedValueOnce({ available: true }).mockResolvedValueOnce(undefined);
-    await expect(checkUserGroupHandle('on call')).resolves.toBe(true);
-    expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/usergroup-handles/on%20call');
-    await expect(checkUserGroupHandle('x')).resolves.toBe(false);
-  });
 });
 
 describe('user-group mutations', () => {
@@ -101,22 +97,19 @@ describe('user-group mutations', () => {
     const spy = vi.spyOn(qc, 'invalidateQueries');
     const { result } = renderHook(
       () => ({
-        update: useUpdateUserGroup(),
         setEnabled: useSetUserGroupEnabled(),
       }),
       { wrapper },
     );
     await act(async () => {
-      await result.current.update.mutateAsync({ id: 'group-1', patch: { name: 'Pager' } });
-      await result.current.setEnabled.mutateAsync({ id: 'group-1', enabled: false });
+      await result.current.setEnabled.mutateAsync({ id: 'group 1', enabled: false });
       await result.current.setEnabled.mutateAsync({ id: 'group-1', enabled: true });
     });
     expect(mockApiFetch.mock.calls).toEqual([
-      ['/api/v1/usergroups/group-1', { method: 'PATCH', body: JSON.stringify({ name: 'Pager' }) }],
-      ['/api/v1/usergroups/group-1/disable', { method: 'POST' }],
+      ['/api/v1/usergroups/group%201/disable', { method: 'POST' }],
       ['/api/v1/usergroups/group-1/enable', { method: 'POST' }],
     ]);
-    expect(spy).toHaveBeenCalledTimes(3);
+    expect(spy).toHaveBeenCalledTimes(2);
     expect(spy).toHaveBeenCalledWith({ queryKey: queryKeys.userGroupsAll() });
   });
 });
@@ -133,7 +126,7 @@ describe('the sync status', () => {
     expect(off.result.current.fetchStatus).toBe('idle');
     expect(mockApiFetch).not.toHaveBeenCalled();
 
-    const status = { lastSyncedAt: '2026-11-19T10:00:00Z', readable: 4, anomalies: { people: 0, counts: {}, examples: [] } };
+    const status = { configured: true, intervalMinutes: 30, running: false, lastSyncedAt: '2026-11-19T10:00:00Z', skipped: [] };
     mockApiFetch.mockResolvedValueOnce(status);
     const on = renderHook(() => useUserGroupSyncStatus(true), { wrapper });
     await waitFor(() => expect(on.result.current.data).toEqual(status));
@@ -142,6 +135,38 @@ describe('the sync status', () => {
     qc.clear();
     mockApiFetch.mockResolvedValueOnce(undefined);
     const empty = renderHook(() => useUserGroupSyncStatus(true), { wrapper });
-    await waitFor(() => expect(empty.result.current.data?.anomalies.examples).toEqual([]));
+    await waitFor(() => expect(empty.result.current.data).toEqual({ configured: false, intervalMinutes: 0, running: false, skipped: [] }));
+  });
+});
+
+describe('Sync now', () => {
+  const RUNNING = { configured: true, intervalMinutes: 30, running: true, trigger: 'manual', skipped: [] };
+
+  it('starts a sync and keeps the status it answers with', async () => {
+    mockApiFetch.mockResolvedValueOnce(RUNNING);
+    const { result } = renderHook(() => useSyncUserGroupsNow(), { wrapper });
+    await act(() => result.current.mutateAsync());
+    expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/usergroup-sync', { method: 'POST' });
+    expect(qc.getQueryData(queryKeys.userGroupSync())).toEqual(RUNNING);
+  });
+
+  it('keeps nothing from an empty answer', async () => {
+    mockApiFetch.mockResolvedValueOnce(undefined);
+    const { result } = renderHook(() => useSyncUserGroupsNow(), { wrapper });
+    await act(() => result.current.mutateAsync());
+    expect(qc.getQueryData(queryKeys.userGroupSync())).toBeUndefined();
+  });
+
+  it('reads the cooldown answer as a status, and fails on anything else', async () => {
+    const cooling = { ...RUNNING, running: false, finishedAt: '2026-11-19T10:00:00Z' };
+    mockApiFetch.mockRejectedValueOnce(new ApiError(429, 'a sync just finished', cooling));
+    const { result } = renderHook(() => useSyncUserGroupsNow(), { wrapper });
+    await act(() => result.current.mutateAsync());
+    expect(qc.getQueryData(queryKeys.userGroupSync())).toEqual(cooling);
+
+    mockApiFetch.mockRejectedValueOnce(new ApiError(429, 'slow down'));
+    await act(() => expect(result.current.mutateAsync()).rejects.toThrow('slow down'));
+    mockApiFetch.mockRejectedValueOnce(new Error('offline'));
+    await act(() => expect(result.current.mutateAsync()).rejects.toThrow('offline'));
   });
 });

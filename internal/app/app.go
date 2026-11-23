@@ -14,6 +14,7 @@ import (
 
 	"github.com/DigitalTolk/ex/internal/config"
 	"github.com/DigitalTolk/ex/internal/middleware"
+	"github.com/DigitalTolk/ex/internal/safe"
 )
 
 // Shutdown budgets. srv.Shutdown waits for in-flight HTTP requests; each drain
@@ -99,6 +100,10 @@ func (a *App) close() {
 	}
 	a.closers = nil
 }
+
+// goTracked runs fn as a background job of the app on its own
+// (panic-isolated) goroutine.
+func (a *App) goTracked(fn func()) { safe.Go(a.track(fn)) }
 
 // track counts fn as a background job of the app and returns it ready to run
 // on its own goroutine.

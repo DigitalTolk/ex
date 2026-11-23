@@ -15,7 +15,6 @@ import {
   typedUserGroupMentions,
   userGroupTokens,
 } from './non-member-mentions';
-import { isValidUserGroupHandle } from './limits';
 import type { HastNode } from '@/types';
 
 interface FixtureCase {
@@ -120,14 +119,5 @@ describe('user-group invite helpers', () => {
     expect(typedUserGroupMentions('`@oncall` ops@oncall https://x.com/@oncall', groups)).toEqual([]);
     expect(typedUserGroupMentions('no handles', groups)).toEqual([]);
     expect(typedUserGroupMentions('@oncall', [])).toEqual([]);
-  });
-});
-
-describe('user-group handle rules', () => {
-  it('validates handles like the server', () => {
-    expect(isValidUserGroupHandle('oncall')).toBe(true);
-    expect(isValidUserGroupHandle('a')).toBe(false);
-    expect(isValidUserGroupHandle('-x')).toBe(false);
-    expect(isValidUserGroupHandle('here')).toBe(false);
   });
 });

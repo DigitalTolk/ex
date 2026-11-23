@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -94,37 +95,112 @@ func (s *handlerUserGroupStore) UserGroupHandleOwner(_ context.Context, handle s
 	return "", store.ErrNotFound
 }
 
+// handlerGroupSource is the Entra parent group, in memory.
+type handlerGroupSource struct {
+	mu     sync.Mutex
+	groups []service.SourceGroup
+}
+
+func (s *handlerGroupSource) Fetch(context.Context) (service.SourceSnapshot, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return service.SourceSnapshot{Groups: slices.Clone(s.groups)}, nil
+}
+
+func (s *handlerGroupSource) set(groups ...service.SourceGroup) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.groups = groups
+}
+
+// handlerRunLock is the sync's run guard, in memory. released is closed when
+// the first run lets go of it, after everything that run wrote.
+type handlerRunLock struct {
+	mu       sync.Mutex
+	holder   string
+	released chan struct{}
+	once     sync.Once
+}
+
+func (l *handlerRunLock) AcquireLock(_ context.Context, _, token string, _ time.Duration) (bool, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.holder != "" {
+		return false, nil
+	}
+	l.holder = token
+	return true, nil
+}
+
+func (l *handlerRunLock) ReleaseLock(_ context.Context, _, token string) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.holder == token {
+		l.holder = ""
+	}
+	l.once.Do(func() { close(l.released) })
+	return nil
+}
+
+func handlerEntraGroup(id, name string, members ...string) service.SourceGroup {
+	return service.SourceGroup{Key: "entra-group:" + id, ID: id, Name: name, MemberRefs: members}
+}
+
 type userGroupAPIFixture struct {
 	router    http.Handler
 	handler   *UserGroupHandler
 	svc       *service.UserGroupService
 	groups    *handlerUserGroupStore
+	source    *handlerGroupSource
+	cache     *mockCache
 	adminJWT  string
 	memberJWT string
 	guestJWT  string
 }
 
-// newUserGroupAPIFixture syncs three people's departments into groups, as the
-// directory sweep does: @engineering (the member and Bob), @dope (the
-// member) and @platform (Bob).
+// newUserGroupAPIFixture syncs three Entra groups into ex, as the scheduled
+// sync does at boot: @eng (the member and Bob), @eng-dope (the member) and
+// @eng-platform (Bob).
 func newUserGroupAPIFixture(t *testing.T) *userGroupAPIFixture {
 	t.Helper()
 	jwt := auth.NewJWTManager("test-secret", 15*time.Minute, 24*time.Hour)
 	users := newMockUserStore()
 	users.users["u-admin"] = &model.User{ID: "u-admin", SystemRole: model.SystemRoleAdmin, Status: "active", AuthProvider: model.AuthProviderOIDC}
-	users.users["u-member"] = &model.User{ID: "u-member", SystemRole: model.SystemRoleMember, Status: "active", AuthProvider: model.AuthProviderOIDC}
-	users.users["u-bob"] = &model.User{ID: "u-bob", SystemRole: model.SystemRoleMember, Status: "active", AuthProvider: model.AuthProviderOIDC}
+	users.users["u-member"] = &model.User{ID: "u-member", SystemRole: model.SystemRoleMember, Status: "active", AuthProvider: model.AuthProviderOIDC, MSObjectID: "oid-member"}
+	users.users["u-bob"] = &model.User{ID: "u-bob", SystemRole: model.SystemRoleMember, Status: "active", AuthProvider: model.AuthProviderOIDC, MSObjectID: "oid-bob"}
 	users.users["u-guest"] = &model.User{ID: "u-guest", SystemRole: model.SystemRoleGuest, Status: "active", AuthProvider: model.AuthProviderGuest}
 	userSvc := service.NewUserService(users, newMockCache(), nil, nil)
 	groups := &handlerUserGroupStore{groups: map[string]*model.UserGroupDetail{}, handles: map[string]string{}, members: map[string][]string{}}
 	svc := service.NewUserGroupService(groups, userSvc, newHandlerBotStore(users), nil)
-	svc.SetSyncStatusCache(newMockCache())
-	svc.SyncDirectoryGroups(context.Background(), []service.DirectoryPerson{
-		{UserID: "u-member", Department: "Engineering - DOPE"},
-		{UserID: "u-bob", Department: "Engineering - Platform"},
-	})
+	cache := newMockCache()
+	svc.SetSyncStatusCache(cache)
+	source := &handlerGroupSource{}
+	source.set(
+		handlerEntraGroup("g-eng", "eng", "oid-member", "oid-bob"),
+		handlerEntraGroup("g-dope", "eng-dope", "oid-member"),
+		handlerEntraGroup("g-platform", "eng-platform", "oid-bob"),
+	)
+	n := 0
+	lock := &handlerRunLock{released: make(chan struct{})}
+	svc.SetSync(source, users, lock, time.Hour, func() string { n++; return string(rune('a' + n)) })
+
+	// The boot sync runs on the background context (then waits an hour);
+	// Sync now runs inline.
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		svc.RunSync(ctx, func(fn func()) { fn() })
+		close(done)
+	}()
+	t.Cleanup(func() { cancel(); <-done })
+	select {
+	case <-lock.released:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the boot sync didn't finish")
+	}
+
 	h := NewUserGroupHandler(svc)
-	f := &userGroupAPIFixture{handler: h, svc: svc, groups: groups}
+	f := &userGroupAPIFixture{handler: h, svc: svc, groups: groups, source: source, cache: cache}
 	f.router = NewRouter(&Deps{
 		Auth: &AuthHandler{}, User: NewUserHandler(userSvc, nil),
 		Channel: &ChannelHandler{}, Conversation: &ConversationHandler{}, WS: &WSHandler{},
@@ -149,7 +225,7 @@ func (f *userGroupAPIFixture) do(method, path, token, body string) *httptest.Res
 
 func TestUserGroupHandler_Lifecycle(t *testing.T) {
 	f := newUserGroupAPIFixture(t)
-	dope := f.id("dope")
+	dope := f.id("eng-dope")
 
 	rec := f.do(http.MethodGet, "/api/v1/usergroups", f.memberJWT, "")
 	if listed := decodeBody[[]model.UserGroup](t, rec); rec.Code != http.StatusOK || len(listed) != 3 {
@@ -157,21 +233,8 @@ func TestUserGroupHandler_Lifecycle(t *testing.T) {
 	}
 	rec = f.do(http.MethodGet, "/api/v1/usergroups/"+dope, f.memberJWT, "")
 	got := decodeBody[model.UserGroupDetail](t, rec)
-	if rec.Code != http.StatusOK || !slices.Equal(got.MemberIDs, []string{"u-member"}) || got.Source.Squad != "DOPE" || got.Source.Department != "Engineering" {
+	if rec.Code != http.StatusOK || !slices.Equal(got.MemberIDs, []string{"u-member"}) || got.Source.ID != "g-dope" || got.Source.Kind != model.UserGroupSourceEntraGroup {
 		t.Fatalf("get = %d %s", rec.Code, rec.Body.String())
-	}
-	rec = f.do(http.MethodGet, "/api/v1/usergroup-handles/dope", f.memberJWT, "")
-	if rec.Code != http.StatusOK || decodeBody[map[string]bool](t, rec)["available"] {
-		t.Fatalf("handle check = %d %s, want taken", rec.Code, rec.Body.String())
-	}
-	rec = f.do(http.MethodGet, "/api/v1/usergroup-handles/design", f.memberJWT, "")
-	if !decodeBody[map[string]bool](t, rec)["available"] {
-		t.Fatalf("handle check = %s, want available", rec.Body.String())
-	}
-
-	rec = f.do(http.MethodPatch, "/api/v1/usergroups/"+dope, f.adminJWT, `{"name":"Pager crew"}`)
-	if g := decodeBody[model.UserGroupDetail](t, rec); rec.Code != http.StatusOK || g.Name != "Pager crew" || !g.AdminEdited {
-		t.Fatalf("update = %d %s", rec.Code, rec.Body.String())
 	}
 	rec = f.do(http.MethodGet, "/api/v1/users/u-member/usergroups", f.memberJWT, "")
 	if listed := decodeBody[[]model.UserGroup](t, rec); rec.Code != http.StatusOK || len(listed) != 2 {
@@ -191,27 +254,62 @@ func TestUserGroupHandler_Lifecycle(t *testing.T) {
 	}
 }
 
-func TestUserGroupHandler_SyncStatusAndGoneSources(t *testing.T) {
+func TestUserGroupHandler_SyncStatusAndSyncNow(t *testing.T) {
 	f := newUserGroupAPIFixture(t)
 	rec := f.do(http.MethodGet, "/api/v1/usergroup-sync", f.adminJWT, "")
-	if st := decodeBody[model.UserGroupSyncStatus](t, rec); rec.Code != http.StatusOK || st.LastSyncedAt == nil || st.Readable != 2 {
+	st := decodeBody[model.UserGroupSyncStatus](t, rec)
+	if rec.Code != http.StatusOK || !st.Configured || st.IntervalMinutes != 60 || st.LastSyncedAt == nil {
 		t.Fatalf("sync status = %d %s", rec.Code, rec.Body.String())
 	}
 
-	// DOPE disappears from Microsoft 365: the group empties and says why.
-	f.svc.SyncDirectoryGroups(context.Background(), []service.DirectoryPerson{
-		{UserID: "u-member", Department: "Engineering"},
-		{UserID: "u-bob", Department: "Engineering - Platform"},
-	})
-	rec = f.do(http.MethodGet, "/api/v1/usergroups/"+f.id("dope"), f.adminJWT, "")
+	// Right after the boot sync: the cooldown answers 429 with the status.
+	rec = f.do(http.MethodPost, "/api/v1/usergroup-sync", f.adminJWT, "")
+	if rec.Code != http.StatusTooManyRequests || decodeBody[model.UserGroupSyncStatus](t, rec).FinishedAt == nil {
+		t.Fatalf("sync now in the cooldown = %d %s", rec.Code, rec.Body.String())
+	}
+
+	// Later, DOPE leaves the parent and Sync now applies it at once.
+	past := time.Now().Add(-time.Hour)
+	f.cache.values["usergroups:sync"] = &model.UserGroupSyncStatus{FinishedAt: &past}
+	f.source.set(
+		handlerEntraGroup("g-eng", "eng", "oid-member", "oid-bob"),
+		handlerEntraGroup("g-platform", "eng-platform", "oid-bob"),
+	)
+	rec = f.do(http.MethodPost, "/api/v1/usergroup-sync", f.adminJWT, "")
+	if rec.Code != http.StatusAccepted || !decodeBody[model.UserGroupSyncStatus](t, rec).Running {
+		t.Fatalf("sync now = %d %s", rec.Code, rec.Body.String())
+	}
+	rec = f.do(http.MethodGet, "/api/v1/usergroups/"+f.id("eng-dope"), f.adminJWT, "")
 	if g := decodeBody[model.UserGroupDetail](t, rec); rec.Code != http.StatusOK || len(g.MemberIDs) != 0 || g.SyncState != model.UserGroupSyncSourceMissing {
 		t.Fatalf("gone group = %d %s", rec.Code, rec.Body.String())
 	}
 }
 
+func TestUserGroupHandler_SyncNowWithoutASource(t *testing.T) {
+	jwt := auth.NewJWTManager("test-secret", 15*time.Minute, 24*time.Hour)
+	users := newMockUserStore()
+	admin := &model.User{ID: "u-admin", SystemRole: model.SystemRoleAdmin, Status: "active", AuthProvider: model.AuthProviderOIDC}
+	users.users[admin.ID] = admin
+	groups := &handlerUserGroupStore{groups: map[string]*model.UserGroupDetail{}, handles: map[string]string{}, members: map[string][]string{}}
+	svc := service.NewUserGroupService(groups, service.NewUserService(users, newMockCache(), nil, nil), newHandlerBotStore(users), nil)
+	svc.SetSyncStatusCache(newMockCache())
+	router := NewRouter(&Deps{
+		Auth: &AuthHandler{}, User: &UserHandler{}, Channel: &ChannelHandler{}, Conversation: &ConversationHandler{}, WS: &WSHandler{},
+		JWT: jwt, AppVersion: "test", AllowOrigins: []string{"*"}, UserGroup: NewUserGroupHandler(svc),
+	})
+	token, _ := jwt.GenerateAccessToken(admin)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/usergroup-sync", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("sync now without a source = %d %s, want 409", rec.Code, rec.Body.String())
+	}
+}
+
 func TestUserGroupHandler_Refusals(t *testing.T) {
 	f := newUserGroupAPIFixture(t)
-	id := f.id("dope")
+	id := f.id("eng-dope")
 
 	cases := []struct {
 		name, method, path, token, body string
@@ -219,21 +317,19 @@ func TestUserGroupHandler_Refusals(t *testing.T) {
 	}{
 		{"guest lists", http.MethodGet, "/api/v1/usergroups", f.guestJWT, "", http.StatusForbidden},
 		{"guest gets", http.MethodGet, "/api/v1/usergroups/" + id, f.guestJWT, "", http.StatusForbidden},
-		{"guest checks a handle", http.MethodGet, "/api/v1/usergroup-handles/x", f.guestJWT, "", http.StatusForbidden},
 		{"guest lists a user's groups", http.MethodGet, "/api/v1/users/u-bob/usergroups", f.guestJWT, "", http.StatusForbidden},
-		{"bad update body", http.MethodPatch, "/api/v1/usergroups/" + id, f.adminJWT, `{`, http.StatusBadRequest},
-		{"member updates", http.MethodPatch, "/api/v1/usergroups/" + id, f.memberJWT, `{"name":"x"}`, http.StatusForbidden},
 		{"member disables", http.MethodPost, "/api/v1/usergroups/" + id + "/disable", f.memberJWT, "", http.StatusForbidden},
 		{"member reads the sync status", http.MethodGet, "/api/v1/usergroup-sync", f.memberJWT, "", http.StatusForbidden},
+		{"member syncs", http.MethodPost, "/api/v1/usergroup-sync", f.memberJWT, "", http.StatusForbidden},
 		{"missing group", http.MethodGet, "/api/v1/usergroups/group-nope", f.memberJWT, "", http.StatusNotFound},
-		// Groups come from Microsoft 365 only: no way to create one, edit its
-		// members, link, sync it or hold its removals by hand.
+		// Groups come from Microsoft 365 only: no way to create one, edit it,
+		// edit its members or link it by hand.
 		{"creating", http.MethodPost, "/api/v1/usergroups", f.adminJWT, `{"handle":"x","name":"X"}`, http.StatusMethodNotAllowed},
+		{"editing", http.MethodPatch, "/api/v1/usergroups/" + id, f.adminJWT, `{"name":"x"}`, http.StatusMethodNotAllowed},
+		{"checking a handle", http.MethodGet, "/api/v1/usergroup-handles/x", f.adminJWT, "", http.StatusNotFound},
 		{"adding members", http.MethodPost, "/api/v1/usergroups/" + id + "/members", f.adminJWT, `{"userIds":["u-bob"]}`, http.StatusNotFound},
 		{"linking", http.MethodPost, "/api/v1/usergroups/" + id + "/link", f.adminJWT, `{}`, http.StatusNotFound},
 		{"approving a removal", http.MethodPost, "/api/v1/usergroups/" + id + "/approve-removal", f.adminJWT, "", http.StatusNotFound},
-		{"syncing", http.MethodPost, "/api/v1/usergroups/" + id + "/sync", f.adminJWT, `{}`, http.StatusNotFound},
-		{"searching Microsoft 365", http.MethodGet, "/api/v1/usergroup-sources/microsoft?q=x", f.adminJWT, "", http.StatusNotFound},
 	}
 	for _, tc := range cases {
 		if rec := f.do(tc.method, tc.path, tc.token, tc.body); rec.Code != tc.want {

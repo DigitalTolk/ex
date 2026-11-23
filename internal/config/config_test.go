@@ -20,6 +20,7 @@ func clearEnv(t *testing.T) {
 		"SENTRY_FRONTEND_REPLAY_SESSION_SAMPLE_RATE", "SENTRY_FRONTEND_REPLAY_ERROR_SAMPLE_RATE",
 		"ACCESS_LOG_ENABLED",
 		"MS_TENANT_ID", "MS_CLIENT_ID", "MS_CLIENT_SECRET", "MS_PROFILE_SYNC_INTERVAL", "MS_STATUS_SYNC_INTERVAL",
+		"USERGROUP_ENTRA_PARENT_GROUP", "USERGROUP_SYNC_INTERVAL",
 		"MS_TOKEN_KEY", "MS_SHAREPOINT_HOSTS",
 		"EMAIL_PROVIDER", "EMAIL_FROM", "SES_CONFIGURATION_SET",
 		"CONNECTOR_PRIVATE_DOMAINS",
@@ -505,15 +506,15 @@ func TestLoadMSProfileSyncInterval(t *testing.T) {
 }
 
 func TestLoadMSStatusSyncInterval(t *testing.T) {
-	t.Run("default 30m", func(t *testing.T) {
+	t.Run("default 1h", func(t *testing.T) {
 		clearEnv(t)
 		t.Setenv("ENV", "development")
 		cfg, err := Load()
 		if err != nil {
 			t.Fatalf("Load: %v", err)
 		}
-		if cfg.MSStatusSyncInterval != 30*time.Minute {
-			t.Errorf("MSStatusSyncInterval = %v, want 30m", cfg.MSStatusSyncInterval)
+		if cfg.MSStatusSyncInterval != time.Hour {
+			t.Errorf("MSStatusSyncInterval = %v, want 1h", cfg.MSStatusSyncInterval)
 		}
 	})
 	t.Run("custom", func(t *testing.T) {
@@ -535,6 +536,54 @@ func TestLoadMSStatusSyncInterval(t *testing.T) {
 			t.Setenv("MS_STATUS_SYNC_INTERVAL", bad)
 			if _, err := Load(); err == nil {
 				t.Fatalf("Load with MS_STATUS_SYNC_INTERVAL=%q should fail", bad)
+			}
+		})
+	}
+}
+
+func TestLoadUserGroupSync(t *testing.T) {
+	t.Run("off by default, every 30m", func(t *testing.T) {
+		clearEnv(t)
+		t.Setenv("ENV", "development")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if cfg.UserGroupEntraParentGroup != "" || cfg.UserGroupSyncInterval != 30*time.Minute {
+			t.Errorf("parent = %q, interval = %v; want none, 30m", cfg.UserGroupEntraParentGroup, cfg.UserGroupSyncInterval)
+		}
+	})
+	t.Run("configured", func(t *testing.T) {
+		clearEnv(t)
+		t.Setenv("ENV", "development")
+		t.Setenv("MS_TENANT_ID", "tenant-1")
+		t.Setenv("MS_CLIENT_ID", "client-1")
+		t.Setenv("MS_CLIENT_SECRET", "secret-1")
+		t.Setenv("USERGROUP_ENTRA_PARENT_GROUP", "parent-1")
+		t.Setenv("USERGROUP_SYNC_INTERVAL", "10m")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if cfg.UserGroupEntraParentGroup != "parent-1" || cfg.UserGroupSyncInterval != 10*time.Minute {
+			t.Errorf("parent = %q, interval = %v", cfg.UserGroupEntraParentGroup, cfg.UserGroupSyncInterval)
+		}
+	})
+	t.Run("a parent without Microsoft 365 is refused", func(t *testing.T) {
+		clearEnv(t)
+		t.Setenv("ENV", "development")
+		t.Setenv("USERGROUP_ENTRA_PARENT_GROUP", "parent-1")
+		if _, err := Load(); err == nil {
+			t.Fatal("Load without MS_TENANT_ID should fail")
+		}
+	})
+	for _, bad := range []string{"abc", "-1m", "0"} {
+		t.Run("rejects interval "+bad, func(t *testing.T) {
+			clearEnv(t)
+			t.Setenv("ENV", "development")
+			t.Setenv("USERGROUP_SYNC_INTERVAL", bad)
+			if _, err := Load(); err == nil {
+				t.Fatalf("Load with USERGROUP_SYNC_INTERVAL=%q should fail", bad)
 			}
 		})
 	}

@@ -107,9 +107,7 @@ export const queryKeys = {
   userGroupsForUser: (userId: string) => ['usergroups', 'user', userId] as const,
   userGroupsAll: () => ['usergroups'] as const,
   userGroupPermissions: () => ['usergroups', 'permissions'] as const,
-  // Whether a handle is free (the edit dialog asks as you type).
-  userGroupHandle: (handle: string) => ['usergroups', 'handle', handle] as const,
-  // The last directory sync of the groups (admins).
+  // How the groups' sync from Microsoft 365 went (admins).
   userGroupSync: () => ['usergroups', 'sync'] as const,
   // Projects page (products + design references). project(key) nests under
   // projects() so one invalidation refreshes the list and every open detail.

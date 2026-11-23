@@ -6,7 +6,7 @@ const GROUP = {
   id: 'group-oncall', handle: 'oncall', name: 'On-call engineers', description: '', disabled: false,
   memberCount: 1, createdBy: 'u-1', createdAt: '', updatedAt: '', memberIds: ['u-1'],
   syncSkipped: 0, syncState: 'source-missing',
-  source: { kind: 'squad', squad: 'Oncall', department: 'Engineering', key: 'squad:oncall' },
+  source: { kind: 'entra-group', id: 'g-oncall', key: 'entra-group:g-oncall' },
 };
 const idle = { mutate: vi.fn(), isPending: false };
 vi.mock('@/hooks/useUserGroups', async (importOriginal) => ({
@@ -31,7 +31,7 @@ describe('UserGroupDetailDialog layout', () => {
     const box = dialog.element() as HTMLElement;
     expect(box.scrollWidth).toBeLessThanOrEqual(box.clientWidth + 1);
     const edge = box.getBoundingClientRect();
-    for (const name of ['Disable group', 'Edit details']) {
+    for (const name of ['Disable group']) {
       const button = screen.getByRole('button', { name }).element().getBoundingClientRect();
       expect(button.left, name).toBeGreaterThanOrEqual(edge.left - 1);
       expect(button.right, name).toBeLessThanOrEqual(edge.right + 1);

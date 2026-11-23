@@ -1,12 +1,15 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
 type Init = { method?: string; body?: string };
 
 const mockApiFetch = vi.fn();
-vi.mock('@/lib/api', () => ({ apiFetch: (...args: unknown[]) => mockApiFetch(...args) }));
+vi.mock('@/lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api')>()),
+  apiFetch: (...args: unknown[]) => mockApiFetch(...args),
+}));
 vi.mock('@/context/AuthContext', () => ({
   useAuth: () => ({ user: { id: 'u-admin', displayName: 'Admin', systemRole: 'admin', status: 'active' }, isAuthenticated: true }),
 }));
@@ -29,36 +32,34 @@ vi.mock('@/hooks/useConversations', () => ({
 }));
 
 import DirectoriesPage from '@/pages/DirectoriesPage';
+import { ApiError } from '@/lib/api';
 
 const DOPE = {
-  id: 'group-dope', handle: 'dope', name: 'DOPE', description: 'Squad DOPE in Engineering', disabled: false, memberCount: 2,
+  id: 'group-dope', handle: 'eng-dope', name: 'eng-dope', description: 'DOPE squad (Engineering)', disabled: false, memberCount: 2,
   createdBy: '', createdAt: '', updatedAt: '', memberIds: ['u-ann', 'u-bob'], syncSkipped: 3,
-  source: { kind: 'squad', squad: 'DOPE', department: 'Engineering', key: 'squad:dope' },
+  source: { kind: 'entra-group', id: 'g-dope', key: 'entra-group:g-dope' },
 };
 const ENG = {
-  ...DOPE, id: 'group-eng', handle: 'engineering', name: 'Engineering', description: 'Department Engineering', syncSkipped: 1,
-  source: { kind: 'department', department: 'Engineering', key: 'dept:engineering' },
+  ...DOPE, id: 'group-eng', handle: 'eng', name: 'eng', description: 'Engineering department', syncSkipped: 1,
+  source: { kind: 'entra-group', id: 'g-eng', key: 'entra-group:g-eng' },
 };
 const SYNCED = {
-  lastSyncedAt: new Date().toISOString(), readable: 40,
-  anomalies: {
-    people: 3, counts: { 'non-standard-dash': 2, odd: 1 },
-    examples: [
-      { value: 'Engineering – DOPE', kinds: ['non-standard-dash', 'spacing'], people: 2 },
-      { value: '', kinds: ['odd'], people: 1 },
-    ],
-  },
+  configured: true, intervalMinutes: 30, running: false,
+  lastSyncedAt: new Date(Date.now() - 10 * 60_000).toISOString(), finishedAt: new Date(Date.now() - 10 * 60_000).toISOString(),
+  skipped: [] as unknown[],
 };
 
 let canManage = true;
 let detail: Record<string, unknown> = {};
 let status: unknown = SYNCED;
+let syncNow: () => Promise<unknown> = () => Promise.resolve({ ...SYNCED, running: true, trigger: 'manual' });
 
 function routeApi() {
   mockApiFetch.mockImplementation((path: string, init?: Init) => {
     const key = `${init?.method ?? 'GET'} ${path}`;
     if (key === 'GET /api/v1/usergroup-permissions') return Promise.resolve({ canManage });
     if (key === 'GET /api/v1/usergroup-sync') return Promise.resolve(status);
+    if (key === 'POST /api/v1/usergroup-sync') return syncNow();
     if (key === 'GET /api/v1/usergroups') return Promise.resolve([DOPE, ENG]);
     const m = /^GET \/api\/v1\/usergroups\/([^/]+)$/.exec(key);
     if (m) return Promise.resolve(detail[m[1]]);
@@ -88,77 +89,163 @@ beforeEach(() => {
   canManage = true;
   detail = { 'group-dope': DOPE, 'group-eng': ENG };
   status = SYNCED;
+  syncNow = () => Promise.resolve({ ...SYNCED, running: true, trigger: 'manual' });
   routeApi();
 });
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe("a group's source", () => {
-  it('shows the squad it follows and who is not in ex yet, with no Microsoft 365 controls', async () => {
+  it('says its members come from Microsoft 365, and who of them is not in ex, with no edit controls', async () => {
     renderAt('/directory/groups?group=group-dope');
     const source = await screen.findByTestId('usergroup-source');
-    expect(source).toHaveTextContent('Squad DOPE in Engineering');
-    expect(source).toHaveTextContent("3 people in this squad aren't in ex yet.");
-    for (const name of ['Sync now', 'Change Microsoft 365 group', 'Unlink', 'Add members']) {
+    expect(source).toHaveTextContent('Members come from its Microsoft 365 group.');
+    expect(source).toHaveTextContent("3 people in the Microsoft 365 group aren't in ex, or can't be in a group.");
+    expect(screen.getByRole('button', { name: 'Disable group' })).toBeInTheDocument();
+    for (const name of ['Edit details', 'Add members', 'Change Microsoft 365 group']) {
       expect(screen.queryByRole('button', { name })).not.toBeInTheDocument();
     }
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
 
-  it('shows the department a department group follows', async () => {
+  it('counts one person not in ex', async () => {
     renderAt('/directory/groups?group=group-eng');
-    const source = await screen.findByTestId('usergroup-source');
-    expect(source).toHaveTextContent('Department Engineering');
-    expect(source).toHaveTextContent("1 person in this department isn't in ex yet.");
+    expect(await screen.findByTestId('usergroup-source')).toHaveTextContent("1 person in the Microsoft 365 group isn't in ex");
   });
 });
 
-describe('a department or squad that is gone', () => {
-  it('tells admins the group is empty and can be disabled', async () => {
+describe('what an admin should know about a group', () => {
+  it('says a group gone from Microsoft 365 is empty and can be disabled', async () => {
     detail['group-dope'] = { ...DOPE, memberIds: [], memberCount: 0, syncState: 'source-missing' };
     renderAt('/directory/groups?group=group-dope');
-    expect(await screen.findByRole('status')).toHaveTextContent('No one in Microsoft 365 is in this squad any more. You can disable the group.');
-    expect(screen.getByRole('button', { name: 'Disable group' })).toBeInTheDocument();
+    expect(await screen.findByRole('status')).toHaveTextContent('This group is no longer in Microsoft 365, so it has no members. You can disable it.');
   });
 
-  it('names a gone department', async () => {
-    detail['group-eng'] = { ...ENG, memberIds: [], memberCount: 0, syncState: 'source-missing' };
-    renderAt('/directory/groups?group=group-eng');
-    expect(await screen.findByRole('status')).toHaveTextContent('No one in Microsoft 365 is in this department any more.');
+  it('says a rename that clashes keeps the old handle', async () => {
+    detail['group-dope'] = { ...DOPE, name: 'product', syncState: 'handle-conflict' };
+    renderAt('/directory/groups?group=group-dope');
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      "It was renamed to product in Microsoft 365, but that can't be its handle here, so it stays @eng-dope until the name is changed there.",
+    );
   });
 });
 
 describe('the sync report', () => {
-  it('tells admins when groups last synced and which department values were read only partly', async () => {
+  it('tells admins how often and when groups last synced', async () => {
     renderAt('/directory/groups');
     const report = await screen.findByTestId('usergroup-sync-report');
-    await waitFor(() => expect(report).toHaveTextContent('Last sync'));
-    expect(report).toHaveTextContent('sync every 30 minutes');
-    fireEvent.click(within(report).getByText("3 people have a department ex couldn't fully read"));
-    const list = within(report).getByRole('list', { name: 'Department values read only partly' });
-    expect(list).toHaveTextContent('Engineering – DOPE · a dash other than "-", a missing space · 2 people');
-    expect(list).toHaveTextContent('(empty) · odd · 1 person');
+    await waitFor(() => expect(report).toHaveTextContent('Groups sync from Microsoft 365 every 30 minutes. Last sync 10 minutes ago.'));
+    expect(within(report).getByRole('button', { name: 'Sync now' })).toBeEnabled();
+    expect(within(report).queryByRole('alert')).not.toBeInTheDocument();
   });
 
-  it('says when nothing has synced yet, and when a sync was paused', async () => {
-    status = { readable: 0, held: true, anomalies: { people: 1, counts: {}, examples: [] } };
+  it.each([
+    [60, 'every hour'],
+    [120, 'every 2 hours'],
+    [1, 'every minute'],
+    [90, 'every 90 minutes'],
+  ])('reads an interval of %i minutes as "%s"', async (intervalMinutes, text) => {
+    status = { ...SYNCED, intervalMinutes };
+    renderAt('/directory/groups');
+    expect(await screen.findByTestId('usergroup-sync-report')).toHaveTextContent(text);
+  });
+
+  it('says when nothing has synced yet, why the last sync failed, and which groups it could not use', async () => {
+    status = {
+      ...SYNCED, lastSyncedAt: undefined, lastError: 'the parent group lists no groups',
+      skipped: [
+        { name: 'Product AI!', reason: 'not a valid handle' },
+        { groupId: 'group-dope', name: 'product', reason: '@product is taken by another group' },
+      ],
+    };
     renderAt('/directory/groups');
     const report = await screen.findByTestId('usergroup-sync-report');
-    await waitFor(() => expect(report).toHaveTextContent('Not synced yet.'));
-    expect(within(report).getByRole('status')).toHaveTextContent('so this sync was paused');
-    expect(report).toHaveTextContent("1 person has a department ex couldn't fully read");
+    expect(report).toHaveTextContent('Not synced yet.');
+    expect(within(report).getByRole('alert')).toHaveTextContent('Last sync failed: the parent group lists no groups');
+    fireEvent.click(within(report).getByText("2 Microsoft 365 groups couldn't be used as they are"));
+    const list = within(report).getByRole('list', { name: 'Microsoft 365 groups not used' });
+    expect(list).toHaveTextContent('Product AI! · not a valid handle');
+    expect(list).toHaveTextContent('product · @product is taken by another group');
   });
 
-  it('shows nothing until the status arrives, and nothing to members', async () => {
+  it('counts one group it could not use', async () => {
+    status = { ...SYNCED, skipped: [{ name: 'x', reason: 'not a valid handle' }] };
+    renderAt('/directory/groups');
+    expect(await screen.findByTestId('usergroup-sync-report')).toHaveTextContent("1 Microsoft 365 group couldn't be used as they are");
+  });
+
+  it('says when user groups are not connected', async () => {
+    status = { configured: false, intervalMinutes: 0, running: false, skipped: [] };
+    renderAt('/directory/groups');
+    expect(await screen.findByTestId('usergroup-sync-report')).toHaveTextContent("User groups aren't connected to Microsoft 365.");
+    expect(screen.queryByRole('button', { name: 'Sync now' })).not.toBeInTheDocument();
+  });
+
+  it('shows nothing until the status arrives', async () => {
     status = new Promise(() => {});
     renderAt('/directory/groups');
-    await screen.findByText('@dope');
+    await screen.findByText('@eng-dope');
     expect(screen.queryByTestId('usergroup-sync-report')).not.toBeInTheDocument();
   });
 
   it('is not shown to members', async () => {
     canManage = false;
     renderAt('/directory/groups');
-    await screen.findByText('@dope');
+    await screen.findByText('@eng-dope');
     expect(screen.queryByTestId('usergroup-sync-report')).not.toBeInTheDocument();
     expect(calls('GET /api/v1/usergroup-sync')).toHaveLength(0);
+  });
+});
+
+describe('Sync now', () => {
+  it('starts a sync and shows it running until it ends', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    renderAt('/directory/groups');
+    const report = await screen.findByTestId('usergroup-sync-report');
+    fireEvent.click(await within(report).findByRole('button', { name: 'Sync now' }));
+    expect(await within(report).findByRole('button', { name: 'Syncing…' })).toBeDisabled();
+    expect(calls('POST /api/v1/usergroup-sync')).toHaveLength(1);
+
+    // The sync ends: the next status poll (every 3 s while running) shows
+    // it, and the cooldown.
+    status = { ...SYNCED, lastSyncedAt: new Date().toISOString(), finishedAt: new Date().toISOString() };
+    act(() => {
+      vi.advanceTimersByTime(3_000);
+    });
+    expect(await within(report).findByRole('button', { name: 'Synced just now' })).toBeDisabled();
+  });
+
+  it('is disabled while a sync runs anywhere', async () => {
+    status = { ...SYNCED, running: true };
+    renderAt('/directory/groups');
+    expect(await screen.findByRole('button', { name: 'Syncing…' })).toBeDisabled();
+  });
+
+  it('comes back after the cooldown', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    status = { ...SYNCED, finishedAt: new Date().toISOString() };
+    renderAt('/directory/groups');
+    expect(await screen.findByRole('button', { name: 'Synced just now' })).toBeDisabled();
+    act(() => {
+      vi.advanceTimersByTime(61_000);
+    });
+    expect(await screen.findByRole('button', { name: 'Sync now' })).toBeEnabled();
+  });
+
+  it('shows the cooldown the server answers with', async () => {
+    syncNow = () => Promise.reject(new ApiError(429, 'a sync just finished', { ...SYNCED, finishedAt: new Date().toISOString() }));
+    renderAt('/directory/groups');
+    fireEvent.click(await screen.findByRole('button', { name: 'Sync now' }));
+    expect(await screen.findByRole('button', { name: 'Synced just now' })).toBeDisabled();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('shows why a sync could not start', async () => {
+    syncNow = () => Promise.reject(new ApiError(409, "user groups aren't connected to Microsoft 365"));
+    renderAt('/directory/groups');
+    fireEvent.click(await screen.findByRole('button', { name: 'Sync now' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent("user groups aren't connected to Microsoft 365");
   });
 });

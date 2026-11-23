@@ -19,7 +19,7 @@ func newTestUserGroup(id, handle string) *model.UserGroupDetail {
 		UserGroup: model.UserGroup{
 			ID: id, Handle: handle, Name: "Group " + handle, Description: "desc",
 			MemberCount: 2, CreatedAt: now, UpdatedAt: now,
-			Source: model.UserGroupSource{Kind: model.UserGroupSourceSquad, Squad: handle, Department: "Engineering", Key: "squad:" + handle},
+			Source: model.UserGroupSource{Kind: model.UserGroupSourceEntraGroup, ID: "eg-" + handle, Key: "entra-group:eg-" + handle},
 		},
 		// Members are rows of their own: never written with the group's row.
 		MemberIDs: []string{"u-ignored"},
@@ -223,7 +223,7 @@ func TestUserGroupStore_FaultArms(t *testing.T) {
 	}
 }
 
-// One group per department or squad: a second group on the same source is
+// One group per Entra group: a second group on the same source is
 // refused, and an update (which never changes the source) keeps the claim.
 func TestUserGroupStore_SourceClaimIsUnique(t *testing.T) {
 	db := setupDynamoDB(t)

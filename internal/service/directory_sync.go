@@ -49,19 +49,11 @@ type DirectorySyncLocker interface {
 	AcquireLock(ctx context.Context, key, token string, ttl time.Duration) (bool, error)
 }
 
-// DirectoryAccountLister reports every directory account, keyed by AAD object
-// id: whether it can sign in and its department; an account deleted upstream
-// is absent (MSDirectoryService.ListAccounts).
+// DirectoryAccountLister reports every directory account's standing, keyed
+// by AAD object id: true while it can sign in, false once disabled; an
+// account deleted upstream is absent (MSDirectoryService.ListAccounts).
 type DirectoryAccountLister interface {
-	ListAccounts(ctx context.Context) (map[string]DirectoryAccount, error)
-}
-
-// DirectoryAccount is one directory account as the status sweep reads it.
-type DirectoryAccount struct {
-	// Enabled is false once the account is disabled (it can't sign in).
-	Enabled bool
-	// Department is its department field ("Department - Squad, Squad").
-	Department string
+	ListAccounts(ctx context.Context) (map[string]bool, error)
 }
 
 // DirectoryStatusSetter flips an SSO account active/deactivated on the
@@ -86,20 +78,7 @@ type DirectorySyncService struct {
 	// again.
 	accounts DirectoryAccountLister
 	status   DirectoryStatusSetter
-	// userGroups syncs the department and squad user groups after each status
-	// pass (SetUserGroupSync); nil leaves them alone.
-	userGroups DirectoryGroupSync
 }
-
-// DirectoryGroupSync is what the status sweep drives for user groups
-// (UserGroupService): every enabled account's department, with its ex member.
-type DirectoryGroupSync interface {
-	SyncDirectoryGroups(ctx context.Context, people []DirectoryPerson)
-}
-
-// SetUserGroupSync makes the status sweep sync the user groups after its own
-// pass, so accounts it deactivated are already left out.
-func (s *DirectorySyncService) SetUserGroupSync(g DirectoryGroupSync) { s.userGroups = g }
 
 // SetStatusSync wires offboarding: where account standing comes from and
 // what applies it.
@@ -272,9 +251,6 @@ func (s *DirectorySyncService) SweepStatus(ctx context.Context, interval time.Du
 
 	var checked, reactivated int
 	var offboarded []*model.User
-	// members maps an account's object ID to the ex user who is a group
-	// member for it: active (or reactivated now), human and not a guest.
-	members := map[string]string{}
 	cursor := ""
 	for {
 		users, next, err := s.users.ListUsers(ctx, directorySyncPageSize, cursor)
@@ -287,22 +263,15 @@ func (s *DirectorySyncService) SweepStatus(ctx context.Context, interval time.Du
 				continue
 			}
 			checked++
-			account, listed := accounts[u.MSObjectID]
+			enabled, listed := accounts[u.MSObjectID]
 			switch {
-			case listed && account.Enabled:
-				member := u.SystemRole != model.SystemRoleGuest
+			case listed && enabled:
 				if u.Status != "deactivated" || u.DeactivatedBy == model.DeactivatedByAdmin {
-					if member && u.Status != "deactivated" {
-						members[u.MSObjectID] = u.ID
-					}
 					continue
 				}
 				if err := s.status.SetStatusFromDirectory(ctx, u.ID, false); err != nil {
 					slog.WarnContext(ctx, "directory status: reactivate failed", "userID", u.ID, "error", err)
 					continue
-				}
-				if member {
-					members[u.MSObjectID] = u.ID
 				}
 				reactivated++
 				slog.InfoContext(ctx, "directory status: reactivated user who can sign in again", "userID", u.ID)
@@ -322,15 +291,6 @@ func (s *DirectorySyncService) SweepStatus(ctx context.Context, interval time.Du
 	if deactivated > 0 || reactivated > 0 {
 		slog.InfoContext(ctx, "directory status: sweep complete",
 			"checked", checked, "deactivated", deactivated, "reactivated", reactivated)
-	}
-	if s.userGroups != nil {
-		people := make([]DirectoryPerson, 0, len(accounts))
-		for objectID, account := range accounts {
-			if account.Enabled {
-				people = append(people, DirectoryPerson{UserID: members[objectID], Department: account.Department})
-			}
-		}
-		s.userGroups.SyncDirectoryGroups(ctx, people)
 	}
 }
 

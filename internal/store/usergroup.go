@@ -17,9 +17,9 @@ import (
 // written on both sides like channel memberships: under the group
 // (USERGROUP#<id>, MEMBER#<user>) for its member list and under the user
 // (USER#<user>, UGROUP#<id>) for the groups a user is in. Claim rows keep
-// handles and sources (one group per department or squad) unique. A handle may not equal a bot
-// username either: both stores check the other's claim in the same
-// transaction.
+// handles and sources (one group per Entra group) unique. A handle may not
+// equal a bot username either: both stores check the other's claim in the
+// same transaction.
 
 func userGroupPK(id string) string           { return "USERGROUP#" + id }
 func userGroupSK(id string) string           { return "UGROUP#" + id }
@@ -32,7 +32,7 @@ func allUserGroupsGSI2PK() string            { return "ALL_USERGROUPS" }
 var ErrUserGroupChanged = errors.New("store: user group changed concurrently")
 
 // ErrUserGroupSourceTaken is returned when another group already follows the
-// department or squad: one group per source.
+// source: one group per source.
 var ErrUserGroupSourceTaken = errors.New("store: user group source taken")
 
 // claimKind names what one transaction step guards, so a cancelled
@@ -137,8 +137,6 @@ func (s *UserGroupStoreImpl) noBotNamed(handle string) types.TransactWriteItem {
 // and the claim on its source — all or nothing. Members are written with
 // ApplyUserGroupMembers. ErrAlreadyExists when the handle is taken by a group
 // or a bot; ErrUserGroupSourceTaken when another group follows the source.
-// ErrAlreadyExists when the handle is taken by a group or a bot;
-// ErrEntraGroupLinked when the Entra group is linked elsewhere.
 func (s *UserGroupStoreImpl) CreateUserGroup(ctx context.Context, g *model.UserGroupDetail) error {
 	g.Version = 1
 	items := []types.TransactWriteItem{

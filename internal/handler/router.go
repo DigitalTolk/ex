@@ -379,16 +379,13 @@ func NewRouter(d *Deps) http.Handler {
 	}
 	if userGroupH != nil {
 		// Every member reads groups; managing them is the service's call.
-		// Handle availability sits under its own prefix so it can't shadow
-		// /usergroups/{id}.
 		mux.Handle("GET /api/v1/usergroups", middleware.WrapFunc(userGroupH.List, authMW))
 		mux.Handle("GET /api/v1/usergroups/{id}", middleware.WrapFunc(userGroupH.Get, authMW))
-		mux.Handle("PATCH /api/v1/usergroups/{id}", middleware.WrapFunc(userGroupH.Update, authMW, writeLimit))
 		mux.Handle("POST /api/v1/usergroups/{id}/enable", middleware.WrapFunc(userGroupH.Enable, authMW, writeLimit))
 		mux.Handle("POST /api/v1/usergroups/{id}/disable", middleware.WrapFunc(userGroupH.Disable, authMW, writeLimit))
-		mux.Handle("GET /api/v1/usergroup-handles/{handle}", middleware.WrapFunc(userGroupH.HandleAvailable, authMW))
 		mux.Handle("GET /api/v1/usergroup-permissions", middleware.WrapFunc(userGroupH.Permissions, authMW))
 		mux.Handle("GET /api/v1/usergroup-sync", middleware.WrapFunc(userGroupH.SyncStatus, authMW))
+		mux.Handle("POST /api/v1/usergroup-sync", middleware.WrapFunc(userGroupH.SyncNow, authMW, writeLimit))
 		mux.Handle("GET /api/v1/users/{id}/usergroups", middleware.WrapFunc(userGroupH.ForUser, authMW))
 	}
 	if botH != nil {
