@@ -38,6 +38,7 @@ import { useChannelMessages } from '@/hooks/useMessages';
 import { useAuth } from '@/context/AuthContext';
 import { useUnread } from '@/context/UnreadContext';
 import { canEditChannel, canArchiveChannel, canUnarchiveChannel, canLeaveChannel, roleNumber, GENERAL_CHANNEL_SLUG } from '@/lib/roles';
+import { isHomeNav } from '@/lib/home-nav';
 import { ArchivedChannelNotice } from '@/components/chat/ArchivedChannelNotice';
 import { slugify } from '@/lib/format';
 import { NonMemberInvitePrompt } from './NonMemberInvitePrompt';
@@ -173,7 +174,7 @@ export function ChannelView() {
     draft,
     draftAttachments,
     editing: { setEditingMessage, activeEditingMessage, editDraftAttachments, editReady },
-    editMessage,
+    editSaving,
     handleDraftChange,
     handleSendMessage,
     handleEditMessage,
@@ -193,6 +194,21 @@ export function ChannelView() {
   // resetting here — it's pulled fresh from the new URL on every render.
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => setThreadRootID(null), [channel?.id]);
+  // The workspace mark on the rail goes home to this channel's default view:
+  // whatever thread, side panel or tag was open closes, even when this was
+  // already the channel on screen (each click is a new history entry). Once
+  // per click: the entry keeps its state, and a panel opened after it must
+  // stay open.
+  const homeNavKey = isHomeNav(location.state) ? location.key : undefined;
+  const servedHomeNav = useRef<string | undefined>(undefined);
+  const closePanels = panels.close;
+  useEffect(() => {
+    if (!homeNavKey || servedHomeNav.current === homeNavKey) return;
+    servedHomeNav.current = homeNavKey;
+    setThreadRootID(null);
+    closeTag();
+    closePanels();
+  }, [homeNavKey, closeTag, closePanels]);
   useEffect(() => clearInvites(), [channel?.id, clearInvites]);
 
   // Local "open thread via UI button" state. The URL ?thread= param
@@ -481,7 +497,7 @@ export function ChannelView() {
               onSchedule={schedule.onSchedule}
               scheduledCount={schedule.scheduledCount}
               onCancel={activeEditingMessage ? () => setEditingMessage(null) : undefined}
-              disabled={!!activeEditingMessage && editMessage.isPending}
+              disabled={!!activeEditingMessage && editSaving}
               placeholder={activeEditingMessage ? 'Edit message...' : `Write to ~${channel?.name ?? knownChannel?.channelName ?? '...'}`}
               focusKey={activeEditingMessage ? `edit-${activeEditingMessage.id}` : channelID}
               initialBody={activeEditingMessage?.body ?? draft?.body ?? ''}

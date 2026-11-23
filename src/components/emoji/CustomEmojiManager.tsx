@@ -10,8 +10,10 @@ import { useAuth } from '@/context/AuthContext';
 import { isGuest } from '@/lib/roles';
 import { formatBytes } from '@/lib/format';
 import { SearchInput } from '@/components/ui/search-input';
+import { nameClash } from '@/lib/emoji-names';
 
 const NAME_RE = /^[a-z0-9_+-]{1,32}$/;
+
 
 // The custom-emoji manager, shared by the account-menu pop-up
 // (CustomEmojiDialog) and the /emojis page. Built for workspaces with hundreds
@@ -25,6 +27,7 @@ export function CustomEmojiManager() {
   const upload = useUploadEmoji();
   const remove = useDeleteEmoji();
   const [name, setName] = useState('');
+  const clash = useMemo(() => nameClash(name, emojis), [name, emojis]);
   const [gettingWorkDone, setGettingWorkDone] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [previewURL, setPreviewURL] = useState<string | null>(null);
@@ -167,10 +170,16 @@ export function CustomEmojiManager() {
                 />
                 <span className="select-none px-2 text-muted-foreground">:</span>
               </div>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Lowercase letters, digits, <code>_</code>, <code>+</code>,{' '}
-                <code>-</code>. Max 32 chars.
-              </p>
+              {clash ? (
+                <p className="mt-1 text-xs text-destructive" role="alert" data-testid="emoji-name-clash">
+                  {clash}
+                </p>
+              ) : (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Lowercase letters, digits, <code>_</code>, <code>+</code>,{' '}
+                  <code>-</code>. Max 32 chars.
+                </p>
+              )}
             </div>
             {/* The shelf is workspace-curated: pinning is admin-only (the
                 backend rejects the flag from non-admins). */}
@@ -212,7 +221,7 @@ export function CustomEmojiManager() {
           <Button
             size="sm"
             onClick={handleSave}
-            disabled={upload.isPending || !name || !file}
+            disabled={upload.isPending || !name || !file || !!clash}
           >
             {upload.isPending ? 'Saving...' : 'Save'}
           </Button>

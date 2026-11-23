@@ -499,6 +499,35 @@ func TestSearchHandler_Files_PassesQueryParams(t *testing.T) {
 	}
 }
 
+// The date modifiers arrive as instants; anything else is refused rather
+// than silently searching without the dates.
+func TestSearchHandler_Messages_DateBounds(t *testing.T) {
+	h, sr, ac, jwtMgr := setupSearchTest(t)
+	ac.parents = []string{"ch-1"}
+	token := makeTokenForUser(jwtMgr, &model.User{ID: "u-2", SystemRole: model.SystemRoleMember})
+	get := func(url string) int {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, url, nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		middleware.Auth(jwtMgr)(http.HandlerFunc(h.SearchMessages)).ServeHTTP(rec, req)
+		return rec.Code
+	}
+	if code := get("/api/v1/search/messages?q=x&after=2026-11-19T23:00:00.000Z&before=2026-11-20T23:00:00%2B01:00"); code != http.StatusOK {
+		t.Fatalf("status = %d", code)
+	}
+	if !sr.lastOpts.After.Equal(time.Date(2026, 11, 19, 23, 0, 0, 0, time.UTC)) || !sr.lastOpts.Before.Equal(time.Date(2026, 11, 20, 22, 0, 0, 0, time.UTC)) {
+		t.Fatalf("dates not threaded: after=%v before=%v", sr.lastOpts.After, sr.lastOpts.Before)
+	}
+	if code := get("/api/v1/search/messages?q=x"); code != http.StatusOK || !sr.lastOpts.After.IsZero() || !sr.lastOpts.Before.IsZero() {
+		t.Fatalf("no dates: status %d, opts %+v", code, sr.lastOpts)
+	}
+	for _, bad := range []string{"after=yesterday", "before=2026-11-20"} {
+		if code := get("/api/v1/search/messages?q=x&" + bad); code != http.StatusBadRequest {
+			t.Errorf("%s: status = %d, want 400", bad, code)
+		}
+	}
+}
+
 func TestSearchHandler_Messages_AccessError_Returns500(t *testing.T) {
 	// Failing to compute the user's allowed parent IDs is a hard error —
 	// returning unfiltered results would leak.

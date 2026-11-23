@@ -1,8 +1,22 @@
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Clock3, Search, FileSearch, X, Loader2, Users, UserRound } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
+import { CalendarDays, Clock3, Search, FileSearch, X, Loader2, Users, UserRound } from 'lucide-react';
 import { Link, matchPath, useLocation, useNavigate } from 'react-router-dom';
 import { useChannelBySlug, useUserChannels } from '@/hooks/useChannels';
 import { useUserConversations, useOpenDM } from '@/hooks/useConversations';
+import { useSearchModifiers } from '@/hooks/useSearchModifiers';
+import { allUsersQuery } from '@/lib/people-query';
+import { parseSearchModifiers, unmatchedNote, type SearchModifier } from '@/lib/search-modifiers';
+import {
+  activeModifier,
+  completeModifier,
+  personHandle,
+  placeHandle,
+  suggestDays,
+  suggestPeople,
+  suggestPlaces,
+  type Place,
+} from '@/lib/search-suggest';
 import { useSearchUsers, useSearchChannels, useSearchMessages, type SearchHit } from '@/hooks/useSearch';
 import { searchFailure } from '@/lib/search-failure';
 import { groupsMatching } from '@/lib/conversation-match';
@@ -56,7 +70,31 @@ type Item =
   | { kind: 'message'; suggestion: Suggestion }
   // With the field empty the bar lists what was opened and searched lately.
   | { kind: 'recent'; entry: RecentOpened }
-  | { kind: 'recent-query'; query: string };
+  | { kind: 'recent-query'; query: string }
+  // While from: or in: is being typed: the people or chats it can name.
+  | { kind: 'modifier'; option: ModifierOption }
+  // With the field empty: the modifiers there are, to start one.
+  | { kind: 'modifier-hint'; key: SearchModifier };
+
+interface ModifierOption {
+  key: SearchModifier;
+  id: string;
+  label: string;
+  detail?: string;
+  // What picking it writes after the colon.
+  value: string;
+  // A chat's kind, for its icon (in: only).
+  place?: Place['kind'];
+  channelType?: string;
+}
+
+// The empty field offers from: and in:; the date modifiers (on:, before:,
+// after:) work and suggest days when typed, without crowding this list.
+const MODIFIER_HINTS: { key: SearchModifier; example: string; description: string }[] = [
+  { key: 'from', example: 'from:', description: 'Messages from a person' },
+  { key: 'in', example: 'in:', description: 'Messages in a channel or DM' },
+];
+const MODIFIER_TITLE: Record<SearchModifier, string> = { from: 'From', in: 'In', on: 'On', before: 'Before', after: 'After' };
 
 const MIN_SEARCH_CHARS = 2;
 
@@ -79,6 +117,8 @@ function itemKey(it: Item): string {
   if (it.kind === 'group') return `group:${it.conversation.conversationID}`;
   if (it.kind === 'recent') return `recent:${it.entry.kind}:${it.entry.id}`;
   if (it.kind === 'recent-query') return `recent-query:${it.query}`;
+  if (it.kind === 'modifier') return `modifier:${it.option.key}:${it.option.id}`;
+  if (it.kind === 'modifier-hint') return `modifier-hint:${it.key}`;
   return `${it.kind}:${it.hit.id}`;
 }
 
@@ -115,7 +155,11 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
   // The field is an ARIA combobox over this listbox; focus stays in the
   // field and the highlighted option is its active descendant.
   const listboxId = useId();
-  const optionId = (it: Item) => `${listboxId}-${itemKey(it)}`;
+  // A row that isn't in the list has no id, and must never take the bar
+  // down: a section rendered out of step with the list once crashed the page.
+  /* v8 ignore next */
+  /* istanbul ignore next -- every rendered row is in the list today (the sections follow it); the missing-row arm is the crash guard */
+  const optionId = (it: Item | undefined) => (it ? `${listboxId}-${itemKey(it)}` : undefined);
 
   const location = useLocation();
   const channelMatch = matchPath('/channel/:id', location.pathname);
@@ -134,10 +178,19 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
   );
 
   const trimmed = q.trim();
+  // The channel and people lookups search the words alone: "datadog
+  // from:carol" looks up "datadog", and the modifiers go with the message
+  // search as typed.
+  // The modifier still being typed ("from:", "from:ca") is left out too.
+  const active = useMemo(() => activeModifier(q), [q]);
+  const words = useMemo(
+    () => parseSearchModifiers(active ? q.slice(0, active.start) : trimmed).text,
+    [active, q, trimmed],
+  );
   // Entity (channel/people) lookups are debounced so a fast typist
   // doesn't fire a request per keystroke; the message action always
   // reflects the live query so Enter feels instant.
-  const debouncedQ = useDebouncedValue(trimmed, 150);
+  const debouncedQ = useDebouncedValue(words, 150);
   const searchEnabled = debouncedQ.length >= MIN_SEARCH_CHARS;
   const usersQuery = useSearchUsers(debouncedQ, searchEnabled, 5);
   const channelsQuery = useSearchChannels(debouncedQ, searchEnabled, 5);
@@ -147,7 +200,7 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
   // below the minimum — or is cleared — those stale rows must neither
   // render nor stay Enter-activatable (backspacing "gen" → "g" used to
   // leave ~general in the hidden item list, and Enter navigated there).
-  const hitsEnabled = searchEnabled && trimmed.length >= MIN_SEARCH_CHARS;
+  const hitsEnabled = searchEnabled && words.length >= MIN_SEARCH_CHARS;
   const userHits = useMemo(
     () => (hitsEnabled ? (usersQuery.data?.hits ?? []) : []),
     [hitsEnabled, usersQuery.data],
@@ -168,8 +221,8 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
   // Your group messages with the people named, from the list you already
   // have: "alice bob" finds the group with both.
   const groupHits = useMemo(
-    () => (trimmed.length >= MIN_SEARCH_CHARS ? groupsMatching(userConversations ?? [], trimmed) : []),
-    [trimmed, userConversations],
+    () => (words.length >= MIN_SEARCH_CHARS ? groupsMatching(userConversations ?? [], words) : []),
+    [words, userConversations],
   );
   const searching = searchEnabled && (usersQuery.isLoading || channelsQuery.isLoading);
   const failedQuery = hitsEnabled ? [usersQuery, channelsQuery].find((query) => query.isError) : undefined;
@@ -182,6 +235,51 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
     () => new Set((userChannels ?? []).map((c) => c.channelID)),
     [userChannels],
   );
+
+  // Suggestions for the modifier being typed. The people list is the app's
+  // roster, loaded the first time from: is typed (never for a plain search);
+  // the chats are the sidebar's own lists.
+  const { data: roster } = useQuery({ ...allUsersQuery(), enabled: active?.key === 'from' });
+  const places = useMemo<Place[]>(
+    () => [
+      ...(userChannels ?? []).map((c): Place => ({ id: c.channelID, name: c.channelName, kind: 'channel' })),
+      ...(userConversations ?? []).map((c): Place => ({ id: c.conversationID, name: c.displayName, kind: 'conversation' })),
+    ],
+    [userChannels, userConversations],
+  );
+  const channelTypes = useMemo(
+    () => new Map((userChannels ?? []).map((c) => [c.channelID, c.channelType])),
+    [userChannels],
+  );
+  const modifierOptions = useMemo<ModifierOption[]>(() => {
+    if (!active) return [];
+    if (active.key === 'on' || active.key === 'before' || active.key === 'after') {
+      return suggestDays(active.partial).map((d) => ({ key: active.key, id: d.value, label: d.label, detail: d.detail, value: d.value }));
+    }
+    if (active.key === 'from') {
+      const people = roster ?? [];
+      return suggestPeople(active.partial, people).map((p) => ({
+        key: 'from',
+        id: p.id,
+        label: p.displayName,
+        detail: p.email,
+        value: personHandle(p, people),
+      }));
+    }
+    return suggestPlaces(active.partial, places).map((p) => ({
+      key: 'in',
+      id: p.id,
+      label: p.kind === 'channel' ? `~${p.name}` : p.name,
+      value: placeHandle(p, places),
+      place: p.kind,
+      channelType: channelTypes.get(p.id),
+    }));
+  }, [active, roster, places, channelTypes]);
+  // Once the name is typed out in full ("from:Carol"), the list steps aside:
+  // Enter (or a phone's Search key) runs the search instead of re-picking it.
+  const modifierDone =
+    !!active && modifierOptions.some((o) => o.value.replace(/^"|"$/g, '').toLowerCase() === active.partial.toLowerCase());
+  const modifierMode = modifierOptions.length > 0 && !modifierDone;
 
   const { openDM } = useOpenDM();
 
@@ -216,16 +314,19 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
     const arr: Item[] = [];
     if (!trimmed) {
       if (sheet) return arr;
+      for (const hint of MODIFIER_HINTS) arr.push({ kind: 'modifier-hint', key: hint.key });
       for (const entry of opened) arr.push({ kind: 'recent', entry });
       for (const query of recent) arr.push({ kind: 'recent-query', query });
       return arr;
     }
+    // Typing from: or in:, the list is what it can name, nothing else.
+    if (modifierMode) return modifierOptions.map((option): Item => ({ kind: 'modifier', option }));
     for (const h of channelHits) arr.push({ kind: 'channel', hit: h });
     for (const h of userHits) arr.push({ kind: 'user', hit: h });
     for (const c of groupHits) arr.push({ kind: 'group', conversation: c });
     for (const s of suggestions) arr.push({ kind: 'message', suggestion: s });
     return arr;
-  }, [trimmed, sheet, opened, recent, channelHits, userHits, groupHits, suggestions]);
+  }, [trimmed, sheet, opened, recent, modifierMode, modifierOptions, channelHits, userHits, groupHits, suggestions]);
 
   useEffect(() => {
     if (!open || sheet) return;
@@ -263,9 +364,14 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
   // to the message-search action — the only row whose meaning is stable
   // while fetches are in flight, and the one that always reflects the LIVE
   // query text.
-  const defaultIdx = items.findIndex((it) => it.kind === 'message');
+  // While a modifier is typed, the first name it could take. With the field
+  // empty, Enter keeps opening the first recent item, and with no history it
+  // does nothing (-1): the search options are there to click or arrow to.
+  const defaultIdx = modifierMode
+    ? 0
+    : items.findIndex((it) => it.kind === 'message' || it.kind === 'recent' || it.kind === 'recent-query');
   const keyedIdx = highlightKey === null ? -1 : items.findIndex((it) => itemKey(it) === highlightKey);
-  const safeHighlight = keyedIdx >= 0 ? keyedIdx : Math.max(defaultIdx, 0);
+  const safeHighlight = keyedIdx >= 0 ? keyedIdx : defaultIdx;
 
   function reset() {
     setOpen(false);
@@ -359,6 +465,12 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
       openRecent(item.entry);
     } else if (item.kind === 'recent-query') {
       runRecent(item.query);
+    } else if (item.kind === 'modifier') {
+      /* istanbul ignore next -- modifier rows exist only while one is being typed; defensive */
+      if (!active) return;
+      edit(completeModifier(q, active, item.option.value));
+    } else if (item.kind === 'modifier-hint') {
+      edit(`${item.key}:`);
     } else {
       submitSuggestion(item.suggestion);
     }
@@ -369,6 +481,15 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
     inputRef.current?.focus();
   }
 
+  // edit writes the field for the user (a picked suggestion) and keeps them
+  // in it, typing on.
+  function edit(next: string) {
+    setQ(next);
+    setOpen(true);
+    setHighlightKey(null);
+    inputRef.current?.focus();
+  }
+
   const showMessageResults = sheet && submitted !== null && submitted.q === trimmed;
   // While the sheet shows message results, its list keeps only the channel and
   // people hits — and isn't rendered at all when there are none.
@@ -376,14 +497,8 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
     (open || sheet) &&
     suggestions.length > 0 &&
     !(showMessageResults && channelHits.length === 0 && userHits.length === 0 && groupHits.length === 0);
-  const messagesQuery = useSearchMessages(
-    submitted?.q ?? '',
-    showMessageResults,
-    20,
-    submitted?.scope ? { in: submitted.scope.parentId } : undefined,
-  );
-  const messageHits = messagesQuery.data?.hits ?? [];
-  const showRecent = sheet && !trimmed && (recent.length > 0 || opened.length > 0);
+  // The sheet's empty field lists the search options, then any history.
+  const showRecent = sheet && !trimmed;
   // The bar's own recent list, while the empty field has focus.
   const showRecentDropdown = !sheet && open && !trimmed && items.length > 0;
   const listOpen = (showDropdown || showRecentDropdown) && items.length > 0;
@@ -421,7 +536,11 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
               // Enter with an empty search box.
               if (e.key === 'Enter') {
                 e.preventDefault();
-                if (listOpen) activate();
+                if (listOpen && safeHighlight >= 0) activate();
+              } else if (e.key === 'Tab' && modifierMode && listOpen) {
+                // Tab takes the highlighted name, as in a terminal.
+                e.preventDefault();
+                activate();
               } else if (e.key === 'Escape') {
                 // Leaving the search is all this Escape does.
                 e.preventDefault();
@@ -430,11 +549,11 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
               } else if (e.key === 'ArrowDown') {
                 if (!listOpen) return;
                 e.preventDefault();
-                setHighlightKey(itemKey(items[(safeHighlight + 1) % items.length]));
+                setHighlightKey(itemKey(items[safeHighlight < 0 ? 0 : (safeHighlight + 1) % items.length]));
               } else if (e.key === 'ArrowUp') {
                 if (!listOpen) return;
                 e.preventDefault();
-                setHighlightKey(itemKey(items[(safeHighlight - 1 + items.length) % items.length]));
+                setHighlightKey(itemKey(items[safeHighlight < 0 ? items.length - 1 : (safeHighlight - 1 + items.length) % items.length]));
               }
             }}
             placeholder="Search for anything"
@@ -443,7 +562,7 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
             aria-autocomplete="list"
             aria-expanded={listOpen}
             aria-controls={listOpen ? listboxId : undefined}
-            aria-activedescendant={listOpen ? optionId(items[safeHighlight]) : undefined}
+            aria-activedescendant={listOpen && safeHighlight >= 0 ? optionId(items[safeHighlight]) : undefined}
             // Suppress native browser autofill / password-manager / spellcheck
             // overlays — this is our own autocomplete, so a system dropdown on
             // top of it is just noise. type="text" (not "search") avoids the
@@ -522,7 +641,25 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
           )}
 
           <div role="listbox" id={listboxId} aria-label="Suggestions">
-          {channelHits.length > 0 && (
+          {modifierMode && (
+            <div role="group" aria-label={MODIFIER_TITLE[active!.key]}>
+              <SectionHeader>{MODIFIER_TITLE[active!.key]}</SectionHeader>
+              {modifierOptions.map((option) => {
+                const flatIndex = items.findIndex((it) => it.kind === 'modifier' && it.option === option);
+                return (
+                  <ModifierRow
+                    key={option.id}
+                    id={optionId(items[flatIndex])}
+                    option={option}
+                    highlighted={flatIndex === safeHighlight}
+                    onHover={() => setHighlightKey(`modifier:${option.key}:${option.id}`)}
+                    onSelect={() => activate(flatIndex)}
+                  />
+                );
+              })}
+            </div>
+          )}
+          {!modifierMode && channelHits.length > 0 && (
             <div role="group" aria-label="Channels">
               <SectionHeader>Channels</SectionHeader>
               {channelHits.map((hit) => {
@@ -544,7 +681,7 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
             </div>
           )}
 
-          {userHits.length > 0 && (
+          {!modifierMode && userHits.length > 0 && (
             <div role="group" aria-label="People">
               <SectionHeader>People</SectionHeader>
               {userHits.map((hit) => {
@@ -567,7 +704,7 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
             </div>
           )}
 
-          {groupHits.length > 0 && (
+          {!modifierMode && groupHits.length > 0 && (
             <div role="group" aria-label="Group messages">
               <SectionHeader>Group messages</SectionHeader>
               {groupHits.map((conversation) => {
@@ -590,7 +727,7 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
 
           {/* While the sheet shows message results, they are their own section
               (below) and this group of "search for…" actions steps aside. */}
-          {!showMessageResults && (
+          {!showMessageResults && !modifierMode && (
             <div role="group" aria-label="Messages">
               {(channelHits.length > 0 || userHits.length > 0 || groupHits.length > 0) && <SectionHeader>Messages</SectionHeader>}
               {suggestions.map((s) => {
@@ -657,41 +794,7 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
           </div>
         </div>
       )}
-      {showMessageResults && submitted && (
-        <section aria-label="Messages" className="mt-2" data-testid="sheet-message-section">
-          <SectionHeader>Messages</SectionHeader>
-          {/* A tap on a result that opens it (a link) closes the sheet behind
-              it; a tap anywhere else — a placeholder, the empty state, a
-              result that can't open — leaves it up. */}
-          <div
-            className="space-y-2 pt-1"
-            onClick={(e) => {
-              if ((e.target as Element).closest('a[href]')) onDone?.();
-            }}
-            data-testid="sheet-message-results"
-          >
-            {messagesQuery.isLoading
-              ? [0, 1, 2].map((i) => <Skeleton key={i} className="h-16 w-full" />)
-              : messageHits.length === 0
-                ? (
-                  <p className="px-3 py-6 text-center text-sm text-muted-foreground" data-testid="sheet-message-empty">
-                    No messages match “{submitted.q}”.
-                  </p>
-                )
-                : messageHits.map((h) => <MessageHitCard key={h.id} hit={h} />)}
-          </div>
-          {messageHits.length > 0 && (
-            <Link
-              to={searchPageHref(submitted.q, submitted.scope)}
-              onClick={() => onDone?.()}
-              className="flex min-h-11 items-center justify-center text-sm font-medium text-muted-foreground hover:text-foreground"
-              data-testid="sheet-all-results"
-            >
-              All results
-            </Link>
-          )}
-        </section>
-      )}
+      {showMessageResults && submitted && <SheetMessageResults submitted={submitted} onDone={onDone} />}
       {(showRecent || showRecentDropdown) && (
         <div
           data-testid="recent-searches"
@@ -702,6 +805,34 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
           }
         >
           <div {...(sheet ? {} : { role: 'listbox', id: listboxId, 'aria-label': 'Recent' })}>
+            <div role="group" aria-label="Search options">
+              <SectionHeader>Search options</SectionHeader>
+              {MODIFIER_HINTS.map((hint) => {
+                const idx = items.findIndex((it) => it.kind === 'modifier-hint' && it.key === hint.key);
+                // The sheet's rows aren't in the keyboard list (-1): never lit.
+                const highlighted = idx >= 0 && idx === safeHighlight;
+                return (
+                  <button
+                    key={hint.key}
+                    // The bar's rows are options of its listbox; the sheet's
+                    // are plain buttons, like its recent rows.
+                    {...(sheet
+                      ? {}
+                      : { id: optionId(items[idx]), role: 'option', tabIndex: -1, 'aria-selected': highlighted })}
+                    type="button"
+                    // Keeps the field focused, so typing goes on.
+                    onMouseDown={(e) => e.preventDefault()}
+                    onMouseEnter={() => setHighlightKey(`modifier-hint:${hint.key}`)}
+                    onClick={() => edit(`${hint.key}:`)}
+                    data-testid={`search-option-${hint.key}`}
+                    className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm mobile:min-h-11 mobile:text-base ${highlighted ? 'bg-muted' : ''}`}
+                  >
+                    <code className="rounded bg-muted px-1 font-mono text-xs text-foreground">{hint.example}</code>
+                    <span className="text-muted-foreground">{hint.description}</span>
+                  </button>
+                );
+              })}
+            </div>
             {opened.length > 0 && (
               <RecentSection title="Recently opened" onClear={clearRecentOpened} clearTestID="recent-opened-clear" sheet={sheet}>
                 {opened.map((entry) => {
@@ -782,6 +913,107 @@ function searchPageHref(q: string, scope?: SearchScope): string {
     params.set('type', scope.scopeKind === 'channel' ? 'messages' : 'dms');
   }
   return `/search?${params.toString()}`;
+}
+
+// SheetMessageResults is the sheet's message search, run in place: the
+// search as typed, its from:/in: modifiers read like the search page reads
+// them. Mounted only once a search runs, so the bar never loads the people
+// and chats those modifiers resolve against.
+function SheetMessageResults({ submitted, onDone }: { submitted: { q: string; scope?: SearchScope }; onDone?: () => void }) {
+  const search = useSearchModifiers(submitted.q);
+  const messagesQuery = useSearchMessages(
+    search.text,
+    !search.pending && !search.unmatched,
+    20,
+    { in: submitted.scope?.parentId ?? search.inID, from: search.fromID, after: search.after, before: search.before },
+  );
+  const messageHits = messagesQuery.data?.hits ?? [];
+  return (
+    <section aria-label="Messages" className="mt-2" data-testid="sheet-message-section">
+      <SectionHeader>Messages</SectionHeader>
+      {/* A tap on a result that opens it (a link) closes the sheet behind
+          it; a tap anywhere else — a placeholder, the empty state, a
+          result that can't open — leaves it up. */}
+      <div
+        className="space-y-2 pt-1"
+        onClick={(e) => {
+          if ((e.target as Element).closest('a[href]')) onDone?.();
+        }}
+        data-testid="sheet-message-results"
+      >
+        {search.unmatched ? (
+          <p className="px-3 py-6 text-center text-sm text-muted-foreground" data-testid="sheet-unmatched-modifier">
+            {unmatchedNote(search.unmatched)}
+          </p>
+        ) : messagesQuery.isLoading || search.pending ? (
+          [0, 1, 2].map((i) => <Skeleton key={i} className="h-16 w-full" />)
+        ) : messageHits.length === 0 ? (
+          <p className="px-3 py-6 text-center text-sm text-muted-foreground" data-testid="sheet-message-empty">
+            No messages match “{submitted.q}”.
+          </p>
+        ) : (
+          messageHits.map((h) => <MessageHitCard key={h.id} hit={h} />)
+        )}
+      </div>
+      {messageHits.length > 0 && (
+        <Link
+          to={searchPageHref(submitted.q, submitted.scope)}
+          onClick={() => onDone?.()}
+          className="flex min-h-11 items-center justify-center text-sm font-medium text-muted-foreground hover:text-foreground"
+          data-testid="sheet-all-results"
+        >
+          All results
+        </Link>
+      )}
+    </section>
+  );
+}
+
+// ModifierRow is one person (from:) or chat (in:) the modifier being typed
+// can name; picking it completes the word in the field.
+function ModifierRow({
+  id,
+  option,
+  highlighted,
+  onHover,
+  onSelect,
+}: {
+  id?: string;
+  option: ModifierOption;
+  highlighted: boolean;
+  onHover: () => void;
+  onSelect: () => void;
+}) {
+  const icon =
+    option.key === 'on' || option.key === 'before' || option.key === 'after' ? (
+      <CalendarDays className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+    ) : option.key === 'from' ? (
+      <UserRound className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+    ) : option.place === 'channel' ? (
+      <ChannelIcon type={option.channelType === 'private' ? 'private' : 'public'} className="h-4 w-4 shrink-0 text-muted-foreground" ariaLabel="" />
+    ) : (
+      <Users className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+    );
+  return (
+    <button
+      id={id}
+      type="button"
+      role="option"
+      tabIndex={-1}
+      aria-selected={highlighted}
+      // Keeps the field focused, so typing goes on after the pick.
+      onMouseDown={(e) => e.preventDefault()}
+      onMouseEnter={onHover}
+      onClick={onSelect}
+      data-testid="search-modifier-option"
+      className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm mobile:py-3 mobile:text-base ${highlighted ? 'bg-muted' : ''}`}
+    >
+      {icon}
+      <span className="truncate font-medium">{option.label}</span>
+      {option.detail && <span className="truncate text-muted-foreground">{option.detail}</span>}
+      {highlighted && <kbd className="ml-auto rounded border bg-muted px-1.5 py-0.5 text-xs mobile:hidden">Tab</kbd>}
+    </button>
+  );
 }
 
 // A titled block of the recent list with its own Clear. In the bar it is an
@@ -916,7 +1148,7 @@ function GroupRow({
   onHover,
   onSelect,
 }: {
-  id: string;
+  id?: string;
   conversation: UserConversation;
   highlighted: boolean;
   onHover: () => void;
@@ -950,7 +1182,7 @@ function ChannelRow({
   onHover,
   onSelect,
 }: {
-  id: string;
+  id?: string;
   hit: SearchHit;
   joined: boolean;
   highlighted: boolean;
@@ -997,7 +1229,7 @@ function UserRow({
   onHover,
   onSelect,
 }: {
-  id: string;
+  id?: string;
   hit: SearchHit;
   avatarURL?: string;
   userStatus?: UserStatus | null;

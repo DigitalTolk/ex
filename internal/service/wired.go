@@ -29,6 +29,7 @@ func (s *UserService) Wired() error {
 		wiring.Dep{Name: "audience invalidator", Set: s.audience != nil},
 		wiring.Dep{Name: "reminder canceller", Set: s.reminders != nil},
 		wiring.Dep{Name: "user-group membership", Set: s.userGroups != nil},
+		wiring.Dep{Name: "people ranking", Set: s.people != nil},
 	)
 }
 
@@ -74,6 +75,7 @@ func (s *MessageService) Wired() error {
 		wiring.Dep{Name: "activity recorder", Set: s.activity != nil},
 		wiring.Dep{Name: "reminder sync", Set: s.reminders != nil},
 		wiring.Dep{Name: "user groups", Set: s.userGroups != nil},
+		wiring.Dep{Name: "people frequency", Set: s.people != nil},
 	))
 }
 

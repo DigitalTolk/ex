@@ -64,6 +64,33 @@ describe('userMentionSource', () => {
     expect(all.detail).toBe('Notify everyone in this channel');
   });
 
+  it('in a DM, heads the participants "In this conversation" and the rest "Not in this conversation"', () => {
+    const dm: MentionProviders = { ...providers, memberIds: () => new Set(['u2']), memberScope: () => 'conversation' };
+    const res = userMentionSource(dm)(ctxFor('@')) as CompletionResult;
+    const sections = res.options.map((o) => [o.label, typeof o.section === 'string' ? o.section : o.section?.name]);
+    expect(sections).toEqual([['Bob', 'In this conversation'], ['Alice', 'Not in this conversation']]);
+  });
+
+  it('in a thread reply, lists its writers "In this thread" first', () => {
+    const thread: MentionProviders = { ...providers, memberIds: () => new Set(['u1', 'u2']), threadIds: () => new Set(['u2']) };
+    const res = userMentionSource(thread)(ctxFor('@')) as CompletionResult;
+    const sections = res.options.map((o) => [o.label, typeof o.section === 'string' ? o.section : o.section?.name]);
+    expect(sections).toEqual([['Bob', 'In this thread'], ['Alice', 'Channel members']]);
+  });
+
+  it('keeps one flat list for a thread nobody has written in yet', () => {
+    const empty: MentionProviders = { ...providers, threadIds: () => new Set() };
+    const res = userMentionSource(empty)(ctxFor('@')) as CompletionResult;
+    expect(res.options.every((o) => o.section === undefined)).toBe(true);
+  });
+
+  it('orders by the writer\'s people ranking ahead of presence', () => {
+    const ranked: MentionProviders = { ...providers, frequent: () => new Map([['u2', 0]]) };
+    const res = userMentionSource(ranked)(ctxFor('@')) as CompletionResult;
+    // Alice is online, but Bob is the one this writer talks to most.
+    expect(res.options.map((o) => o.label)).toEqual(['Bob', 'Alice']);
+  });
+
   it('opens on a bare @ (empty query → full roster)', () => {
     const res = userMentionSource(providers)(ctxFor('@')) as CompletionResult;
     expect(res.options.map((o) => o.label)).toEqual(['Alice', 'Bob']);

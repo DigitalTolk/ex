@@ -21,6 +21,7 @@ export const queryKeys = {
   workbenchStatus: () => ['runner-tokens', 'workbench'] as const,
   emojis: () => ['emojis'] as const,
   frequentEmojis: () => ['emojis', 'frequent'] as const,
+  frequentPeople: () => ['users', 'frequent-people'] as const,
   sidebarCategories: () => ['sidebarCategories'] as const,
 
   // Channels

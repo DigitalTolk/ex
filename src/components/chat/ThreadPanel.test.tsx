@@ -17,9 +17,9 @@ vi.mock('@/lib/api', () => ({
 }));
 
 const mockReplyMutate = vi.fn();
-const mockEditMutate = vi.fn();
+const mockEditMutate = vi.fn(() => Promise.resolve({}));
 vi.mock('@/hooks/useMessages', () => ({
-  useEditMessage: () => ({ mutate: mockEditMutate, isPending: false }),
+  useEditMessage: () => ({ mutateAsync: mockEditMutate, isPending: false }),
   useDeleteMessage: () => ({ mutate: vi.fn(), isPending: false }),
   useToggleReaction: () => ({ mutate: vi.fn(), isPending: false }),
   useSetPinned: () => ({ mutate: vi.fn(), isPending: false }),
@@ -554,9 +554,11 @@ describe('ThreadPanel', () => {
         messageId: 'r-1',
         body: 'hello in thread',
         channelId: 'ch-1',
+        attachmentIDs: [],
       }),
-      expect.objectContaining({ onSuccess: expect.any(Function) }),
     );
+    // Saved: the composer goes back to replying.
+    await waitFor(() => expect(lastMessageInputProps.current?.submitLabel).toBeUndefined());
   });
 
   describe('thread typing indicator', () => {

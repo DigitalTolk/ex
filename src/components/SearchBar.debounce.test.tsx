@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { SearchBar } from './SearchBar';
 
 // Unlike the main SearchBar suite, this file uses the REAL useDebouncedValue
@@ -53,11 +54,15 @@ function LocationProbe() {
 }
 
 function renderBar() {
+  // The app always has a query client; the bar's own roster query (from:
+  // suggestions) needs one.
   return render(
-    <MemoryRouter initialEntries={['/']}>
-      <SearchBar />
-      <LocationProbe />
-    </MemoryRouter>,
+    <QueryClientProvider client={new QueryClient()}>
+      <MemoryRouter initialEntries={['/']}>
+        <SearchBar />
+        <LocationProbe />
+      </MemoryRouter>
+    </QueryClientProvider>,
   );
 }
 

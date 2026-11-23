@@ -3,10 +3,12 @@ import { useNavigate } from 'react-router-dom';
 import { keepPreviousData, useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
+import { conversationQuery } from '@/lib/conversation-query';
+import { allUsersQuery } from '@/lib/people-query';
 import { wsLiveQueryOptions } from '@/lib/query-client';
 import { showToast } from '@/lib/toast';
 import { withoutDeactivated } from '@/lib/deactivated';
-import type { UserConversation, Conversation, User, UserStatus } from '@/types';
+import type { UserConversation, Conversation, UserStatus } from '@/types';
 
 // select narrows what the caller subscribes to (see useUserChannels).
 export function useUserConversations<T = UserConversation[]>(options?: {
@@ -26,13 +28,7 @@ export function useUserConversations<T = UserConversation[]>(options?: {
 }
 
 export function useConversation(conversationId: string | undefined) {
-  return useQuery({
-    queryKey: queryKeys.conversation(conversationId ?? ''),
-    // Coerce a 204/empty body to null — a queryFn must never resolve undefined.
-    queryFn: async () =>
-      (await apiFetch<Conversation>(`/api/v1/conversations/${conversationId}`)) ?? null,
-    enabled: !!conversationId,
-  });
+  return useQuery(conversationQuery(conversationId));
 }
 
 // useOpenDM is THE shared "message this person" affordance — the SearchBar
@@ -114,12 +110,5 @@ type LookupUser = { id: string; email: string; displayName: string; avatarURL?: 
 // rarely (joins/leaves, profile edits); a 5-minute stale time keeps
 // it fresh enough for the UX without thrashing the network.
 export function useAllUsers() {
-  return useQuery({
-    queryKey: queryKeys.allUsers(),
-    queryFn: async () => {
-      const res = await apiFetch<User[]>('/api/v1/users?all=true');
-      return Array.isArray(res) ? res : [];
-    },
-    staleTime: 5 * 60 * 1000,
-  });
+  return useQuery(allUsersQuery());
 }

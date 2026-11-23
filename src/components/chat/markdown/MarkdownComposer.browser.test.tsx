@@ -2,8 +2,10 @@ import { describe, it, expect, vi } from 'vitest';
 import { render } from 'vitest-browser-react';
 import { Profiler, createRef } from 'react';
 import { userEvent } from 'vitest/browser';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MarkdownComposer, type WysiwygEditorHandle } from './MarkdownComposer';
 import { usePresenceStore } from '@/stores/presence';
+import { apiFetch } from '@/lib/api';
 
 // Browser coverage for the production composer wiring: MarkdownComposer's
 // completion-provider thunks (users/online/memberIds/channels/customEmojis/
@@ -71,6 +73,18 @@ vi.mock('@/hooks/useUserGroups', async (importOriginal) => ({
   }),
 }));
 
+// What the composer asks the server itself: the writer's people ranking, and
+// a DM's participants (the DM view has those cached; here the composer loads
+// them).
+vi.mock('@/lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api')>()),
+  apiFetch: vi.fn(async (url: string) => {
+    if (url.startsWith('/api/v1/users/me/frequent-people')) return ['u-2'];
+    if (url === '/api/v1/conversations/d-1') return { id: 'd-1', participantIDs: ['u-me', 'u-2'] };
+    return undefined;
+  }),
+}));
+
 vi.mock('@/context/AuthContext', () => ({
   useOptionalAuth: () => ({
     user: { id: 'u-me', email: 'me@x.test', displayName: 'Me', emojiSkinTone: 'medium' },
@@ -82,9 +96,14 @@ function tooltip(): HTMLElement | null {
   return document.body.querySelector('.cm-tooltip-autocomplete');
 }
 
+function withQueries(node: React.ReactNode) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return <QueryClientProvider client={qc}>{node}</QueryClientProvider>;
+}
+
 async function mountComposer(props: Partial<React.ComponentProps<typeof MarkdownComposer>> = {}) {
   const ref = createRef<WysiwygEditorHandle>();
-  const screen = await render(<MarkdownComposer ref={ref} ariaLabel="Composer" {...props} />);
+  const screen = await render(withQueries(<MarkdownComposer ref={ref} ariaLabel="Composer" {...props} />));
   await new Promise((r) => requestAnimationFrame(() => r(undefined)));
   return { ref, screen };
 }
@@ -106,14 +125,55 @@ describe('MarkdownComposer provider wiring (browser)', () => {
     await screen.unmount();
   });
 
+  it('in a DM, lists its participants first, each part ordered by who the writer talks to most', async () => {
+    usePresenceStore.setState({ online: new Set(['u-1']) });
+    const { screen } = await mountComposer({ mentionConversationId: 'd-1' });
+    await userEvent.click(screen.getByLabelText('Composer'));
+    await userEvent.keyboard('@a');
+    await vi.waitFor(() => expect(tooltip()?.textContent).toContain('In this conversation'));
+    const rows = Array.from(tooltip()!.querySelectorAll('li')).map((li) => li.textContent ?? '');
+    // Alan (u-2) is in the DM; Alice is online but isn't.
+    expect(rows.findIndex((r) => r.includes('Alan Border'))).toBeLessThan(rows.findIndex((r) => r.includes('Alice Wonder')));
+    expect(tooltip()!.textContent).toContain('Not in this conversation');
+    await screen.unmount();
+  });
+
+  it('in a thread reply, lists the thread\'s writers first', async () => {
+    const { screen } = await mountComposer({ mentionChannelId: 'c-1', mentionThreadIds: ['u-2'] });
+    await userEvent.click(screen.getByLabelText('Composer'));
+    await userEvent.keyboard('@a');
+    await vi.waitFor(() => expect(tooltip()?.textContent).toContain('In this thread'));
+    const text = tooltip()!.textContent ?? '';
+    expect(text.indexOf('Alan Border')).toBeLessThan(text.indexOf('Alice Wonder'));
+    expect(text).toContain('Channel members');
+    await screen.unmount();
+  });
+
+  it('ranks the people the writer mentions and messages most first in a flat list', async () => {
+    usePresenceStore.setState({ online: new Set(['u-1']) });
+    const { screen } = await mountComposer();
+    await userEvent.click(screen.getByLabelText('Composer'));
+    // Wait for the ranking to land, then open the list.
+    await vi.waitFor(() => expect(vi.mocked(apiFetch)).toHaveBeenCalledWith(expect.stringContaining('/frequent-people')));
+    await userEvent.keyboard('@a');
+    await vi.waitFor(() => expect(tooltip()?.textContent).toContain('Alan Border'));
+    const text = tooltip()!.textContent ?? '';
+    expect(text.indexOf('Alan Border')).toBeLessThan(text.indexOf('Alice Wonder'));
+    await screen.unmount();
+  });
+
   it('reads presence when the @-list opens instead of re-rendering for every presence change', async () => {
     const commits = { count: 0 };
     const screen = await render(
-      <Profiler id="composer" onRender={() => { commits.count++; }}>
-        <MarkdownComposer ariaLabel="Composer" />
-      </Profiler>,
+      withQueries(
+        <Profiler id="composer" onRender={() => { commits.count++; }}>
+          <MarkdownComposer ariaLabel="Composer" />
+        </Profiler>,
+      ),
     );
-    await new Promise((r) => requestAnimationFrame(() => r(undefined)));
+    // The people ranking lands once; after that nothing re-renders it.
+    await vi.waitFor(() => expect(vi.mocked(apiFetch)).toHaveBeenCalledWith(expect.stringContaining('/frequent-people')));
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(undefined))));
     const settled = commits.count;
     usePresenceStore.getState().setUserOnline('u-2', true);
     usePresenceStore.getState().setUserOnline('u-elsewhere', true);

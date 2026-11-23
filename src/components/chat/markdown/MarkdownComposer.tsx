@@ -1,5 +1,8 @@
 import { forwardRef, memo, useCallback, useMemo } from 'react';
 import { useAllUsers } from '@/hooks/useConversations';
+import { useQuery } from '@tanstack/react-query';
+import { conversationQuery } from '@/lib/conversation-query';
+import { useFrequentPeople } from '@/hooks/useFrequentPeople';
 import { useChannelMembers, useUserChannels } from '@/hooks/useChannels';
 import { usePresenceStore } from '@/stores/presence';
 import { useEmojis, useEmojiMap } from '@/hooks/useEmoji';
@@ -8,6 +11,7 @@ import { activeStatus } from '@/lib/user-status';
 import type { EmojiSkinTone } from '@/lib/emoji-shortcodes';
 import { MarkdownEditor, type WysiwygEditorHandle, type ActiveFormat } from './MarkdownEditor';
 import type { CompletionProviders } from './extensions/completions';
+import type { MemberScope } from './extensions/mentionAutocomplete';
 import type { SlashCommand } from './extensions/slashCommands';
 import { useConnectors } from '@/hooks/useConnectors';
 import { useSkills } from '@/hooks/useAgents';
@@ -34,9 +38,13 @@ interface Props {
   onArrowUpEmpty?: () => boolean;
   // The link shortcut opens the composer's link dialog.
   onLinkShortcut?: () => void;
-  // Channel the composer targets (when it's a channel). Enables the @-mention
-  // member / special / not-in-channel partitioning. Omitted for DMs and edits.
+  // The chat the composer writes in, whose people the @-list puts first: a
+  // channel (its members) or a DM (its participants). Edits pass neither and
+  // get one flat list.
   mentionChannelId?: string;
+  mentionConversationId?: string;
+  // A thread reply box: who has written in the thread, ahead of the members.
+  mentionThreadIds?: string[];
   // Server-defined slash commands for the "/" popup. Only the main chat
   // composer passes this; edit boxes and thread reply boxes omit it (no popup).
   slashCommands?: () => SlashCommand[];
@@ -57,11 +65,13 @@ const selectMentionChannels = (rows: UserChannel[]): MentionChannel[] =>
 // Memoized: the composer around it re-renders on every keystroke, and its
 // props are stable, so the editor and its autocomplete data stay put.
 export const MarkdownComposer = memo(forwardRef<WysiwygEditorHandle, Props>(function MarkdownComposer(
-  { mentionChannelId, slashCommands, ...editorProps },
+  { mentionChannelId, mentionConversationId, mentionThreadIds, slashCommands, ...editorProps },
   ref,
 ) {
   const { data: users = [] } = useAllUsers();
   const { data: memberRows } = useChannelMembers(mentionChannelId);
+  // The DM view has this loaded already: the same query, no new request.
+  const { data: conversation } = useQuery(conversationQuery(mentionConversationId));
   // Only what the ~channel typeahead shows: an unread change on any channel
   // rewrites the full rows, which re-rendered the composer for every message
   // arriving anywhere.
@@ -108,12 +118,17 @@ export const MarkdownComposer = memo(forwardRef<WysiwygEditorHandle, Props>(func
     [allUserGroups],
   );
 
-  // Partition the @-mention list by channel membership only when we actually
-  // know the roster — otherwise a mid-load empty set would mislabel everyone.
-  const memberIds = useMemo<Set<string> | null>(
-    () => (mentionChannelId && memberRows ? new Set(memberRows.map((m) => m.userID)) : null),
-    [mentionChannelId, memberRows],
-  );
+  // Partition the @-mention list by the chat's people only when we actually
+  // know them, or a mid-load empty set would mislabel everyone.
+  const memberIds = useMemo<Set<string> | null>(() => {
+    if (mentionChannelId) return memberRows ? new Set(memberRows.map((m) => m.userID)) : null;
+    if (mentionConversationId) return conversation?.participantIDs ? new Set(conversation.participantIDs) : null;
+    return null;
+  }, [mentionChannelId, memberRows, mentionConversationId, conversation]);
+  const memberScope: MemberScope = mentionChannelId ? 'channel' : 'conversation';
+  const threadIds = useMemo(() => (mentionThreadIds ? new Set(mentionThreadIds) : null), [mentionThreadIds]);
+  // Who the writer mentions and messages most comes first in each section.
+  const frequent = useFrequentPeople(!!auth?.user);
 
   const completionProviders = useMemo<CompletionProviders>(
     () => ({
@@ -130,6 +145,9 @@ export const MarkdownComposer = memo(forwardRef<WysiwygEditorHandle, Props>(func
       // anywhere used to re-render every open composer.
       online: () => usePresenceStore.getState().online,
       memberIds: () => memberIds,
+      memberScope: () => memberScope,
+      threadIds: () => threadIds,
+      frequent: () => frequent,
       channels: () => channels,
       userGroups: () => mentionUserGroups,
       customEmojis: () => customEmojis,
@@ -142,6 +160,9 @@ export const MarkdownComposer = memo(forwardRef<WysiwygEditorHandle, Props>(func
     [
       users,
       memberIds,
+      memberScope,
+      threadIds,
+      frequent,
       channels,
       mentionUserGroups,
       customEmojis,

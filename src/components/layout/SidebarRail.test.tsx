@@ -274,6 +274,21 @@ describe('SidebarRail', () => {
     expect(onNavigate).toHaveBeenCalledTimes(2);
   });
 
+  it('the workspace mark goes home: ~general with the channel list, and tells the layout', async () => {
+    const onNavigate = vi.fn();
+    const { settled } = renderRail('/threads', onNavigate);
+    await settled();
+    fireEvent.click(bell());
+    expect(useSidebarModeStore.getState().mode).toBe('activity');
+
+    const home = screen.getByRole('link', { name: 'Go to ~general' });
+    expect(within(home).getByTestId('sidebar-rail-logo')).toBeInTheDocument();
+    fireEvent.click(home);
+    expect(screen.getByTestId('where')).toHaveTextContent('/channel/general');
+    expect(useSidebarModeStore.getState().mode).toBe('home');
+    expect(onNavigate).toHaveBeenCalledTimes(1);
+  });
+
   it('opens its pages just the same with no layout listening', async () => {
     const { settled } = renderRail('/channel/general');
     await settled();
@@ -282,6 +297,8 @@ describe('SidebarRail', () => {
     expect(stop('directory')).toHaveAttribute('aria-current', 'page');
     fireEvent.click(stop('drafts'));
     expect(screen.getByTestId('where')).toHaveTextContent('/drafts');
+    fireEvent.click(screen.getByTestId('sidebar-rail-home'));
+    expect(screen.getByTestId('where')).toHaveTextContent('/channel/general');
   });
 
   it('previews the latest activity while the mouse rests on the bell, and closes it when the mouse leaves', async () => {

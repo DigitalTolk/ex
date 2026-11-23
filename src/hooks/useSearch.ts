@@ -25,6 +25,10 @@ export interface SearchResult {
 export interface MessageQueryOpts {
   from?: string;
   in?: string;
+  // Instants (ISO): messages from `after` on and before `before` — the date
+  // modifiers' days, already in the reader's own timezone.
+  after?: string;
+  before?: string;
   sort?: '' | 'newest' | 'oldest';
 }
 
@@ -34,6 +38,8 @@ function buildURL(index: string, q: string, limit: number, opts?: MessageQueryOp
   const params = new URLSearchParams({ q, limit: String(limit) });
   if (opts?.from) params.set('from', opts.from);
   if (opts?.in) params.set('in', opts.in);
+  if (opts?.after) params.set('after', opts.after);
+  if (opts?.before) params.set('before', opts.before);
   if (opts?.sort) params.set('sort', opts.sort);
   return `/api/v1/search/${index}?${params.toString()}`;
 }
@@ -49,10 +55,10 @@ function useSearchQuery(
   nonce?: number,
 ): UseQueryResult<SearchResult> {
   const trimmed = q.trim();
-  // Empty `q` is allowed when the caller has set a `from` or `in`
-  // filter — "all messages by user X" needs no text. The backend
-  // enforces RBAC and short-circuits if both are missing.
-  const filterOnly = !!(opts?.from || opts?.in);
+  // Empty `q` is allowed when the caller has set a filter — "all messages
+  // by user X", "everything from yesterday" need no text. The backend
+  // enforces RBAC and short-circuits without one.
+  const filterOnly = !!(opts?.from || opts?.in || opts?.after || opts?.before);
   return useQuery({
     queryKey: queryKeys.search(index, trimmed, limit, opts ?? {}, nonce ?? 0),
     // The signal cancels a search the next keystroke overtook, so a slow

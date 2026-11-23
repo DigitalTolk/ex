@@ -110,7 +110,7 @@ export function ConversationView() {
     draft,
     draftAttachments,
     editing: { setEditingMessage, activeEditingMessage, editDraftAttachments, editReady },
-    editMessage,
+    editSaving,
     handleDraftChange,
     handleSendMessage,
     handleEditMessage,
@@ -380,7 +380,7 @@ export function ConversationView() {
               onSchedule={schedule.onSchedule}
               scheduledCount={schedule.scheduledCount}
               onCancel={activeEditingMessage ? () => setEditingMessage(null) : undefined}
-              disabled={!!activeEditingMessage && editMessage.isPending}
+              disabled={!!activeEditingMessage && editSaving}
               placeholder={activeEditingMessage ? 'Edit message...' : `Write to ${title}`}
               focusKey={activeEditingMessage ? `edit-${activeEditingMessage.id}` : id}
               initialBody={activeEditingMessage?.body ?? draft?.body ?? ''}

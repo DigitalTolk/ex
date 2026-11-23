@@ -97,6 +97,16 @@ describe('useSearch', () => {
     expect(apiFetchMock).toHaveBeenCalled();
   });
 
+  it('useSearchMessages sends the date bounds, and a date alone is a search', async () => {
+    apiFetchMock.mockResolvedValue({ total: 0, hits: [] });
+    await renderProbe(() =>
+      useSearchMessages('', true, 8, { after: '2026-11-19T23:00:00.000Z', before: '2026-11-20T23:00:00.000Z' }),
+    );
+    await new Promise((r) => setTimeout(r, 200));
+    const url = new URL(apiFetchMock.mock.calls[0][0] as string, 'http://x');
+    expect([url.searchParams.get('after'), url.searchParams.get('before')]).toEqual(['2026-11-19T23:00:00.000Z', '2026-11-20T23:00:00.000Z']);
+  });
+
   it('useSearchMessages does not fire when q is short and no filter is set', async () => {
     apiFetchMock.mockResolvedValue({ total: 0, hits: [] });
     await renderProbe(() => useSearchMessages('a', true));

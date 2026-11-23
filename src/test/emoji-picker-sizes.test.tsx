@@ -48,14 +48,13 @@ describe('EmojiPicker — readable sizes', () => {
     expect(standardLabel.className).not.toContain('text-[10px]');
 
     const tile = (await screen.findAllByTestId('emoji-picker-tile'))[0];
-    // Tile is 32px (h-8 w-8), keeping the grid dense while fitting a large glyph.
-    expect(tile.className).toContain('h-8');
-    expect(tile.className).toContain('w-8');
+    // Tile is 40px (h-10 w-10), big enough to tell faces apart.
+    expect(tile.className).toContain('h-10');
+    expect(tile.className).toContain('w-10');
 
-    // Glyph inside should use text-[22px] (lg size — 2px less than text-2xl
-    // so the picker doesn't feel cluttered).
+    // Glyph inside uses the picker size, 28px.
     const glyph = tile.querySelector('span');
-    expect(glyph?.className).toContain('text-[22px]');
+    expect(glyph?.className).toContain('text-[28px]');
   });
 
   it('Search input is text-sm not text-xs', async () => {

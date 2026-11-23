@@ -154,6 +154,9 @@ type MessageService struct {
 	// userGroups turns typed "@handle"s into group mentions and resolves the
 	// groups a message mentions (SetUserGroups).
 	userGroups UserGroupMentions
+	// people ranks who each author mentions and messages, for the composer's
+	// @-list (SetPeopleFrequency).
+	people PeopleContactRecorder
 }
 
 // UserGroupMentions is what the message paths need from user groups
@@ -173,6 +176,47 @@ func (s *MessageService) canonicalizeUserGroups(ctx context.Context, authorID, b
 		return body
 	}
 	return s.userGroups.CanonicalizeMentions(ctx, authorID, body)
+}
+
+// PeopleContactRecorder adds one send's contacts to its author's people
+// ranking (the Redis cache): weight per person mentioned or messaged.
+type PeopleContactRecorder interface {
+	RecordPeopleContact(ctx context.Context, userID string, weights map[string]float64) error
+}
+
+// SetPeopleFrequency wires the people ranking a person's sends feed.
+func (s *MessageService) SetPeopleFrequency(p PeopleContactRecorder) { s.people = p }
+
+// What one send adds to its author's ranking of a person: naming them weighs
+// more than writing in a DM they're in.
+const (
+	mentionContactWeight = 1.0
+	dmContactWeight      = 0.5
+)
+
+// recordContacts feeds a person's send into their people ranking: everyone
+// it mentions by name, and the others in its DM. Only a person's own sends
+// count (never an agent's); best-effort, since it only orders a list.
+func (s *MessageService) recordContacts(ctx context.Context, msg *model.Message, conv *model.Conversation) {
+	if s.people == nil {
+		return
+	}
+	weights := map[string]float64{}
+	if conv != nil {
+		for _, id := range conv.ParticipantIDs {
+			if id != msg.AuthorID {
+				weights[id] += dmContactWeight
+			}
+		}
+	}
+	for _, m := range ParseMentions(msg.Body).Users {
+		if m.UserID != msg.AuthorID {
+			weights[m.UserID] += mentionContactWeight
+		}
+	}
+	if err := s.people.RecordPeopleContact(ctx, msg.AuthorID, weights); err != nil {
+		slog.WarnContext(ctx, "people ranking: record failed", "userID", msg.AuthorID, "error", err)
+	}
 }
 
 // DeactivatedAccounts reports which of userIDs are deactivated accounts
@@ -908,6 +952,10 @@ func (s *MessageService) sendRun(ctx context.Context, authorID, accessorID, pare
 	// from the same snapshot as the notification decision.)
 	if updatedThreadRoot != nil {
 		s.publishEvent(ctx, parentID, parentType, events.EventMessageEdited, updatedThreadRoot)
+	}
+
+	if authorID == accessorID {
+		s.recordContacts(ctx, msg, sendConv)
 	}
 
 	// Agent invocation is mention-gated (plan-v2 §5): a persisted message that
