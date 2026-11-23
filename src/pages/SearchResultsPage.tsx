@@ -29,6 +29,8 @@ import { UserStatusIndicator } from '@/components/UserStatusIndicator';
 import { formatLongDateTime } from '@/lib/format';
 import type { UserStatus } from '@/types';
 import { highlight } from '@/lib/highlight';
+import { resolveDay, unmatchedNote, withoutModifier } from '@/lib/search-modifiers';
+import { useSearchModifiers } from '@/hooks/useSearchModifiers';
 import { MessageHitCard } from '@/components/search/MessageHitCard';
 import { BucketPicker } from '@/components/search/BucketPicker';
 
@@ -46,13 +48,17 @@ const MOBILE_FILTER_CONTROL_CLASS = 'mobile:h-9 mobile:px-3 mobile:text-sm';
 // and external deep-links are first-class.
 export default function SearchResultsPage() {
   const [params, setParams] = useSearchParams();
-  const q = params.get('q') ?? '';
+  // What was typed, modifiers included ("datadog from:Günter in:~ops"); the
+  // modifiers become the From / In filters below, and the rest is searched.
+  const typed = params.get('q') ?? '';
+  const modifiers = useSearchModifiers(typed);
+  const q = modifiers.text;
   const tab = (params.get('type') as Tab) || 'all';
   const sort = (params.get('sort') as Sort) || '';
-  const from = params.get('from') ?? '';
-  const inParent = params.get('in') ?? '';
+  const from = params.get('from') || modifiers.fromID || '';
+  const inParent = params.get('in') || modifiers.inID || '';
 
-  useDocumentTitle(q ? `Search: ${q}` : 'Search');
+  useDocumentTitle(typed ? `Search: ${typed}` : 'Search');
 
   function updateParams(patch: Record<string, string | null>) {
     const next = new URLSearchParams(params);
@@ -68,8 +74,11 @@ export default function SearchResultsPage() {
   // only search ("all from user X", "all in ~channel"), gated by the
   // backend's empty-q check.
   const hasQuery = q.trim().length >= 2;
-  const hasFilter = !!(from || inParent);
-  const enabled = hasQuery || hasFilter;
+  const after = modifiers.after ?? '';
+  const before = modifiers.before ?? '';
+  const hasFilter = !!(from || inParent || after || before);
+  // A modifier still resolving, or naming no one, searches nothing yet.
+  const enabled = (hasQuery || hasFilter) && !modifiers.pending && !modifiers.unmatched;
   const wantUsers = hasQuery && (tab === 'all' || tab === 'people');
   const wantChannels = hasQuery && (tab === 'all' || tab === 'channels');
   const wantMessages = enabled && (tab === 'all' || tab === 'messages' || tab === 'dms');
@@ -77,8 +86,8 @@ export default function SearchResultsPage() {
 
   const users = useSearchUsers(q, wantUsers, 25);
   const channels = useSearchChannels(q, wantChannels, 25);
-  const messages = useSearchMessages(q, wantMessages, 50, { from, in: inParent, sort });
-  const files = useSearchFiles(q, wantFiles, 30, { from, in: inParent, sort });
+  const messages = useSearchMessages(q, wantMessages, 50, { from, in: inParent, after, before, sort });
+  const files = useSearchFiles(q, wantFiles, 30, { from, in: inParent, after, before, sort });
 
   const userHits = useMemo(() => users.data?.hits ?? [], [users.data]);
   const channelHits = useMemo(() => channels.data?.hits ?? [], [channels.data]);
@@ -101,7 +110,9 @@ export default function SearchResultsPage() {
   const stale = searches.some((s) => s.isPlaceholderData);
 
   const { data: fromUserList = [] } = useUsersBatch(from ? [from] : []);
-  const fromUser = fromUserList[0];
+  // The lookup keeps the last person while a new one loads (or once there
+  // is none): the chip names only the person filtered by now.
+  const fromUser = fromUserList.find((u) => u.id === from);
   // Resolve fresh avatars + custom status for the people hits (the search index
   // can't store presigned avatar URLs / live status), and presence for the dot —
   // same "status icon" the ⌘K dropdown shows.
@@ -118,10 +129,23 @@ export default function SearchResultsPage() {
     return conv?.displayName ?? '';
   }, [inParent, userChannels, userConversations]);
 
+  if (modifiers.unmatched) {
+    return (
+      <PageContainer title={`Search: ${typed}`}>
+        <p className="py-12 text-center text-muted-foreground" data-testid="search-unmatched-modifier">
+          {unmatchedNote(modifiers.unmatched)}
+          {!/^(on|before|after):/.test(modifiers.unmatched) && ' Check the name, or put one with spaces in quotes, like from:"Ada Lovelace".'}
+        </p>
+      </PageContainer>
+    );
+  }
+
   if (!enabled) {
     return (
       <PageContainer title="Search">
-        <p className="text-sm text-muted-foreground">Type a query in the top bar to search.</p>
+        <p className="text-sm text-muted-foreground">
+          {modifiers.pending ? 'Searching…' : 'Type a query in the top bar to search.'}
+        </p>
       </PageContainer>
     );
   }
@@ -133,7 +157,7 @@ export default function SearchResultsPage() {
   const parentBuckets = aggSource?.byParent ?? [];
 
   return (
-    <PageContainer title={`Search: ${q}`}>
+    <PageContainer title={`Search: ${typed}`}>
       <div
         role="tablist"
         className="-mx-2 flex gap-1 overflow-x-auto border-b px-2 pb-2 max-md:border-b-0 max-md:[scrollbar-width:none] max-md:[&::-webkit-scrollbar]:hidden md:flex-wrap md:pb-0"
@@ -183,7 +207,8 @@ export default function SearchResultsPage() {
         {fromUser ? (
           <FilterChip
             label={`From: ${fromUser.displayName}`}
-            onClear={() => updateParams({ from: null })}
+            // Typed as from:… it goes from the search too.
+            onClear={() => updateParams({ from: null, q: withoutModifier(typed, 'from') })}
           />
         ) : (
           <BucketPicker
@@ -193,10 +218,17 @@ export default function SearchResultsPage() {
             onPick={(id) => updateParams({ from: id })}
           />
         )}
+        {modifiers.dates.map((d) => (
+          <FilterChip
+            key={d.key}
+            label={`${DATE_CHIP[d.key]}: ${dayLabel(d.value)}`}
+            onClear={() => updateParams({ q: withoutModifier(typed, d.key) })}
+          />
+        ))}
         {inParentLabel ? (
           <FilterChip
             label={`In: ${inParentLabel}`}
-            onClear={() => updateParams({ in: null })}
+            onClear={() => updateParams({ in: null, q: withoutModifier(typed, 'in') })}
           />
         ) : (
           <BucketPicker
@@ -227,7 +259,7 @@ export default function SearchResultsPage() {
 
       {!isLoading && failed.length === 0 && totalHits === 0 && (
         <p className="py-12 text-center text-muted-foreground">
-          No results for <span className="font-semibold">{q}</span>.
+          No results for <span className="font-semibold">{typed}</span>.
         </p>
       )}
 
@@ -306,6 +338,20 @@ function Section({
       {children}
     </section>
   );
+}
+
+const DATE_CHIP = { on: 'On', before: 'Before', after: 'After' } as const;
+// One formatter for every chip ("Fri, Nov 20"); building one per call is slow.
+const DAY_FORMAT = new Intl.DateTimeFormat(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+
+// dayLabel names a date modifier's day as the reader would; today and
+// yesterday stay words.
+function dayLabel(value: string): string {
+  const v = value.toLowerCase();
+  if (v === 'today' || v === 'yesterday') return v[0].toUpperCase() + v.slice(1);
+  const day = resolveDay(value);
+  /* istanbul ignore next -- a chip only shows for a search whose dates all resolved (an invalid one shows the "Nothing matches" note instead); defensive */
+  return day ? DAY_FORMAT.format(day) : value;
 }
 
 function FilterChip({ label, onClear }: { label: string; onClear: () => void }) {

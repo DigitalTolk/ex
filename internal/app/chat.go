@@ -143,6 +143,8 @@ func (a *App) buildChat(ctx context.Context) error {
 	}
 	c.emoji.SetMediaURLCache(in.cache)
 	c.emoji.SetFrequencyStore(in.cache)
+	c.messages.SetPeopleFrequency(in.cache) // a person's sends rank who they work with
+	c.users.SetPeopleRanking(in.cache)      // ...which the composer's @-list reads
 	c.emoji.SetCatalogCache(in.cache)
 
 	// ------------------------------------------------------------- Presence

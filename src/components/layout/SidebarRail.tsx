@@ -6,6 +6,8 @@ import { useActivityUnread } from '@/hooks/useActivity';
 import { useDrafts } from '@/hooks/useDrafts';
 import { useUserState } from '@/hooks/useUserState';
 import { AI_HUB_HOME, isAiHubPath } from '@/lib/ai-hub';
+import { HOME_NAV_STATE } from '@/lib/home-nav';
+import { GENERAL_CHANNEL_SLUG } from '@/lib/roles';
 import { serverIconURL } from '@/lib/server-identity';
 import { useReactionFlash } from '@/stores/reaction-flash';
 import { setSidebarMode, useSidebarModeStore } from '@/stores/sidebar-mode';
@@ -194,7 +196,22 @@ export const SidebarRail = memo(function SidebarRail({ onNavigate }: { onNavigat
         className="flex h-12 w-full shrink-0 items-center justify-center [-webkit-app-region:drag]"
         data-rail-mark="true"
       >
-        <img src={serverIconURL()} alt="" width={32} height={32} className="h-8 w-8 rounded-lg" data-testid="sidebar-rail-logo" />
+        {/* The mark is the way home: ~general, with the channel list in the
+            sidebar and no panel open. Not draggable, or the desktop app
+            would swallow the click. */}
+        <Link
+          to={`/channel/${GENERAL_CHANNEL_SLUG}`}
+          state={HOME_NAV_STATE}
+          onClick={() => {
+            setSidebarMode('home');
+            onNavigate?.();
+          }}
+          aria-label={`Go to ~${GENERAL_CHANNEL_SLUG}`}
+          className="rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring [-webkit-app-region:no-drag]"
+          data-testid="sidebar-rail-home"
+        >
+          <img src={serverIconURL()} alt="" width={32} height={32} className="h-8 w-8 rounded-lg" data-testid="sidebar-rail-logo" />
+        </Link>
       </div>
       {/* Padding, not a margin, above the first stop: a scrolling box cuts
           off what leaves it, and the first stop's badge rises past its tile. */}

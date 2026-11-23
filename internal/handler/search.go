@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/DigitalTolk/ex/internal/apperr"
 	"github.com/DigitalTolk/ex/internal/middleware"
@@ -244,11 +245,21 @@ func (h *SearchHandler) searchOver(w http.ResponseWriter, r *http.Request, files
 		}
 		allowed = ids
 	}
+	// after/before are instants (RFC 3339): the client turns a day into its
+	// own timezone's start and end, so the server never guesses one.
+	after, okAfter := queryTime(r, "after")
+	before, okBefore := queryTime(r, "before")
+	if !okAfter || !okBefore {
+		writeError(w, http.StatusBadRequest, "invalid", "after and before must be RFC 3339 times")
+		return
+	}
 	opts := search.MessageQuery{
 		Q:                queryParam(r, "q", ""),
 		AllowedParentIDs: allowed,
 		FromUserID:       queryParam(r, "from", ""),
 		InParentID:       queryParam(r, "in", ""),
+		After:            after,
+		Before:           before,
 		Sort:             queryParam(r, "sort", ""),
 		Limit:            queryInt(r, "limit", 20),
 	}
@@ -266,6 +277,17 @@ func (h *SearchHandler) searchOver(w http.ResponseWriter, r *http.Request, files
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
+}
+
+// queryTime reads an optional RFC 3339 query parameter: the zero time when
+// absent, ok false when present but not a time.
+func queryTime(r *http.Request, key string) (time.Time, bool) {
+	v := queryParam(r, key, "")
+	if v == "" {
+		return time.Time{}, true
+	}
+	t, err := time.Parse(time.RFC3339Nano, v)
+	return t, err == nil
 }
 
 func emptyResults() *search.SearchResult {

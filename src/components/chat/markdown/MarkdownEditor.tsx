@@ -49,6 +49,8 @@ function setOverlayVisible(el: HTMLDivElement | null, visible: boolean) {
   if (el) el.style.display = visible ? '' : 'none';
 }
 
+const NO_RANKING: ReadonlyMap<string, number> = new Map();
+
 // Default sources when no completionProviders prop is supplied (isolated tests,
 // read-only previews): every source yields nothing, so no popup appears.
 const EMPTY_PROVIDERS: CompletionProviders = {
@@ -180,6 +182,9 @@ export const MarkdownEditor = forwardRef<WysiwygEditorHandle, Props>(function Ma
             users: () => (cbRef.current.completionProviders ?? EMPTY_PROVIDERS).users(),
             online: () => (cbRef.current.completionProviders ?? EMPTY_PROVIDERS).online(),
             memberIds: () => (cbRef.current.completionProviders ?? EMPTY_PROVIDERS).memberIds(),
+            memberScope: () => (cbRef.current.completionProviders ?? EMPTY_PROVIDERS).memberScope?.() ?? 'channel',
+            threadIds: () => (cbRef.current.completionProviders ?? EMPTY_PROVIDERS).threadIds?.() ?? null,
+            frequent: () => (cbRef.current.completionProviders ?? EMPTY_PROVIDERS).frequent?.() ?? NO_RANKING,
             channels: () => (cbRef.current.completionProviders ?? EMPTY_PROVIDERS).channels(),
             customEmojis: () => (cbRef.current.completionProviders ?? EMPTY_PROVIDERS).customEmojis(),
             skinTone: () => (cbRef.current.completionProviders ?? EMPTY_PROVIDERS).skinTone(),

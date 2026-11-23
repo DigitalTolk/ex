@@ -11,10 +11,11 @@ import { NonMemberInvitePrompt } from '@/components/chat/NonMemberInvitePrompt';
 import { useNonMemberInvite } from '@/hooks/useNonMemberInvite';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
-import { useEditMessage, useSendMessage, type SendMessageInput } from '@/hooks/useMessages';
+import { useSendMessage, type SendMessageInput } from '@/hooks/useMessages';
+import { useEditSave } from '@/hooks/useEditSave';
+import { useEditingMessage } from '@/hooks/useEditingMessage';
 import { useComposerSchedule } from '@/hooks/useScheduledMessages';
 import { useIsMobile } from '@/hooks/useIsMobile';
-import type { Message } from '@/types';
 import { useInView, useLiveInView } from '@/hooks/useInView';
 import { useMarkReadOnReturn } from '@/hooks/useMarkReadOnReturn';
 import {
@@ -33,6 +34,7 @@ import {
   useUnfollowThread,
   type ThreadSummary,
 } from '@/hooks/useThreads';
+import { useThreadParticipantIds } from '@/hooks/useThreadParticipantIds';
 import { MessageRowDataProvider } from '@/components/chat/MessageRowDataProvider';
 
 interface ThreadCardProps {
@@ -118,6 +120,7 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
     threadRootID: summary.threadRootID,
     enabled: inView,
   });
+  const threadParticipantIds = useThreadParticipantIds(messages);
 
 
   const root = messages?.[0];
@@ -164,16 +167,20 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
     parentType: channelId ? 'channel' : 'conversation',
     parentMessageID: summary.threadRootID,
   });
-  const editMessage = useEditMessage();
   const isMobile = useIsMobile();
-  // Desktop edits inline inside the MessageItem; mobile routes them to this
-  // card's bottom composer (an inline editor is cramped behind the keyboard),
-  // mirroring ThreadPanel. activeEditingMessage is only set on mobile.
-  const [editingMessage, setEditingMessage] = useState<Message | null>(null);
-  const activeEditingMessage = isMobile ? editingMessage : null;
   const { pendingInvites, channelSlug, checkMentions, clearInvites } = useNonMemberInvite(channelId, currentUserId);
   const parentID = channelId ?? conversationId;
   const parentType: 'channel' | 'conversation' = channelId ? 'channel' : 'conversation';
+  // Desktop edits inline inside the MessageItem; a phone routes them to this
+  // card's bottom composer (an inline editor is cramped behind the keyboard),
+  // with the message's files in it, as ThreadPanel does. activeEditingMessage
+  // is only set on a phone.
+  const { editingMessage, setEditingMessage, activeEditingMessage, editDraftAttachments, editReady } = useEditingMessage(
+    parentID,
+    parentType,
+  );
+  const closeEdit = useCallback(() => setEditingMessage(null), [setEditingMessage]);
+  const { saveEdit, saving: editSaving } = useEditSave({ channelId, conversationId }, closeEdit);
   const draftScope = useMemo(
     () => ({ parentID, parentType, parentMessageID: summary.threadRootID }),
     [parentID, parentType, summary.threadRootID],
@@ -217,24 +224,12 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
     [send, summary, checkMentions],
   );
 
-  // Mobile edit submit — the bottom composer doubles as the edit field while
-  // editingMessage is set (see activeEditingMessage). Desktop edits go through
-  // the MessageItem's own inline composer (which handles attachments); this card
-  // composer is BODY-ONLY, so it omits attachmentIDs to PRESERVE the message's
-  // existing attachments rather than stripping them (sending [] would delete).
-  // Not wrapped in useCallback — the React Compiler memoizes it, and a manual
-  // dep list here mismatches the compiler's inference (setEditingMessage).
+  // Save from the bottom composer while an edit is open (a phone): text and
+  // files, kept until the save lands (see useEditSave).
   const handleEditMessage = (value: SendMessageInput) => {
     /* istanbul ignore next -- only wired as onSend while editingMessage is set; defensive. */
     if (!editingMessage) return;
-    if (!value.body.trim() || value.body === editingMessage.body) {
-      setEditingMessage(null);
-      return;
-    }
-    editMessage.mutate(
-      { messageId: editingMessage.id, body: value.body, channelId, conversationId },
-      { onSuccess: () => setEditingMessage(null) },
-    );
+    return saveEdit(editingMessage, { body: value.body, attachmentIDs: value.attachmentIDs ?? [] });
   };
 
   return (
@@ -392,6 +387,9 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
         {/* Reply composer — sends with parentMessageID set so the post
             lands as a thread reply. Disabled while the previous reply is
             still in flight so a stuttering double-Enter can't double-post. */}
+        {activeEditingMessage && !editReady ? (
+          <div className="border-t p-3 text-sm text-muted-foreground">Loading message editor…</div>
+        ) : (
         <MessageInput
           // Re-mount when switching between reply and edit so the editor
           // re-initialises with the right body (initialBody is only "initial").
@@ -402,17 +400,19 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
           scheduledCount={schedule.scheduledCount}
           onCancel={activeEditingMessage ? () => setEditingMessage(null) : undefined}
           submitLabel={activeEditingMessage ? 'Save' : undefined}
-          disabled={!!activeEditingMessage && editMessage.isPending}
+          disabled={!!activeEditingMessage && editSaving}
           placeholder={activeEditingMessage ? 'Edit message…' : 'Reply…'}
           initialBody={activeEditingMessage?.body ?? draft?.body ?? ''}
-          initialDrafts={activeEditingMessage ? [] : draftAttachments}
+          initialDrafts={activeEditingMessage ? editDraftAttachments : draftAttachments}
           onDraftChange={activeEditingMessage ? undefined : handleDraftChange}
           typingParentID={activeEditingMessage ? undefined : parentID}
           typingParentType={activeEditingMessage ? undefined : parentType}
           typingThreadRootID={summary.threadRootID}
+          mentionThreadIds={activeEditingMessage ? undefined : threadParticipantIds}
           hideCodeButton
           bottomInset={false}
         />
+        )}
       </MessageDropZone>
     </article>
   );

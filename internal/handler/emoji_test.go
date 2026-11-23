@@ -104,7 +104,7 @@ func TestEmojiHandler_Create_Success(t *testing.T) {
 
 	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.Create))
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/emojis",
-		strings.NewReader(`{"name":"fire","imageKey":"uploads/u1/fire.png"}`))
+		strings.NewReader(`{"name":"blob-fire","imageKey":"uploads/u1/fire.png"}`))
 	req.Header.Set("Authorization", "Bearer "+tokenFor(t, jwtMgr, u))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -113,14 +113,14 @@ func TestEmojiHandler_Create_Success(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	if _, exists := store.items["fire"]; !exists {
+	if _, exists := store.items["blob-fire"]; !exists {
 		t.Error("emoji not stored")
 	}
 	// Served from the server's own copy of the upload (see EmojiService.Create).
-	if kept := store.items["fire"]; !strings.HasPrefix(kept.ImageKey, "emojis/") || kept.ImageURL != "https://fresh.test/"+kept.ImageKey {
+	if kept := store.items["blob-fire"]; !strings.HasPrefix(kept.ImageKey, "emojis/") || kept.ImageURL != "https://fresh.test/"+kept.ImageKey {
 		t.Fatalf("ImageKey = %q, ImageURL = %q, want the server-derived URL of the kept copy", kept.ImageKey, kept.ImageURL)
 	}
-	if store.items["fire"].GettingWorkDone {
+	if store.items["blob-fire"].GettingWorkDone {
 		t.Error("flag must default to false when the body omits it")
 	}
 }
@@ -181,7 +181,7 @@ func TestEmojiHandler_Create_RejectsClientImageURL(t *testing.T) {
 
 	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.Create))
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/emojis",
-		strings.NewReader(`{"name":"fire","imageURL":"https://attacker.test/fire.png","imageKey":"uploads/u1/fire.png"}`))
+		strings.NewReader(`{"name":"blob-fire","imageURL":"https://attacker.test/fire.png","imageKey":"uploads/u1/fire.png"}`))
 	req.Header.Set("Authorization", "Bearer "+tokenFor(t, jwtMgr, u))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -200,11 +200,11 @@ func TestEmojiHandler_Create_DuplicateNameReturnsConflict(t *testing.T) {
 	u := &model.User{ID: "u1", Email: "u@x", SystemRole: model.SystemRoleMember}
 	users.users[u.ID] = u
 	users.emailIndex[u.Email] = u
-	emojis.items["fire"] = &model.CustomEmoji{Name: "fire", ImageURL: "https://x.test/fire.png"}
+	emojis.items["blob-fire"] = &model.CustomEmoji{Name: "blob-fire", ImageURL: "https://x.test/fire.png"}
 
 	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.Create))
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/emojis",
-		strings.NewReader(`{"name":"fire","imageKey":"uploads/u1/fire.png"}`))
+		strings.NewReader(`{"name":"blob-fire","imageKey":"uploads/u1/fire.png"}`))
 	req.Header.Set("Authorization", "Bearer "+tokenFor(t, jwtMgr, u))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -213,7 +213,7 @@ func TestEmojiHandler_Create_DuplicateNameReturnsConflict(t *testing.T) {
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status=%d, want 409; body=%s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "name already taken") {
+	if !strings.Contains(rec.Body.String(), "There's already a custom emoji called :blob-fire:. Pick another name.") {
 		t.Fatalf("expected friendly duplicate message, got %s", rec.Body.String())
 	}
 }
@@ -225,7 +225,7 @@ func TestEmojiHandler_Create_GuestForbidden(t *testing.T) {
 
 	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.Create))
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/emojis",
-		strings.NewReader(`{"name":"fire","imageKey":"uploads/g1/fire.png"}`))
+		strings.NewReader(`{"name":"blob-fire","imageKey":"uploads/g1/fire.png"}`))
 	req.Header.Set("Authorization", "Bearer "+tokenFor(t, jwtMgr, u))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -241,7 +241,7 @@ func TestEmojiHandler_List(t *testing.T) {
 	h, store, users, jwtMgr := setupEmojiHandler(t)
 	u := &model.User{ID: "u1", Email: "u@x", SystemRole: model.SystemRoleMember}
 	users.users[u.ID] = u
-	store.items["fire"] = &model.CustomEmoji{Name: "fire", ImageURL: "https://x/fire.png"}
+	store.items["blob-fire"] = &model.CustomEmoji{Name: "blob-fire", ImageURL: "https://x/fire.png"}
 
 	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.List))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/emojis", nil)
@@ -256,7 +256,7 @@ func TestEmojiHandler_List(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(got) != 1 || got[0].Name != "fire" {
+	if len(got) != 1 || got[0].Name != "blob-fire" {
 		t.Errorf("got %+v", got)
 	}
 }
@@ -318,12 +318,12 @@ func TestEmojiHandler_Delete_Creator(t *testing.T) {
 	h, store, users, jwtMgr := setupEmojiHandler(t)
 	u := &model.User{ID: "u1", Email: "u@x", SystemRole: model.SystemRoleMember}
 	users.users[u.ID] = u
-	store.items["fire"] = &model.CustomEmoji{Name: "fire", CreatedBy: u.ID}
+	store.items["blob-fire"] = &model.CustomEmoji{Name: "blob-fire", CreatedBy: u.ID}
 
 	mux := http.NewServeMux()
 	mux.Handle("DELETE /api/v1/emojis/{name}", middleware.Auth(jwtMgr)(http.HandlerFunc(h.Delete)))
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/emojis/fire", nil)
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/emojis/blob-fire", nil)
 	req.Header.Set("Authorization", "Bearer "+tokenFor(t, jwtMgr, u))
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
@@ -331,7 +331,7 @@ func TestEmojiHandler_Delete_Creator(t *testing.T) {
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	if _, exists := store.items["fire"]; exists {
+	if _, exists := store.items["blob-fire"]; exists {
 		t.Error("emoji not deleted")
 	}
 }
@@ -342,12 +342,12 @@ func TestEmojiHandler_Delete_NotAuthorized(t *testing.T) {
 	other := &model.User{ID: "u2", SystemRole: model.SystemRoleMember}
 	users.users[creator.ID] = creator
 	users.users[other.ID] = other
-	store.items["fire"] = &model.CustomEmoji{Name: "fire", CreatedBy: creator.ID}
+	store.items["blob-fire"] = &model.CustomEmoji{Name: "blob-fire", CreatedBy: creator.ID}
 
 	mux := http.NewServeMux()
 	mux.Handle("DELETE /api/v1/emojis/{name}", middleware.Auth(jwtMgr)(http.HandlerFunc(h.Delete)))
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/emojis/fire", nil)
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/emojis/blob-fire", nil)
 	req.Header.Set("Authorization", "Bearer "+tokenFor(t, jwtMgr, other))
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
@@ -355,7 +355,7 @@ func TestEmojiHandler_Delete_NotAuthorized(t *testing.T) {
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("status=%d, want 403; body=%s", rec.Code, rec.Body.String())
 	}
-	if _, exists := store.items["fire"]; !exists {
+	if _, exists := store.items["blob-fire"]; !exists {
 		t.Error("emoji should not be deleted")
 	}
 }

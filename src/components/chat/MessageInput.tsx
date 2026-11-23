@@ -36,7 +36,8 @@ export interface MessageInputHandle {
 }
 
 interface MessageInputProps {
-  onSend: (value: MessageInputValue) => void;
+  // An edit's save returns its promise; the text stays until it lands.
+  onSend: (value: MessageInputValue) => void | Promise<unknown>;
   // Send the composed message later instead: shows a ⌄ beside Send. Resolves
   // once scheduled (the composer then clears like a send); rejects to keep
   // the text.
@@ -75,6 +76,9 @@ interface MessageInputProps {
   // indicator into ThreadPanel rather than the main MessageList. Absent
   // for the main composer.
   typingThreadRootID?: string;
+  // The thread reply box: who has written in the thread, whom its @-list
+  // puts first. Keep the array's identity stable (useThreadParticipantIds).
+  mentionThreadIds?: string[];
   // ID of the user's most recent message currently loaded in the
   // surrounding list. ArrowUp on an empty composer triggers an inline
   // edit on this message via the `ex:edit-message` window event;
@@ -110,6 +114,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   typingParentID,
   typingParentType,
   typingThreadRootID,
+  mentionThreadIds,
   lastOwnMessageId,
   onDraftChange,
   cancelOnOutsidePointer,
@@ -385,10 +390,12 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
             onLinkShortcut={linkDialog.openDialog}
             placeholder={isUploading ? 'Uploading…' : placeholder}
             ariaLabel="Message input"
-            // Enables member / special / not-in-channel grouping in the
-            // @-mention typeahead. Only a channel composer has a channel
-            // roster; DMs (and the typing-less edit box) pass nothing.
+            // The @-list puts the chat's own people first: a channel's
+            // members, a DM's participants, a thread's writers. The
+            // typing-less edit box passes none of them.
             mentionChannelId={typingParentType === 'channel' ? typingParentID : undefined}
+            mentionConversationId={typingParentType === 'conversation' ? typingParentID : undefined}
+            mentionThreadIds={mentionThreadIds}
             slashCommands={slashCommands}
             className="flex-1"
             editorClassName={

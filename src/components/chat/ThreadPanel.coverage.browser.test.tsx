@@ -110,10 +110,10 @@ vi.mock('@/hooks/useAttachments', () => ({
   uploadAttachment: vi.fn(),
 }));
 
-const editMessageMutate = vi.fn();
+const editMessageMutate = vi.fn((_vars: Record<string, unknown>): Promise<unknown> => Promise.resolve({}));
 const sendMutate = vi.fn();
 vi.mock('@/hooks/useMessages', () => ({
-  useEditMessage: () => ({ mutate: editMessageMutate, isPending: false }),
+  useEditMessage: () => ({ mutateAsync: editMessageMutate, isPending: false }),
   useSendMessage: () => ({ mutate: sendMutate, isPending: false }),
 }));
 
@@ -357,14 +357,12 @@ describe('ThreadPanel coverage — mobile edit mode', () => {
       expect(lastInputProps?.submitLabel).toBe('Save');
     });
     await screen.getByTestId('mi-send').click();
-    // Body changed ('hello body' vs 'editable reply') → editMessage.mutate fires.
+    // Body changed ('hello body' vs 'editable reply') → the save goes out.
     expect(editMessageMutate).toHaveBeenCalled();
     const vars = editMessageMutate.mock.calls[0][0];
     expect(vars.messageId).toBe('R1');
     expect(vars.body).toBe('hello body');
-    // Invoke the onSuccess that closes edit mode.
-    const opts = editMessageMutate.mock.calls[0][1] as { onSuccess?: () => void };
-    opts.onSuccess?.();
+    // Once it lands, edit mode closes.
     await vi.waitFor(() => {
       expect(lastInputProps?.submitLabel).toBeUndefined();
     });

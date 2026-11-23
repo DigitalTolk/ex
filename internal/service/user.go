@@ -62,6 +62,34 @@ type UserService struct {
 	// audience is told when account notification settings change, so every
 	// instance's notification audience cache reloads the user.
 	audience AudienceInvalidator
+	// people ranks who each user mentions and messages (SetPeopleRanking).
+	people PeopleRanking
+}
+
+// PeopleRanking reads a user's people ranking (the Redis cache), fed by
+// their sends (MessageService.SetPeopleFrequency).
+type PeopleRanking interface {
+	FrequentPeople(ctx context.Context, userID string, limit int) ([]string, error)
+}
+
+// SetPeopleRanking wires the read side of the people ranking.
+func (s *UserService) SetPeopleRanking(p PeopleRanking) { s.people = p }
+
+// MaxFrequentPeople caps how much of the ranking a caller can ask for.
+const MaxFrequentPeople = 100
+
+// FrequentPeople lists the IDs of the people userID mentions and messages
+// most, highest first: what the composer's @-list puts first. A limit out of
+// range asks for the whole cap.
+func (s *UserService) FrequentPeople(ctx context.Context, userID string, limit int) ([]string, error) {
+	if limit <= 0 || limit > MaxFrequentPeople {
+		limit = MaxFrequentPeople
+	}
+	out, err := s.people.FrequentPeople(ctx, userID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("user: frequent people: %w", err)
+	}
+	return out, nil
 }
 
 // SetAudienceInvalidator wires the notification audience cache's

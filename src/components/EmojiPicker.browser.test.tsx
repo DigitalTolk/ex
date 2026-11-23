@@ -64,7 +64,7 @@ function seedFrequency(shortcodes: string[]) {
 
 describe('EmojiPicker browser', () => {
   it('pins flagged customs into the front "Getting Work Done" shelf, capped to two rows', async () => {
-    const flagged = Array.from({ length: 20 }, (_, i) => ({
+    const flagged = Array.from({ length: 24 }, (_, i) => ({
       name: `work${i}`,
       imageURL: `https://emoji.test/w${i}.png`,
       createdBy: 'u-1',
@@ -80,8 +80,8 @@ describe('EmojiPicker browser', () => {
     const grid = document.querySelector('[data-testid="emoji-workpack-grid"]') as HTMLElement;
     expect(grid).not.toBeNull();
     const tiles = grid.querySelectorAll('[data-testid="emoji-workpack-tile"]');
-    // Two rows: 9 columns on desktop, 7 on mobile — never all 20.
-    expect(tiles.length).toBe(window.innerWidth > 767 ? 18 : 14);
+    // Two rows: 10 columns on desktop, 7 on mobile — never all of them.
+    expect(tiles.length).toBe(window.innerWidth > 767 ? 20 : 14);
     // Unflagged customs stay out of the shelf.
     expect(grid.textContent ?? '').not.toContain('plain');
 

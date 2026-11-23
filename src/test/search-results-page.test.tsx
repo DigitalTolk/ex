@@ -504,6 +504,89 @@ describe('SearchResultsPage', () => {
     await waitFor(() => expect(screen.queryByText(/From: Alice/i)).toBeNull());
   });
 
+  // Mattermost's modifiers, typed in the search: "datadog from:Günter".
+  describe('from: and in: typed in the search', () => {
+    const roster = [{ id: 'u-g', displayName: 'Günter Weber', email: 'gw@example.com' }];
+    function serve(users: () => Promise<unknown> = () => Promise.resolve(roster)) {
+      apiFetchMock.mockImplementation((url: string) => {
+        if (url === '/api/v1/users?all=true') return users();
+        if (url.startsWith('/api/v1/users/batch')) return Promise.resolve(roster);
+        if (url === '/api/v1/channels') return Promise.resolve([{ channelID: 'c-ops', channelName: 'ops' }]);
+        if (url.startsWith('/api/v1/search')) return Promise.resolve({ total: 0, hits: [] });
+        return Promise.resolve([]);
+      });
+    }
+    const searched = () => apiFetchMock.mock.calls.map((c) => String(c[0])).filter((u) => u.startsWith('/api/v1/search/messages'));
+
+    it('searches the words in what that person wrote there, shown as the From and In filters', async () => {
+      serve();
+      wrap([`/search?q=${encodeURIComponent('datadog from:gunter in:~ops')}`]);
+      await screen.findByText('From: Günter Weber');
+      expect(screen.getByText('In: ~ops')).toBeInTheDocument();
+      await waitFor(() => {
+        const url = new URL(searched().at(-1)!, 'http://x');
+        expect([url.searchParams.get('q'), url.searchParams.get('from'), url.searchParams.get('in')]).toEqual(['datadog', 'u-g', 'c-ops']);
+      });
+      expect(screen.getByRole('heading', { name: 'Search: datadog from:gunter in:~ops' })).toBeInTheDocument();
+    });
+
+    it('clearing a typed filter takes it out of the search too', async () => {
+      serve();
+      wrap([`/search?q=${encodeURIComponent('datadog from:gunter in:~ops')}`]);
+      fireEvent.click(await screen.findByLabelText('Clear From: Günter Weber'));
+      await waitFor(() => expect(screen.queryByText('From: Günter Weber')).toBeNull());
+      fireEvent.click(screen.getByLabelText('Clear In: ~ops'));
+      await waitFor(() => expect(screen.getByRole('heading', { name: 'Search: datadog' })).toBeInTheDocument());
+      const url = new URL(searched().at(-1)!, 'http://x');
+      expect([url.searchParams.get('q'), url.searchParams.get('from'), url.searchParams.get('in')]).toEqual(['datadog', null, null]);
+    });
+
+    it('says so when a modifier names no one, and searches nothing', async () => {
+      serve();
+      wrap([`/search?q=${encodeURIComponent('datadog from:nobody')}`]);
+      expect(await screen.findByTestId('search-unmatched-modifier')).toHaveTextContent('Nothing matches “from:nobody”. Check the name');
+      expect(searched()).toEqual([]);
+    });
+
+    it('searches the days on:, after: and before: name, as chips that clear', async () => {
+      serve();
+      wrap([`/search?q=${encodeURIComponent('deploy after:2026-11-01 before:2026-11-10 on:yesterday')}`]);
+      expect(await screen.findByText('On: Yesterday')).toBeInTheDocument();
+      expect(screen.getByText(/^After: /)).toBeInTheDocument();
+      expect(screen.getByText(/^Before: /)).toBeInTheDocument();
+      fireEvent.click(screen.getByLabelText('Clear On: Yesterday'));
+      fireEvent.click(screen.getByLabelText(/^Clear After: /));
+      await waitFor(() => expect(screen.getByRole('heading', { name: 'Search: deploy before:2026-11-10' })).toBeInTheDocument());
+      const url = new URL(searched().at(-1)!, 'http://x');
+      expect([url.searchParams.get('q'), url.searchParams.get('after'), url.searchParams.get('before')]).toEqual([
+        'deploy',
+        null,
+        new Date(2026, 10, 10).toISOString(),
+      ]);
+    });
+
+    it('a date alone is a search', async () => {
+      serve();
+      wrap([`/search?q=${encodeURIComponent('on:today')}`]);
+      await waitFor(() => expect(new URL(searched().at(-1)!, 'http://x').searchParams.get('after')).toBeTruthy());
+    });
+
+    it('says how to write a day when one isn\'t', async () => {
+      serve();
+      wrap([`/search?q=${encodeURIComponent('deploy on:someday')}`]);
+      expect(await screen.findByTestId('search-unmatched-modifier')).toHaveTextContent("“on:someday” isn't a day. Use a date like 2026-11-20, today or yesterday.");
+      expect(screen.getByTestId('search-unmatched-modifier')).not.toHaveTextContent('Check the name');
+      expect(searched()).toEqual([]);
+    });
+
+    it('waits for the people before searching', async () => {
+      serve(() => new Promise(() => {}));
+      wrap([`/search?q=${encodeURIComponent('from:gunter')}`]);
+      expect(await screen.findByText('Searching…')).toBeInTheDocument();
+      expect(searched()).toEqual([]);
+    });
+  });
+
   // A search that doesn't come back says so, instead of looking like one
   // that found nothing — and is not sent a second time on its own.
   describe('a search that fails', () => {
