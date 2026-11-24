@@ -237,10 +237,13 @@ describe('UserHoverCard browser', () => {
 
   it('starts a DM via the "Direct message" button when viewing someone else', async () => {
     apiFetchMock.mockReset();
-    // First call: the lazy /users fetch on open. Second: the DM create.
-    apiFetchMock
-      .mockResolvedValueOnce({ id: 'u-1', displayName: 'Alice', status: 'active' })
-      .mockResolvedValueOnce({ id: 'conv-new', type: 'dm' });
+    // Answered by path: the lazy /users fetch and the person's user groups on
+    // open, then the DM create.
+    apiFetchMock.mockImplementation((path: string) => {
+      if (path === '/api/v1/conversations') return Promise.resolve({ id: 'conv-new', type: 'dm' });
+      if (path === '/api/v1/users/u-1/usergroups') return Promise.resolve([]);
+      return Promise.resolve({ id: 'u-1', displayName: 'Alice', status: 'active' });
+    });
     await render(
       <Wrap>
         <UserHoverCard userId="u-1" displayName="Alice" currentUserId="u-me">
@@ -262,9 +265,12 @@ describe('UserHoverCard browser', () => {
   it('a DM that fails to open says so instead of doing nothing', async () => {
     apiFetchMock.mockReset();
     showToastMock.mockReset();
-    apiFetchMock
-      .mockResolvedValueOnce({ id: 'u-1', displayName: 'Alice', status: 'active' })
-      .mockRejectedValueOnce(new Error('offline'));
+    // Answered by path: the open card also asks for the person's user groups.
+    apiFetchMock.mockImplementation((path: string) => {
+      if (path === '/api/v1/conversations') return Promise.reject(new Error('offline'));
+      if (path === '/api/v1/users/u-1/usergroups') return Promise.resolve([]);
+      return Promise.resolve({ id: 'u-1', displayName: 'Alice', status: 'active' });
+    });
     await render(
       <Wrap>
         <UserHoverCard userId="u-1" displayName="Alice" currentUserId="u-me">

@@ -65,6 +65,14 @@ vi.mock('@/hooks/useAgents', async (importOriginal) => ({
   useSkills: () => ({ data: [] }),
 }));
 
+// …and the @-typeahead's user groups.
+vi.mock('@/hooks/useUserGroups', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/hooks/useUserGroups')>()),
+  useUserGroups: () => ({
+    data: [{ id: 'group-1', handle: 'oncall', name: 'On-call engineers', description: '', disabled: false, memberCount: 4, createdBy: '', createdAt: '', updatedAt: '' }],
+  }),
+}));
+
 // What the composer asks the server itself: the writer's people ranking, and
 // a DM's participants (the DM view has those cached; here the composer loads
 // them).
@@ -177,6 +185,16 @@ describe('MarkdownComposer provider wiring (browser)', () => {
     await userEvent.keyboard('@ala');
     await vi.waitFor(() => expect(tooltip()?.textContent).toContain('Alan Border'));
     expect(tooltip()!.querySelector('[data-presence="online"]')).not.toBeNull();
+    await screen.unmount();
+  });
+
+  it('feeds the user groups into the @-mention typeahead', async () => {
+    const { screen } = await mountComposer({ mentionChannelId: 'c-1' });
+    await userEvent.click(screen.getByLabelText('Composer'));
+    await userEvent.keyboard('@onc');
+    await vi.waitFor(() => expect(tooltip()?.textContent).toContain('@oncall'));
+    expect(tooltip()!.textContent).toContain('On-call engineers · 4 members');
+    expect(tooltip()!.textContent).toContain('User groups');
     await screen.unmount();
   });
 

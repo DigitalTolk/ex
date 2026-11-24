@@ -1025,6 +1025,10 @@ func (s *IncomingWebhookService) proxyImages(ctx context.Context, iconURL string
 	return icon
 }
 
+// slackSubteamPattern matches Slack's labelled user-group reference,
+// "<!subteam^S0123|@oncall>"; group 1 is the handle without its "@".
+var slackSubteamPattern = regexp.MustCompile(`<!subteam\^[^|>]+\|@?([^>]+)>`)
+
 // proxyBlockImages routes every image in blocks — and in the cards' blocks
 // — through ex's image proxy, measuring each, so no client ever loads the
 // app's own server. Each distinct address is fetched once. An image the
@@ -1123,6 +1127,9 @@ func (r *webhookRefs) translate(ctx context.Context, text string) string {
 	text = strings.ReplaceAll(text, "<!channel>", "@all")
 	text = strings.ReplaceAll(text, "<!all>", "@all")
 	text = strings.ReplaceAll(text, "<!here>", "@here")
+	// A Slack user-group reference keeps its label, "@oncall": the message
+	// service turns a typed handle of an enabled group into its mention.
+	text = slackSubteamPattern.ReplaceAllString(text, "@$1")
 	text = slackLinkPattern.ReplaceAllStringFunc(text, func(match string) string {
 		// FindStringSubmatch of a string the SAME pattern just matched
 		// always yields the full group set — no guard needed.

@@ -23,9 +23,18 @@ export interface MentionUser {
   statusEmoji?: string;
 }
 
+// The minimal shape the ranker needs from a user group ("@oncall").
+export interface MentionUserGroup {
+  id: string;
+  handle: string;
+  name: string;
+  memberCount: number;
+}
+
 export type UserSuggestion =
   | { kind: 'user'; id: string; displayName: string; email?: string; avatarURL?: string; statusEmoji?: string; online: boolean; inChannel?: boolean; inThread?: boolean }
-  | { kind: 'group'; group: GroupName };
+  | { kind: 'group'; group: GroupName }
+  | ({ kind: 'usergroup' } & MentionUserGroup);
 
 export interface RankUsersCtx {
   users: MentionUser[];
@@ -40,6 +49,18 @@ export interface RankUsersCtx {
   // within each section, the people they mention and message most come
   // first.
   frequent?: ReadonlyMap<string, number>;
+  // The enabled user groups the author may mention (none for guests).
+  userGroups?: MentionUserGroup[];
+}
+
+// rankUserGroups keeps the groups whose handle or name starts with the query,
+// handle matches first, then by handle.
+function rankUserGroups(q: string, groups: MentionUserGroup[]): UserSuggestion[] {
+  const hits = groups.filter((g) => g.handle.toLowerCase().startsWith(q) || g.name.toLowerCase().startsWith(q));
+  const handleRank = (g: MentionUserGroup) => (g.handle.toLowerCase().startsWith(q) ? 0 : 1);
+  return topK(hits, MAX_MENTION_RESULTS, (a, b) => handleRank(a) - handleRank(b) || a.handle.localeCompare(b.handle)).map(
+    (g) => ({ kind: 'usergroup' as const, ...g }),
+  );
 }
 
 interface UserHit {
@@ -88,20 +109,24 @@ export function rankUsers(query: string, ctx: RankUsersCtx): UserSuggestion[] {
   // "@a" must not suggest "@all" mid-type), matched case-insensitively.
   const groups: UserSuggestion[] = GROUP_NAMES.filter((g) => g === q).map((group) => ({ kind: 'group', group }));
 
+  const userGroups = rankUserGroups(q, ctx.userGroups ?? []);
+
   if (partition) {
     // A chat's own people first (the thread's writers, then its members),
-    // then group mentions, then everyone else. Each section gets its own
-    // budget so the later ones always surface, even in a busy channel.
+    // then group mentions, then user groups, then everyone else. Each
+    // section gets its own budget so the later ones always surface, even in
+    // a busy channel.
     const section = (keep: (u: UserHit) => boolean) =>
       topK(matches.filter(keep), MAX_MENTION_RESULTS, byRelevance).map(toSuggestion);
     return [
       ...section((u) => !!u.inThread),
       ...section((u) => !u.inThread && !!u.inChannel),
       ...groups,
+      ...userGroups,
       ...section((u) => !u.inThread && !u.inChannel),
     ];
   }
-  return [...groups, ...topK(matches, MAX_MENTION_RESULTS, byRelevance).map(toSuggestion)];
+  return [...groups, ...userGroups, ...topK(matches, MAX_MENTION_RESULTS, byRelevance).map(toSuggestion)];
 }
 
 export interface ChannelInput {

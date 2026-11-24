@@ -12,13 +12,14 @@ import {
   type ChannelInput,
   type GroupName,
   type MentionUser,
+  type MentionUserGroup,
   type UserSuggestion,
 } from './mentionData';
 import type { MentionCompletion } from './optionRender';
 
 // CodeMirror completion sources for @-mentions and ~-channels. The editor's
 // document stays raw markdown: selecting a suggestion inserts the canonical
-// token (`@[id|name]`, `~[id|slug]`, `@all`/`@here`) — exactly what the message
+// token (`@[id|name]` for a person or a user group, `~[id|slug]`, `@all`/`@here`) — exactly what the message
 // renderer and the Go validator parse — followed by a trailing space. The
 // matching mirrors the old Lexical trigger: the sigil must sit at a word
 // boundary so "email@host" doesn't pop the menu.
@@ -35,6 +36,8 @@ export interface MentionProviders {
   // The writer's people ranking, person ID → rank (0 most frequent).
   frequent?: () => ReadonlyMap<string, number>;
   channels: () => ChannelInput[];
+  // The enabled user groups the author may mention; omitted → none.
+  userGroups?: () => MentionUserGroup[];
 }
 
 export type MemberScope = 'channel' | 'conversation';
@@ -67,9 +70,10 @@ const SECTION_MEMBERS: Record<MemberScope, CompletionSection> = {
   conversation: mkSection('In this conversation', 1),
 };
 const SECTION_SPECIAL = mkSection('Special mentions', 2);
+const SECTION_USERGROUPS = mkSection('User groups', 3);
 const SECTION_OTHERS: Record<MemberScope, CompletionSection> = {
-  channel: mkSection('Not in channel', 3),
-  conversation: mkSection('Not in this conversation', 3),
+  channel: mkSection('Not in channel', 4),
+  conversation: mkSection('Not in this conversation', 4),
 };
 // `useUserChannels` returns only the channels the user has joined, so the
 // ~-popup is always "My Channels".
@@ -80,12 +84,27 @@ const GROUP_DETAIL: Record<GroupName, string> = {
   here: 'Notify everyone currently online',
 };
 
+function memberCountLabel(n: number): string {
+  return `${n} ${n === 1 ? 'member' : 'members'}`;
+}
+
 function userSection(s: Extract<UserSuggestion, { kind: 'user' }>, scope: MemberScope): CompletionSection {
   if (s.inThread) return SECTION_THREAD;
   return s.inChannel ? SECTION_MEMBERS[scope] : SECTION_OTHERS[scope];
 }
 
 function userCompletion(s: UserSuggestion, partitioned: boolean, scope: MemberScope): MentionCompletion {
+  if (s.kind === 'usergroup') {
+    const description = `${s.name} · ${memberCountLabel(s.memberCount)}`;
+    return {
+      label: `@${s.handle}`,
+      detail: description,
+      type: 'keyword',
+      section: partitioned ? SECTION_USERGROUPS : undefined,
+      apply: applyInsert(`@[${s.id}|${s.handle}] `),
+      meta: { kind: 'group', title: `@${s.handle}`, description },
+    };
+  }
   if (s.kind === 'group') {
     return {
       label: `@${s.group}`,
@@ -131,6 +150,7 @@ export function userMentionSource(providers: MentionProviders): CompletionSource
       memberIds,
       threadIds,
       frequent: providers.frequent?.(),
+      userGroups: providers.userGroups?.() ?? [],
     }).map((s) => userCompletion(s, partitioned, scope));
     return { from: before.from, to: before.to, options, filter: false };
   };

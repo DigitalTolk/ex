@@ -223,15 +223,52 @@ func lookupMentionNames(ctx context.Context, r MentionResolver, texts ...string)
 		return MentionNames{}
 	}
 	userIDs, channelIDs := textMentionIDs(texts...)
-	if len(userIDs) == 0 && len(channelIDs) == 0 {
+	groupIDs := textUserGroupIDs(texts...)
+	if len(userIDs) == 0 && len(channelIDs) == 0 && len(groupIDs) == 0 {
 		return MentionNames{}
 	}
-	names, err := r.ResolveMentions(ctx, userIDs, channelIDs)
-	if err != nil {
-		slog.Warn("alert text: resolve mention names failed; showing them as typed", "error", err)
-		return MentionNames{}
+	names := MentionNames{}
+	if len(userIDs) > 0 || len(channelIDs) > 0 {
+		resolved, err := r.ResolveMentions(ctx, userIDs, channelIDs)
+		if err != nil {
+			slog.Warn("alert text: resolve mention names failed; showing them as typed", "error", err)
+			return MentionNames{}
+		}
+		names = resolved
 	}
+	names.UserGroups = lookupUserGroupHandles(ctx, r, groupIDs)
 	return names
+}
+
+// textUserGroupIDs lists the distinct user-group IDs mentioned in texts.
+func textUserGroupIDs(texts ...string) []string {
+	var ids []string
+	seen := map[string]bool{}
+	for _, text := range texts {
+		for _, t := range ScanMentions(text) {
+			if t.Kind == MentionTokenUserGroup && !seen[t.ID] {
+				seen[t.ID] = true
+				ids = append(ids, t.ID)
+			}
+		}
+	}
+	return ids
+}
+
+// lookupUserGroupHandles resolves the current handle of every enabled group
+// in ids, when r can (a UserGroupNameResolver). A failed lookup returns no
+// handles, so each group mention reads as typed.
+func lookupUserGroupHandles(ctx context.Context, r MentionResolver, ids []string) map[string]string {
+	gr, ok := r.(UserGroupNameResolver)
+	if !ok || len(ids) == 0 {
+		return nil
+	}
+	handles, err := gr.ResolveUserGroups(ctx, ids)
+	if err != nil {
+		slog.Warn("alert text: resolve user-group handles failed; showing them as typed", "error", err)
+		return nil
+	}
+	return handles
 }
 
 // textMentionIDs lists the distinct user and channel IDs mentioned in the
@@ -245,8 +282,10 @@ func textMentionIDs(texts ...string) (userIDs, channelIDs []string) {
 		}
 	}
 	for _, text := range texts {
-		for _, m := range userMentionPattern.FindAllStringSubmatch(text, -1) {
-			add(&userIDs, "u", strings.TrimSpace(m[1]))
+		for _, t := range ScanMentions(text) {
+			if t.Kind == MentionTokenUser {
+				add(&userIDs, "u", t.ID)
+			}
 		}
 		for _, m := range channelMentionRE.FindAllStringSubmatch(text, -1) {
 			add(&channelIDs, "c", m[1])
@@ -260,12 +299,17 @@ func textMentionIDs(texts ...string) (userIDs, channelIDs []string) {
 // mention reads as its ID's current name ("@Bob", "~ops"), and as the typed
 // text only for an ID names lacks (unknown, or the lookup failed).
 func flattenMentions(body string, names MentionNames) string {
-	body = userMentionPattern.ReplaceAllStringFunc(body, func(s string) string {
-		m := userMentionPattern.FindStringSubmatch(s)
-		if name, ok := names.Users[strings.TrimSpace(m[1])]; ok {
+	body = ReplaceMentions(body, func(t MentionToken) string {
+		if t.Kind == MentionTokenUserGroup {
+			if handle, ok := names.UserGroups[t.ID]; ok {
+				return "@" + handle
+			}
+			return "@" + t.Label
+		}
+		if name, ok := names.Users[t.ID]; ok {
 			return "@" + name
 		}
-		return "@" + m[2]
+		return "@" + t.Label
 	})
 	return channelMentionRE.ReplaceAllStringFunc(body, func(s string) string {
 		m := channelMentionRE.FindStringSubmatch(s)

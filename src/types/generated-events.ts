@@ -138,6 +138,17 @@ export const EventWebhookChanged = "webhook.changed"; // incoming-webhook list c
  */
 export const EventBotChanged = "bot.changed"; // a bot or its tokens changed (admin page); data-less nudge to refetch
 /**
+ * EventUserGroupChanged tells every client a user group was created,
+ * edited, enabled/disabled or had its members changed; data {groupId}.
+ * Receivers refetch the group list and that group.
+ */
+export const EventUserGroupChanged = "usergroup.changed";
+/**
+ * EventUserGroupSync tells clients a user-group sync started or ended;
+ * data-less nudge for admins to refetch the sync status.
+ */
+export const EventUserGroupSync = "usergroup.sync";
+/**
  * Event type constants used across the application.
  */
 export const EventProjectChanged = "project.changed"; // a project or its design references changed; data-less nudge to refetch

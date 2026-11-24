@@ -252,3 +252,11 @@ func TestRunExtras_CorruptRows(t *testing.T) {
 		assertUnmarshalErr(t, err, "ListArtifacts")
 	})
 }
+
+// TestListPendingApprovals_NonexistentTable covers the Query error path.
+func TestListPendingApprovals_NonexistentTable(t *testing.T) {
+	s := NewRunStore(brokenDB(t))
+	if _, err := s.ListPendingApprovals(context.Background(), "u-alice"); err == nil {
+		t.Error("expected error on missing table")
+	}
+}

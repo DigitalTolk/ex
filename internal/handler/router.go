@@ -46,6 +46,7 @@ func NewRouter(d *Deps) http.Handler {
 	searchH := d.Search
 	webhookH := d.Webhook
 	botH := d.Bot
+	userGroupH := d.UserGroup
 	mattermostH := d.Mattermost
 	activityH := d.Activity
 	commandH := d.Command
@@ -375,6 +376,17 @@ func NewRouter(d *Deps) http.Handler {
 		mux.Handle("POST /api/v1/views/{id}/close", middleware.WrapFunc(ixH.CloseView, authMW, writeLimit))
 		mux.Handle("POST /api/v1/views/{id}/actions", middleware.WrapFunc(ixH.ViewAction, authMW, writeLimit))
 		mux.Handle("POST /api/v1/admin/webhooks/preview-view", middleware.WrapFunc(ixH.PreviewView, authMW, writeLimit))
+	}
+	if userGroupH != nil {
+		// Every member reads groups; managing them is the service's call.
+		mux.Handle("GET /api/v1/usergroups", middleware.WrapFunc(userGroupH.List, authMW))
+		mux.Handle("GET /api/v1/usergroups/{id}", middleware.WrapFunc(userGroupH.Get, authMW))
+		mux.Handle("POST /api/v1/usergroups/{id}/enable", middleware.WrapFunc(userGroupH.Enable, authMW, writeLimit))
+		mux.Handle("POST /api/v1/usergroups/{id}/disable", middleware.WrapFunc(userGroupH.Disable, authMW, writeLimit))
+		mux.Handle("GET /api/v1/usergroup-permissions", middleware.WrapFunc(userGroupH.Permissions, authMW))
+		mux.Handle("GET /api/v1/usergroup-sync", middleware.WrapFunc(userGroupH.SyncStatus, authMW))
+		mux.Handle("POST /api/v1/usergroup-sync", middleware.WrapFunc(userGroupH.SyncNow, authMW, writeLimit))
+		mux.Handle("GET /api/v1/users/{id}/usergroups", middleware.WrapFunc(userGroupH.ForUser, authMW))
 	}
 	if botH != nil {
 		// Admin-only (the service decides).

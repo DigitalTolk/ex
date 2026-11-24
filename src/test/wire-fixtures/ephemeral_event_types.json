@@ -17,6 +17,7 @@
   "session.renewed",
   "thread.updated",
   "typing",
+  "usergroup.sync",
   "view.opened",
   "view.updated"
 ]

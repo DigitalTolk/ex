@@ -74,6 +74,13 @@ const (
 	EventSessionRenewed = "session.renewed"
 	EventWebhookChanged = "webhook.changed" // incoming-webhook list changed (created/updated/deleted); data-less nudge to refetch
 	EventBotChanged     = "bot.changed"     // a bot or its tokens changed (admin page); data-less nudge to refetch
+	// EventUserGroupChanged tells every client a user group was created,
+	// edited, enabled/disabled or had its members changed; data {groupId}.
+	// Receivers refetch the group list and that group.
+	EventUserGroupChanged = "usergroup.changed"
+	// EventUserGroupSync tells clients a user-group sync started or ended;
+	// data-less nudge for admins to refetch the sync status.
+	EventUserGroupSync  = "usergroup.sync"
 	EventProjectChanged = "project.changed" // a project or its design references changed; data-less nudge to refetch
 	// EventSettingsUpdated tells every client the workspace settings changed
 	// (an admin saved them); data-less nudge to refetch them.
@@ -185,6 +192,9 @@ var ephemeralTypes = map[string]struct{}{
 	// durable source of truth and is re-read on reconnect, so replaying it
 	// would be noise (and could re-add a row the user has since left).
 	EventThreadUpdated: {},
+	// usergroup.sync only nudges admins to refetch the sync status, which
+	// the server keeps; replaying it would be noise.
+	EventUserGroupSync: {},
 	// run.progress is a live typing-indicator-grade delta stream; the run's
 	// EVT# timeline is the durable record and run.updated carries state.
 	EventRunProgress: {},

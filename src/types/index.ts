@@ -696,7 +696,7 @@ export type ActivityType =
   | 'channel_added'
   | 'channel_message';
 
-export type MentionKind = 'user' | 'all' | 'here' | 'keyword';
+export type MentionKind = 'user' | 'all' | 'here' | 'keyword' | 'usergroup';
 
 export interface ActivityItem {
   id: string;
@@ -722,6 +722,9 @@ export interface ActivityItem {
   parentName?: string;
   // mention-only
   mentionKind?: MentionKind;
+  // usergroup mentions: the group that named the user.
+  userGroupID?: string;
+  userGroupHandle?: string;
   read?: boolean;
 }
 

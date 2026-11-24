@@ -168,7 +168,7 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
     parentMessageID: summary.threadRootID,
   });
   const isMobile = useIsMobile();
-  const { pendingInvites, channelSlug, checkMentions, clearInvites } = useNonMemberInvite(channelId, currentUserId);
+  const { pendingInvites, pendingGroupInvites, channelSlug, channelIsPrivate, checkMentions, clearInvites } = useNonMemberInvite(channelId, currentUserId);
   const parentID = channelId ?? conversationId;
   const parentType: 'channel' | 'conversation' = channelId ? 'channel' : 'conversation';
   // Desktop edits inline inside the MessageItem; a phone routes them to this
@@ -381,6 +381,8 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
           channelId={channelId}
           channelName={channelSlug}
           users={pendingInvites}
+          groups={pendingGroupInvites}
+          isPrivate={channelIsPrivate}
           onDismiss={clearInvites}
         />
 

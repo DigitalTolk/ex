@@ -69,6 +69,13 @@ type Config struct {
 	// (MS_STATUS_SYNC_INTERVAL, default 1h). One tenant-wide Graph listing
 	// and one read of every account per interval.
 	MSStatusSyncInterval time.Duration `env:"MS_STATUS_SYNC_INTERVAL" envDefault:"1h"`
+	// UserGroupEntraParentGroup turns on user groups from Microsoft 365: the
+	// object ID of the Entra group whose member groups become ex's user
+	// groups (USERGROUP_ENTRA_PARENT_GROUP). Needs MS_TENANT_ID.
+	UserGroupEntraParentGroup string `env:"USERGROUP_ENTRA_PARENT_GROUP"`
+	// UserGroupSyncInterval paces the user-group sync
+	// (USERGROUP_SYNC_INTERVAL, default 30m); admins can also sync at once.
+	UserGroupSyncInterval time.Duration `env:"USERGROUP_SYNC_INTERVAL" envDefault:"30m"`
 	// MSTokenKey turns on SharePoint link sharing: a SharePoint link posted
 	// in a channel or conversation is shared with its members as the person
 	// who posted it. It is the base64 of 32 random bytes that seal each
@@ -288,6 +295,12 @@ func Load() (*Config, error) {
 	}
 	if c.MSStatusSyncInterval <= 0 {
 		return nil, fmt.Errorf("invalid MS_STATUS_SYNC_INTERVAL %s: must be a positive duration", c.MSStatusSyncInterval)
+	}
+	if c.UserGroupSyncInterval <= 0 {
+		return nil, fmt.Errorf("invalid USERGROUP_SYNC_INTERVAL %s: must be a positive duration", c.UserGroupSyncInterval)
+	}
+	if c.UserGroupEntraParentGroup != "" && c.MSTenantID == "" {
+		return nil, fmt.Errorf("USERGROUP_ENTRA_PARENT_GROUP is set but MS_TENANT_ID isn't: user groups are read from Microsoft 365")
 	}
 	if err := c.loadSharePoint(); err != nil {
 		return nil, err
