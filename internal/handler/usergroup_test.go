@@ -113,13 +113,10 @@ func (s *handlerGroupSource) set(groups ...service.SourceGroup) {
 	s.groups = groups
 }
 
-// handlerRunLock is the sync's run guard, in memory. released is closed when
-// the first run lets go of it, after everything that run wrote.
+// handlerRunLock is the sync's run guard, in memory.
 type handlerRunLock struct {
-	mu       sync.Mutex
-	holder   string
-	released chan struct{}
-	once     sync.Once
+	mu     sync.Mutex
+	holder string
 }
 
 func (l *handlerRunLock) AcquireLock(_ context.Context, _, token string, _ time.Duration) (bool, error) {
@@ -138,7 +135,6 @@ func (l *handlerRunLock) ReleaseLock(_ context.Context, _, token string) error {
 	if l.holder == token {
 		l.holder = ""
 	}
-	l.once.Do(func() { close(l.released) })
 	return nil
 }
 
@@ -158,9 +154,9 @@ type userGroupAPIFixture struct {
 	guestJWT  string
 }
 
-// newUserGroupAPIFixture syncs three Entra groups into ex, as the scheduled
-// sync does at boot: @eng (the member and Bob), @eng-dope (the member) and
-// @eng-platform (Bob).
+// newUserGroupAPIFixture syncs three Entra groups into ex through Sync now
+// (nothing syncs at boot): @eng (the member and Bob), @eng-dope (the member)
+// and @eng-platform (Bob).
 func newUserGroupAPIFixture(t *testing.T) *userGroupAPIFixture {
 	t.Helper()
 	jwt := auth.NewJWTManager("test-secret", 15*time.Minute, 24*time.Hour)
@@ -181,11 +177,10 @@ func newUserGroupAPIFixture(t *testing.T) *userGroupAPIFixture {
 		handlerEntraGroup("g-platform", "eng-platform", "oid-bob"),
 	)
 	n := 0
-	lock := &handlerRunLock{released: make(chan struct{})}
-	svc.SetSync(source, users, lock, time.Hour, func() string { n++; return string(rune('a' + n)) })
+	svc.SetSync(source, users, &handlerRunLock{}, time.Hour, func() string { n++; return string(rune('a' + n)) })
 
-	// The boot sync runs on the background context (then waits an hour);
-	// Sync now runs inline.
+	// The schedule waits an hour; Sync now runs inline, once the background
+	// job is up.
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
@@ -193,10 +188,16 @@ func newUserGroupAPIFixture(t *testing.T) *userGroupAPIFixture {
 		close(done)
 	}()
 	t.Cleanup(func() { cancel(); <-done })
-	select {
-	case <-lock.released:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the boot sync didn't finish")
+	admin := service.UserGroupActor{ID: "u-admin", Role: model.SystemRoleAdmin}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := svc.SyncNow(context.Background(), admin); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("Sync now never became available")
+		}
+		time.Sleep(time.Millisecond)
 	}
 
 	h := NewUserGroupHandler(svc)
@@ -262,7 +263,7 @@ func TestUserGroupHandler_SyncStatusAndSyncNow(t *testing.T) {
 		t.Fatalf("sync status = %d %s", rec.Code, rec.Body.String())
 	}
 
-	// Right after the boot sync: the cooldown answers 429 with the status.
+	// Right after the first sync: the cooldown answers 429 with the status.
 	rec = f.do(http.MethodPost, "/api/v1/usergroup-sync", f.adminJWT, "")
 	if rec.Code != http.StatusTooManyRequests || decodeBody[model.UserGroupSyncStatus](t, rec).FinishedAt == nil {
 		t.Fatalf("sync now in the cooldown = %d %s", rec.Code, rec.Body.String())

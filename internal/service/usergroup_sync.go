@@ -157,13 +157,14 @@ func (s *UserGroupService) SetSync(source UserGroupSource, users userGroupSyncUs
 // SyncConfigured reports whether a source is connected.
 func (s *UserGroupService) SyncConfigured() bool { return s.sync != nil }
 
-// RunSync syncs at once and then every interval until ctx ends. launch
-// starts a Sync now in the background (on ctx, tracked by the app).
+// RunSync syncs every interval until ctx ends, the first time one interval
+// after it starts: nothing at boot, so an instance that keeps restarting
+// never hammers Microsoft 365 or the table. Sync now works from the start;
+// launch runs it in the background (on ctx, tracked by the app).
 func (s *UserGroupService) RunSync(ctx context.Context, launch func(fn func())) {
 	s.sync.mu.Lock()
 	s.sync.ctx, s.sync.launch = ctx, launch
 	s.sync.mu.Unlock()
-	s.syncIsolated(ctx, userGroupSyncScheduled)
 	ticker := time.NewTicker(s.sync.interval)
 	defer ticker.Stop()
 	for {

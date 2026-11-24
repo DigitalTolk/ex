@@ -663,17 +663,25 @@ func waitForCalls(t *testing.T, src *fakeSource, n int64) {
 	}
 }
 
-func TestRunSync_RunsAtOnceThenOnSchedule(t *testing.T) {
+// Nothing syncs at boot: an instance that keeps restarting must not hit
+// Microsoft 365 and the table each time. The first run comes one interval in.
+func TestRunSync_FirstRunsOneIntervalIn(t *testing.T) {
 	f := newSyncFixture()
 	f.source.set(entraGroup("g-1", "eng"))
-	f.svc.sync.interval = 5 * time.Millisecond
+	const interval = 200 * time.Millisecond
+	f.svc.sync.interval = interval
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
+	started := time.Now()
 	go func() {
 		f.svc.RunSync(ctx, func(fn func()) { fn() })
 		close(done)
 	}()
-	waitForCalls(t, f.source, 3)
+	waitForCalls(t, f.source, 1)
+	if elapsed := time.Since(started); elapsed < interval {
+		t.Fatalf("the first run came %v after the start, before one interval (%v)", elapsed, interval)
+	}
+	waitForCalls(t, f.source, 2)
 	cancel()
 	<-done
 }

@@ -76,7 +76,7 @@ func (a *App) startBackground() {
 		go a.track(func() { c.directorySync.Run(ctx, a.cfg.MSProfileSyncInterval) })()
 		go a.track(func() { c.directorySync.RunStatus(ctx, a.cfg.MSStatusSyncInterval) })()
 	}
-	// User groups from Microsoft 365: a sync at boot, then every interval;
+	// User groups from Microsoft 365: every interval, never at boot;
 	// an admin's Sync now runs on the same context, tracked like the rest.
 	if c.userGroups.SyncConfigured() {
 		go a.track(func() {
