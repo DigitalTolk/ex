@@ -66,7 +66,8 @@ type ServerEngine struct {
 	// connector one: the connector guard refuses loopback.
 	runAPIHTTP *http.Client
 	// inferenceProfiles is the application inference profile each model is
-	// called through (model id → profile ARN); empty sends model ids as given.
+	// called through (model id → profile ARN); a model with no entry is
+	// called by its own id.
 	inferenceProfiles map[string]string
 	// afterRun is a test seam observing run completion (nil in production).
 	afterRun func(runID string)
@@ -74,8 +75,9 @@ type ServerEngine struct {
 
 // SetInferenceProfiles names the application inference profile to call each
 // model through (model id → profile ARN). The profile is what attributes a
-// call's cost to this deployment, so once any are set a run whose model has
-// none is refused rather than called untagged.
+// call's cost to this deployment. A model with no entry is called by its own
+// id: whether calls outside a profile are allowed is the AWS account's policy
+// to decide, not this server's.
 func (e *ServerEngine) SetInferenceProfiles(profiles map[string]string) {
 	e.inferenceProfiles = profiles
 }
@@ -83,16 +85,6 @@ func (e *ServerEngine) SetInferenceProfiles(profiles map[string]string) {
 // InferenceProfileCount reports how many models are called through an
 // inference profile; 0 means model ids go to Bedrock as given.
 func (e *ServerEngine) InferenceProfileCount() int { return len(e.inferenceProfiles) }
-
-// inferenceProfile resolves the profile a model is called through. ok is
-// false only when profiles are set and this model has none.
-func (e *ServerEngine) inferenceProfile(modelID string) (arn string, ok bool) {
-	if len(e.inferenceProfiles) == 0 {
-		return "", true
-	}
-	arn, ok = e.inferenceProfiles[modelID]
-	return arn, ok
-}
 
 // SetRunAPIBase wires the loopback address of the server's own run-tool API
 // (e.g. "http://127.0.0.1:8080"); empty leaves the bridged tools off.
@@ -172,19 +164,6 @@ func (e *ServerEngine) execute(runID string) {
 	// model call, exactly as a runner's first heartbeat does.
 	report(RunEventInput{Type: "state", Payload: map[string]any{"state": "running"}})
 
-	// Refuse a model with no inference profile before spending anything on
-	// it: the call would go out untagged, and where the deployment only lets
-	// profiles through, come back as an access error that reads like an
-	// outage. The reason names the model so the thread can say which one.
-	profileARN, enabled := e.inferenceProfile(asg.Model)
-	if !enabled {
-		slog.WarnContext(ctx, "server engine: model has no inference profile", "runID", run.ID, "model", asg.Model)
-		if failErr := e.orch.FailRun(ctx, run.OwnerID, serverRunnerID, run.ID, "model_not_enabled:"+asg.Model); failErr != nil {
-			slog.WarnContext(ctx, "server engine: fail after model check", "runID", run.ID, "error", failErr)
-		}
-		return
-	}
-
 	tools, toolsDesc, err := e.buildTools(ctx, run, asg.MCPToken, func(text string) {
 		report(RunEventInput{Type: "progress", Payload: map[string]any{"text": text}})
 	})
@@ -200,7 +179,7 @@ func (e *ServerEngine) execute(runID string) {
 	turns := bedrock.TurnBudget(run.Limits.TurnsFor(run.Mode))
 	finalText, usage, loopErr := bedrock.Run(runCtx, e.client, bedrock.Config{
 		ModelID:             asg.Model,
-		InferenceProfileARN: profileARN,
+		InferenceProfileARN: e.inferenceProfiles[asg.Model],
 		System:              serverSystemRules(asg, toolsDesc, turns),
 		Prompt:              asg.Prompt + "\n\n" + asg.ContextBundle + filesNote,
 		Attachments:         files,

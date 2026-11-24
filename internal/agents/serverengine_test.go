@@ -232,52 +232,27 @@ func TestServerEngine_CallsThroughInferenceProfile(t *testing.T) {
 	}
 }
 
-// A model with no profile is refused before any call. Letting it through
-// would send an untagged call, and Bedrock would answer with an access error
-// that reads like an outage.
-func TestServerEngine_ModelWithoutInferenceProfileFailsRun(t *testing.T) {
+// A model with no profile is still called, by its own id. Whether a call
+// outside a profile is allowed is the AWS account's policy to decide, so a
+// deployment with a partial map, and no such policy, keeps working.
+func TestServerEngine_ModelWithoutInferenceProfileCallsModelID(t *testing.T) {
 	fx := newOrchFixture(t)
 	run := fx.startRun(t)
 
-	fb := &fakeBedrock{outs: []*bedrockruntime.ConverseOutput{bedrockText("never sent")}}
+	fb := &fakeBedrock{outs: []*bedrockruntime.ConverseOutput{bedrockText("done")}}
 	e := NewServerEngine(fx.orch, nil, fb)
 	e.SetInferenceProfiles(map[string]string{"eu.example.other-model": "arn:aws:bedrock:eu-north-1:111122223333:application-inference-profile/abc123"})
 	dispatchAndWait(t, e, run.ID)
 
 	got, _ := fx.runs.GetRun(context.Background(), run.ID)
-	if got.State != model.RunStateFailed || got.FailReason != "model_not_enabled:"+run.Model {
-		t.Fatalf("expected model_not_enabled failure, got %s/%q", got.State, got.FailReason)
+	if got.State != model.RunStateCompleted {
+		t.Fatalf("state: %s (fail=%q)", got.State, got.FailReason)
 	}
-	if len(fb.calls) != 0 {
-		t.Fatalf("Bedrock was called %d times for a model with no profile", len(fb.calls))
+	if len(fb.calls) != 1 {
+		t.Fatalf("Bedrock was called %d times, want 1", len(fb.calls))
 	}
-	if post := fx.msgs.lastPost(); !strings.Contains(post, "isn't enabled") || !strings.Contains(post, run.Model) {
-		t.Fatalf("the thread must say which model is not enabled: %q", post)
-	}
-}
-
-func TestServerEngine_ModelWithoutInferenceProfileAndFailRunFailure(t *testing.T) {
-	// The model has no profile AND the fail-run write fails (row dropped after
-	// the state report) — the engine survives both and still calls nothing.
-	fx := newOrchFixture(t)
-	run := fx.startRun(t)
-	var gets int
-	fx.runs.onGetRun = func(id string) {
-		if id == run.ID {
-			gets++
-			if gets == 3 { // 1 claim, 2 state report, 3 FailRun
-				fx.runs.dropRun(run.ID)
-			}
-		}
-	}
-
-	fb := &fakeBedrock{}
-	e := NewServerEngine(fx.orch, nil, fb)
-	e.SetInferenceProfiles(map[string]string{"eu.example.other-model": "arn:aws:bedrock:eu-north-1:111122223333:application-inference-profile/abc123"})
-	dispatchAndWait(t, e, run.ID)
-
-	if len(fb.calls) != 0 {
-		t.Fatalf("Bedrock was called %d times for a model with no profile", len(fb.calls))
+	if id := aws.ToString(fb.calls[0].ModelId); id != run.Model {
+		t.Fatalf("Converse model id = %q, want the model's own id %q", id, run.Model)
 	}
 }
 

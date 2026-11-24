@@ -189,9 +189,8 @@ type Config struct {
 	// BedrockInferenceProfiles names the application inference profile each
 	// model is called through, as a JSON object of model id → profile ARN.
 	// The profile carries the deployment's cost-allocation tags, so a call
-	// through it is attributed to this deployment; with the map set, a model
-	// that has no entry is refused instead of being called untagged. Empty →
-	// model ids go to Bedrock as given.
+	// through it is attributed to this deployment. A model with no entry, and
+	// every model when this is empty, is called by its own id.
 	BedrockInferenceProfiles InferenceProfiles `env:"BEDROCK_INFERENCE_PROFILES"`
 
 	// SentryFrontendDSN, when non-empty, enables Sentry error reporting in the
