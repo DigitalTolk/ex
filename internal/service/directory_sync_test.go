@@ -264,3 +264,151 @@ func TestDirectorySyncSweepSkipsBots(t *testing.T) {
 		t.Errorf("bot status = %q, want it left active", got)
 	}
 }
+
+// A name, department or job title changed in Entra reaches everyone without
+// waiting for the owner's next login: the sweep writes it, reindexes the
+// renamed user for search and broadcasts the new values.
+func TestDirectorySyncSweepSyncsNameDepartmentAndTitle(t *testing.T) {
+	dir := &stubDirectoryLookup{profile: &DirectoryProfile{
+		ObjectID:    "oid-1",
+		DisplayName: "Alice Andersson",
+		Phone:       "+1",
+		Department:  "Engineering",
+		Squad:       "Platform",
+		JobTitle:    "Staff Engineer",
+		Manager:     &model.UserManager{DisplayName: "Boss"},
+	}}
+	u := oidcUser("u1", "a@x.se", "+1")
+	u.DisplayName, u.MSObjectID = "Alice Smith", "oid-1"
+	u.Department, u.JobTitle = "Sales", "Engineer"
+	u.Manager = &model.UserManager{DisplayName: "Boss"}
+	env := setupDirectorySync(dir, []*model.User{u})
+	idx := &stubUserIndexer{}
+	env.svc.SetIndexer(idx)
+
+	env.svc.Sweep(context.Background(), time.Hour)
+
+	got := env.users.users["u1"]
+	if got.DisplayName != "Alice Andersson" || got.Department != "Engineering" || got.Squad != "Platform" || got.JobTitle != "Staff Engineer" {
+		t.Fatalf("not synced: name=%q department=%q squad=%q title=%q", got.DisplayName, got.Department, got.Squad, got.JobTitle)
+	}
+	if len(idx.indexed) != 1 || idx.indexed[0] != "u1" {
+		t.Errorf("indexed = %v, want the renamed user reindexed", idx.indexed)
+	}
+	updates := userUpdatedEvents(t, env.pub)
+	if len(updates) != 1 {
+		t.Fatalf("user.updated events = %d, want 1", len(updates))
+	}
+	ev := updates[0]
+	if ev["displayName"] != "Alice Andersson" || ev["department"] != "Engineering" || ev["squad"] != "Platform" || ev["jobTitle"] != "Staff Engineer" {
+		t.Errorf("event = %v, want the new name, department and title", ev)
+	}
+}
+
+func TestDirectorySyncSweepEachDirectoryFieldCountsAsAChange(t *testing.T) {
+	base := func() *model.User {
+		u := oidcUser("u1", "a@x.se", "+1")
+		u.DisplayName, u.MSObjectID, u.Department, u.JobTitle = "Alice", "oid-1", "Eng", "Dev"
+		return u
+	}
+	profile := func() *DirectoryProfile {
+		return &DirectoryProfile{ObjectID: "oid-1", DisplayName: "Alice", Phone: "+1", Department: "Eng", JobTitle: "Dev"}
+	}
+	for name, edit := range map[string]func(*DirectoryProfile){
+		"unchanged":  func(*DirectoryProfile) {},
+		"department": func(dp *DirectoryProfile) { dp.Department = "Ops" },
+		"squad":      func(dp *DirectoryProfile) { dp.Squad = "Platform" },
+		"job title":  func(dp *DirectoryProfile) { dp.JobTitle = "Lead" },
+		"name":       func(dp *DirectoryProfile) { dp.DisplayName = "Alicia" },
+		// The directory reporting no name never blanks the stored one.
+		"no name": func(dp *DirectoryProfile) { dp.DisplayName = "" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			dp := profile()
+			edit(dp)
+			env := setupDirectorySync(&stubDirectoryLookup{profile: dp}, []*model.User{base()})
+			env.svc.Sweep(context.Background(), time.Hour)
+			want := 1
+			if name == "unchanged" || name == "no name" {
+				want = 0
+			}
+			if got := len(userUpdatedEvents(t, env.pub)); got != want {
+				t.Errorf("user.updated events = %d, want %d", got, want)
+			}
+			if env.users.users["u1"].DisplayName == "" {
+				t.Error("stored name was blanked")
+			}
+		})
+	}
+}
+
+// indexedUsers records what the index was given, not just whom.
+type indexedUsers struct{ got []model.User }
+
+func (i *indexedUsers) IndexUser(_ context.Context, u *model.User) error {
+	i.got = append(i.got, *u)
+	return nil
+}
+func (i *indexedUsers) DeleteUser(context.Context, string) error { return nil }
+
+// Regression: the sweep reindexed the copy from its page read, so an
+// account the status sweep deactivated meanwhile showed in search as active.
+func TestDirectorySyncSweepIndexesTheStoredUserNotThePageCopy(t *testing.T) {
+	dir := &stubDirectoryLookup{profile: &DirectoryProfile{ObjectID: "oid-1", DisplayName: "Alicia", Phone: "+1"}}
+	page := oidcUser("u1", "a@x.se", "+1")
+	page.DisplayName, page.MSObjectID, page.Status = "Alice", "oid-1", "active"
+	env := setupDirectorySync(dir, []*model.User{page})
+	stored := *page
+	stored.Status = "deactivated"
+	env.users.users["u1"] = &stored
+	idx := &indexedUsers{}
+	env.svc.SetIndexer(idx)
+
+	env.svc.Sweep(context.Background(), time.Hour)
+
+	if len(idx.got) != 1 || idx.got[0].Status != "deactivated" || idx.got[0].DisplayName != "Alicia" {
+		t.Fatalf("indexed %+v, want the stored (deactivated) account under its new name", idx.got)
+	}
+}
+
+// A re-read that fails leaves the index alone rather than writing the stale
+// page copy.
+func TestDirectorySyncSweepSkipsIndexingWhenTheReReadFails(t *testing.T) {
+	dir := &stubDirectoryLookup{profile: &DirectoryProfile{ObjectID: "oid-1", DisplayName: "Alicia", Phone: "+1"}}
+	page := oidcUser("u1", "a@x.se", "+1")
+	page.DisplayName, page.MSObjectID = "Alice", "oid-1"
+	env := setupDirectorySync(dir, []*model.User{page})
+	env.users.getUserErr = errors.New("dynamo down")
+	idx := &indexedUsers{}
+	env.svc.SetIndexer(idx)
+
+	env.svc.Sweep(context.Background(), time.Hour)
+
+	if len(idx.got) != 0 {
+		t.Fatalf("indexed %+v after a failed re-read", idx.got)
+	}
+	if len(userUpdatedEvents(t, env.pub)) != 1 {
+		t.Fatal("the change itself must still be broadcast")
+	}
+}
+
+// Regression: with no directory name, the sweep still wrote back the name
+// from its page read, undoing a rename a login made meanwhile.
+func TestDirectorySyncSweepWithoutADirectoryNameKeepsAConcurrentRename(t *testing.T) {
+	dir := &stubDirectoryLookup{profile: &DirectoryProfile{ObjectID: "oid-1", Phone: "+1", Department: "Ops"}}
+	page := oidcUser("u1", "a@x.se", "+1")
+	page.DisplayName, page.MSObjectID = "Old Name", "oid-1"
+	env := setupDirectorySync(dir, []*model.User{page})
+	stored := *page
+	stored.DisplayName = "New Name"
+	env.users.users["u1"] = &stored
+
+	env.svc.Sweep(context.Background(), time.Hour)
+
+	if got := env.users.users["u1"]; got.DisplayName != "New Name" || got.Department != "Ops" {
+		t.Fatalf("stored name=%q department=%q, want the login's rename kept and the department synced", got.DisplayName, got.Department)
+	}
+	if ev := userUpdatedEvents(t, env.pub); len(ev) != 1 || ev[0]["displayName"] != "New Name" {
+		t.Fatalf("user.updated = %v, want one event carrying the stored name", ev)
+	}
+}

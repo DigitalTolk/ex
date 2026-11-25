@@ -769,10 +769,34 @@ func (s *UserService) PatchTimeZoneIfChanged(ctx context.Context, userID, timeZo
 	return user, nil
 }
 
+// canonicalTimeZones maps zones the IANA database renamed to their current
+// names. Browsers on an older zone database report the retired spelling
+// ("Europe/Kiev"), which profiles would then show; storing the current name
+// keeps every surface on it, and a stored retired name heals on the owner's
+// next time-zone report. The client applies the same map (src/lib/user-time.ts).
+var canonicalTimeZones = map[string]string{
+	"Europe/Kiev":       "Europe/Kyiv",
+	"Europe/Uzhgorod":   "Europe/Kyiv",
+	"Europe/Zaporozhye": "Europe/Kyiv",
+	"Asia/Calcutta":     "Asia/Kolkata",
+	"Asia/Saigon":       "Asia/Ho_Chi_Minh",
+	"Asia/Katmandu":     "Asia/Kathmandu",
+	"Asia/Rangoon":      "Asia/Yangon",
+	"Asia/Dacca":        "Asia/Dhaka",
+	"Asia/Thimbu":       "Asia/Thimphu",
+	"Asia/Ulan_Bator":   "Asia/Ulaanbaatar",
+	"Atlantic/Faeroe":   "Atlantic/Faroe",
+	"America/Godthab":   "America/Nuuk",
+	"Pacific/Enderbury": "Pacific/Kanton",
+}
+
 func normalizeWritableTimeZone(timeZone string) (string, bool) {
 	timeZone = strings.TrimSpace(timeZone)
 	if timeZone == "" {
 		return "", true
+	}
+	if current, ok := canonicalTimeZones[timeZone]; ok {
+		timeZone = current
 	}
 	if _, err := time.LoadLocation(timeZone); err != nil {
 		return "", false

@@ -488,6 +488,9 @@ export default function ChatPage() {
           ...(updated.timeZone !== undefined ? { timeZone: updated.timeZone } : {}),
           ...(updated.lastSeenAt !== undefined ? { lastSeenAt: updated.lastSeenAt } : {}),
           ...(updated.phone !== undefined ? { phone: updated.phone } : {}),
+          ...(updated.department !== undefined ? { department: updated.department } : {}),
+          ...(updated.squad !== undefined ? { squad: updated.squad } : {}),
+          ...(updated.jobTitle !== undefined ? { jobTitle: updated.jobTitle } : {}),
           ...(updated.manager !== undefined ? { manager: updated.manager ?? undefined } : {}),
         });
       }

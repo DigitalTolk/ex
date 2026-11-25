@@ -150,14 +150,17 @@ describe('UserHoverCard browser', () => {
     expect(document.body.textContent).toContain('Boss Person');
   });
 
-  it('orders rows as contact info (Email, Phone, Manager) then the time group — matching the Directory page', async () => {
+  it('orders rows as contact info (Email, Phone, Title, Department, Squad, Manager) then the time group — matching the Directory page', async () => {
     apiFetchMock.mockResolvedValue({
       id: 'u-1',
       displayName: 'Alice',
       email: 'alice@example.com',
       phone: '+46 70 123 45 67',
+      jobTitle: 'Staff Engineer',
+      department: 'Engineering',
+      squad: 'Platform',
       manager: { displayName: 'Boss Person' },
-      timeZone: 'Asia/Tokyo',
+      timeZone: 'Europe/Kiev',
       lastSeenAt: '2026-07-13T10:00:00Z',
       status: 'active',
       userStatus: undefined,
@@ -172,7 +175,13 @@ describe('UserHoverCard browser', () => {
     (document.querySelector('[data-testid="order-trigger"]') as HTMLElement).click();
     await expect.element(page.getByText('Boss Person')).toBeVisible();
     const labels = Array.from(document.querySelectorAll('dl dt')).map((d) => d.textContent);
-    expect(labels).toEqual(['Email', 'Phone', 'Manager', 'Local time', 'Timezone', 'Last seen']);
+    expect(labels).toEqual(['Email', 'Phone', 'Title', 'Department', 'Squad', 'Manager', 'Local time', 'Timezone', 'Last seen']);
+    expect(document.body.textContent).toContain('Staff Engineer');
+    expect(document.body.textContent).toContain('Engineering');
+    expect(document.body.textContent).toContain('Platform');
+    // A zone stored under its retired name shows under the current one.
+    expect(document.body.textContent).toContain('Kyiv, Europe');
+    expect(document.body.textContent).not.toContain('Kiev');
   });
 
   it('omits the phone and manager rows when the directory attributes are absent', async () => {
@@ -194,6 +203,9 @@ describe('UserHoverCard browser', () => {
     await expect.element(page.getByText('alice@example.com')).toBeVisible();
     expect(document.body.textContent).not.toContain('Phone');
     expect(document.body.textContent).not.toContain('Manager');
+    expect(document.body.textContent).not.toContain('Title');
+    expect(document.body.textContent).not.toContain('Department');
+    expect(document.body.textContent).not.toContain('Squad');
   });
 
   it('dismisses the open card with Escape (PopoverPortal onDismiss closes it)', async () => {

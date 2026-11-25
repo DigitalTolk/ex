@@ -1,4 +1,7 @@
 import { partsInTimeZone } from '@/lib/datetime-input';
+import { canonicalTimeZone, currentTimeZoneName, engineAccepts, engineTimeZone } from '@/lib/time-zone-names';
+
+export { canonicalTimeZone } from '@/lib/time-zone-names';
 
 // The formatters here are built once and reused (per zone where they take
 // one): the members directory formats every member's last-seen time, local
@@ -26,43 +29,32 @@ const clockFormats = new Map<string, Intl.DateTimeFormat>();
 export function formatLocalTime(timeZone: string, at = new Date()): string {
   let format = clockFormats.get(timeZone);
   if (!format) {
-    format = new Intl.DateTimeFormat(undefined, { timeZone, hour: 'numeric', minute: '2-digit' });
+    format = new Intl.DateTimeFormat(undefined, { timeZone: engineTimeZone(timeZone), hour: 'numeric', minute: '2-digit' });
     clockFormats.set(timeZone, format);
   }
   return format.format(at);
 }
 
-// localTimeZone is the viewer's IANA zone — what "8am" means to them. A
-// browser that can't report one gives '' and the server decides (the
-// profile's zone, then UTC).
+// localTimeZone is the viewer's IANA zone — what "8am" means to them — under
+// its current name. A browser that can't report one gives '' and the server
+// decides (the profile's zone, then UTC).
 export function localTimeZone(): string {
   try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+    return currentTimeZoneName(Intl.DateTimeFormat().resolvedOptions().timeZone || '');
   } catch {
     return '';
   }
 }
 
-const zoneValidity = new Map<string, boolean>();
-
+// isValidTimeZone: a zone this engine can format, under the name given or,
+// for a renamed zone, the retired one it knows.
 export function isValidTimeZone(timeZone?: string | null): timeZone is string {
-  if (!timeZone) return false;
-  let valid = zoneValidity.get(timeZone);
-  if (valid === undefined) {
-    try {
-      new Intl.DateTimeFormat('en-US', { timeZone }).format(new Date(0));
-      valid = true;
-    } catch {
-      valid = false;
-    }
-    zoneValidity.set(timeZone, valid);
-  }
-  return valid;
+  return !!timeZone && engineAccepts(engineTimeZone(timeZone));
 }
 
 export function formatTimeZoneName(timeZone?: string): string | null {
   if (!isValidTimeZone(timeZone)) return null;
-  const parts = timeZone.split('/');
+  const parts = canonicalTimeZone(timeZone).split('/');
   if (parts.length === 1) return parts[0].replaceAll('_', ' ');
   /* istanbul ignore next -- parts comes from a non-empty string split, so .at(-1) is always a string; the ?? timeZone arm is defensive. */
   const city = parts.at(-1)?.replaceAll('_', ' ') ?? timeZone;

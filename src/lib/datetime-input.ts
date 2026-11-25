@@ -3,6 +3,8 @@
 // and the message reminder picker (browser-local). Centralised so the
 // zero-padded `YYYY-MM-DDTHH:mm` format and the timezone math live in one place.
 
+import { engineTimeZone } from '@/lib/time-zone-names';
+
 export function pad(n: number): string {
   return String(n).padStart(2, '0');
 }
@@ -18,7 +20,7 @@ function partsFormat(timeZone: string): Intl.DateTimeFormat {
   const format = new Intl.DateTimeFormat('en-CA', {
     // An empty string is an invalid IANA zone and throws RangeError; coerce it
     // to undefined so Intl falls back to the runtime's own zone instead.
-    timeZone: timeZone || undefined,
+    timeZone: engineTimeZone(timeZone) || undefined,
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',

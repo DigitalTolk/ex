@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/msgraph"
@@ -12,15 +14,41 @@ import (
 )
 
 // DirectoryProfile is the slice of the employee directory the app enriches
-// user profiles with at SSO login.
+// user profiles with at SSO login and in the periodic sweep.
 type DirectoryProfile struct {
 	// ObjectID is the directory's canonical id for the user (AAD object id).
 	ObjectID string
-	Phone    string
-	Manager  *model.UserManager
+	// DisplayName is the directory's name for the user. "" means the
+	// directory reported none, which never blanks the stored name.
+	DisplayName string
+	Phone       string
+	Department  string
+	// Squad is the squad (or squads, joined with ", ") the directory lists
+	// after the department.
+	Squad    string
+	JobTitle string
+	Manager     *model.UserManager
 }
 
-// DirectoryLookup resolves directory attributes (phone, manager) for a user.
+// fields is the directory-owned attribute set a profile writes.
+func (dp *DirectoryProfile) fields() store.UserDirectoryFields {
+	return store.UserDirectoryFields{Phone: dp.Phone, Department: dp.Department, Squad: dp.Squad, JobTitle: dp.JobTitle, Manager: dp.Manager}
+}
+
+// differsFrom reports whether applying dp would change anything on user —
+// the directory-owned attributes, the name, or the object id.
+func (dp *DirectoryProfile) differsFrom(user *model.User) bool {
+	return user.Phone != dp.Phone ||
+		user.Department != dp.Department ||
+		user.Squad != dp.Squad ||
+		user.JobTitle != dp.JobTitle ||
+		!user.Manager.Equal(dp.Manager) ||
+		(dp.DisplayName != "" && user.DisplayName != dp.DisplayName) ||
+		(dp.ObjectID != "" && user.MSObjectID != dp.ObjectID)
+}
+
+// DirectoryLookup resolves directory attributes (name, phone, department,
+// job title, manager) for a user.
 // Implementations must treat "user not in the directory" as (nil, nil) — only
 // transport/auth failures are errors. AuthService calls it fail-open: a
 // directory outage degrades to an un-enriched login, never a failed one.
@@ -39,7 +67,7 @@ type GraphDirectory interface {
 	ListUserAccounts(ctx context.Context) ([]msgraph.UserAccount, error)
 }
 
-// MSDirectoryService reads phone + manager from Microsoft Graph and resolves
+// MSDirectoryService reads the profile + manager from Microsoft Graph and resolves
 // the manager to an Ex user (by email) so profiles can link to them.
 type MSDirectoryService struct {
 	graph GraphDirectory
@@ -54,7 +82,7 @@ func NewMSDirectoryService(graph GraphDirectory, users UserStore) *MSDirectorySe
 // LookupProfile fetches the user's directory profile keyed by AAD object id
 // when known (robust against email != userPrincipalName), falling back to
 // email. A user missing from the directory yields (nil, nil). A manager
-// lookup failure degrades to a phone-only profile — half the enrichment beats
+// lookup failure degrades to a manager-less profile — half the enrichment beats
 // failing the login sync entirely.
 func (s *MSDirectoryService) LookupProfile(ctx context.Context, email, objectID string) (*DirectoryProfile, error) {
 	var profile *msgraph.UserProfile
@@ -73,7 +101,15 @@ func (s *MSDirectoryService) LookupProfile(ctx context.Context, email, objectID 
 		return nil, fmt.Errorf("directory: get user profile: %w", err)
 	}
 
-	dp := &DirectoryProfile{ObjectID: profile.ID, Phone: profile.Phone()}
+	department, squad := splitDepartment(profile.Department)
+	dp := &DirectoryProfile{
+		ObjectID:    profile.ID,
+		DisplayName: directoryName(profile.DisplayName),
+		Phone:       profile.Phone(),
+		Department:  department,
+		Squad:       squad,
+		JobTitle:    strings.TrimSpace(profile.JobTitle),
+	}
 
 	// Key the manager read by the profile's canonical object id — the input
 	// key may have been an email, which /users/{key}/manager would treat as
@@ -81,7 +117,7 @@ func (s *MSDirectoryService) LookupProfile(ctx context.Context, email, objectID 
 	manager, err := s.graph.GetUserManager(ctx, profile.ID)
 	if err != nil {
 		if !errors.Is(err, msgraph.ErrNotFound) {
-			slog.WarnContext(ctx, "directory: manager lookup failed; syncing phone only", "error", err)
+			slog.WarnContext(ctx, "directory: manager lookup failed; syncing profile without manager", "error", err)
 		}
 		return dp, nil
 	}
@@ -126,4 +162,23 @@ func (s *MSDirectoryService) managerRef(ctx context.Context, manager *msgraph.Us
 		}
 	}
 	return ref
+}
+
+// directoryName is the directory's name for a user under the app's own rule
+// for names: trimmed, and at most MaxUserDisplayNameLen characters.
+func directoryName(name string) string {
+	name = strings.TrimSpace(name)
+	if utf8.RuneCountInString(name) > MaxUserDisplayNameLen {
+		name = strings.TrimSpace(string([]rune(name)[:MaxUserDisplayNameLen]))
+	}
+	return name
+}
+
+// splitDepartment parses the directory's department field, which Cliffhub's
+// sync writes as "Department - Squad" (several squads joined with ", "). The
+// first " - " splits: a squad may contain one, and a hyphen inside a word
+// ("Sales-Ops") is no separator. A value without one is all department.
+func splitDepartment(value string) (department, squad string) {
+	department, squad, _ = strings.Cut(" "+strings.TrimSpace(value)+" ", " - ")
+	return strings.TrimSpace(department), strings.TrimSpace(squad)
 }

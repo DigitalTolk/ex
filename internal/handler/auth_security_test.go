@@ -206,7 +206,7 @@ func TestUserReadsHideContactDetailsFromGuests(t *testing.T) {
 	jwtMgr := testJWT()
 	users := newMockUserStore()
 	guest := &model.User{ID: "g-1", Email: "guest@example.com", SystemRole: model.SystemRoleGuest, Status: "active", AuthProvider: model.AuthProviderGuest}
-	member := &model.User{ID: "m-1", Email: "member@corp.example", DisplayName: "Member", Phone: "+46 70 1", Manager: &model.UserManager{DisplayName: "Boss"}, SystemRole: model.SystemRoleMember, Status: "active"}
+	member := &model.User{ID: "m-1", Email: "member@corp.example", DisplayName: "Member", Phone: "+46 70 1", Department: "Finance Ops", Squad: "Payables", JobTitle: "Controller", Manager: &model.UserManager{DisplayName: "Boss"}, SystemRole: model.SystemRoleMember, Status: "active"}
 	users.users[guest.ID], users.users[member.ID] = guest, member
 	users.emailIndex[guest.Email], users.emailIndex[member.Email] = guest, member
 	router := routerWithUsers(t, users, jwtMgr)
@@ -224,18 +224,23 @@ func TestUserReadsHideContactDetailsFromGuests(t *testing.T) {
 			t.Fatalf("%s %s = %d (%s)", target.method, target.path, rec.Code, rec.Body.String())
 		}
 		body := rec.Body.String()
-		if strings.Contains(body, "member@corp.example") || strings.Contains(body, "+46 70 1") || strings.Contains(body, "Boss") {
+		if strings.Contains(body, "member@corp.example") || strings.Contains(body, "+46 70 1") || strings.Contains(body, "Boss") ||
+			strings.Contains(body, "Finance Ops") || strings.Contains(body, "Payables") || strings.Contains(body, "Controller") {
 			t.Fatalf("%s %s leaked contact details to a guest: %s", target.method, target.path, body)
 		}
 		if !strings.Contains(body, `"m-1"`) {
 			t.Fatalf("%s %s dropped the user itself: %s", target.method, target.path, body)
 		}
 	}
-	// A member still sees them.
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, reqAs(t, jwtMgr, member, http.MethodGet, "/api/v1/users?all=true", ""))
-	if !strings.Contains(rec.Body.String(), "member@corp.example") {
-		t.Fatalf("members lost the roster's contact details: %s", rec.Body.String())
+	// A member still sees them, the directory's department and title
+	// included (the hover card and the Directory read them from here).
+	for _, path := range []string{"/api/v1/users?all=true", "/api/v1/users/m-1"} {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, reqAs(t, jwtMgr, member, http.MethodGet, path, ""))
+		body := rec.Body.String()
+		if !strings.Contains(body, "member@corp.example") || !strings.Contains(body, `"department":"Finance Ops"`) || !strings.Contains(body, `"squad":"Payables"`) || !strings.Contains(body, `"jobTitle":"Controller"`) {
+			t.Fatalf("GET %s: members lost the profile's directory details: %s", path, body)
+		}
 	}
 }
 

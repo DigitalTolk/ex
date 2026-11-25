@@ -1,6 +1,7 @@
 package service
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -344,24 +345,27 @@ func (s *AuthService) createOIDCUser(ctx context.Context, email string, info *OI
 	}
 
 	now := time.Now()
-	ns := model.DefaultNotificationSettingsForNewUser(info.Name)
+	dirProfile := s.lookupDirectory(ctx, email, info.ObjectID)
 	user := &model.User{
-		ID:                   store.NewID(),
-		Email:                email,
-		DisplayName:          info.Name,
-		AvatarURL:            info.Picture,
-		SystemRole:           role,
-		AuthProvider:         model.AuthProviderOIDC,
-		NotificationSettings: &ns,
-		Status:               "active",
-		LastSeenAt:           &now,
-		CreatedAt:            now,
-		UpdatedAt:            now,
-		MSObjectID:           info.ObjectID,
-		OIDCIssuer:           info.Issuer,
-		OIDCSubject:          info.Subject,
+		ID:           store.NewID(),
+		Email:        email,
+		DisplayName:  info.Name,
+		AvatarURL:    info.Picture,
+		SystemRole:   role,
+		AuthProvider: model.AuthProviderOIDC,
+		Status:       "active",
+		LastSeenAt:   &now,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+		MSObjectID:   info.ObjectID,
+		OIDCIssuer:   info.Issuer,
+		OIDCSubject:  info.Subject,
 	}
-	applyDirectoryProfile(user, s.lookupDirectory(ctx, email, info.ObjectID))
+	applyDirectoryProfile(user, dirProfile)
+	// Keywords follow the name the account ends up with (the directory's,
+	// when it has one), so a message naming them that way alerts them.
+	ns := model.DefaultNotificationSettingsForNewUser(user.DisplayName)
+	user.NotificationSettings = &ns
 	if err := s.users.CreateUser(ctx, user); err != nil {
 		if errors.Is(err, store.ErrAlreadyExists) {
 			return nil, ErrAccountExists
@@ -410,11 +414,18 @@ func (s *AuthService) refreshOIDCUser(ctx context.Context, user *model.User, inf
 	if user.MSObjectID == "" && info.ObjectID != "" {
 		patch.MSObjectID = &info.ObjectID
 	}
-	dirProfile := s.lookupDirectory(ctx, user.Email, info.ObjectID)
-	directoryChanged := dirProfile != nil &&
-		(user.Phone != dirProfile.Phone || !user.Manager.Equal(dirProfile.Manager))
+	// The account's bound object id when the token carries none: an email
+	// lookup alone could resolve another directory account.
+	dirProfile := s.lookupDirectory(ctx, user.Email, cmp.Or(info.ObjectID, user.MSObjectID))
+	directoryChanged := dirProfile != nil && dirProfile.differsFrom(user)
 	if dirProfile != nil {
-		patch.Directory = &store.UserDirectoryFields{Phone: dirProfile.Phone, Manager: dirProfile.Manager}
+		fields := dirProfile.fields()
+		patch.Directory = &fields
+		if dirProfile.DisplayName != "" {
+			// The directory is the source of truth for names; the ID
+			// token's name claim is only the fallback.
+			patch.DisplayName = &dirProfile.DisplayName
+		}
 		if user.MSObjectID == "" && patch.MSObjectID == nil && dirProfile.ObjectID != "" {
 			patch.MSObjectID = &dirProfile.ObjectID
 		}
@@ -434,7 +445,7 @@ func (s *AuthService) refreshOIDCUser(ctx context.Context, user *model.User, inf
 		}
 		return fmt.Errorf("auth: update user: %w", err)
 	}
-	user.DisplayName = info.Name
+	user.DisplayName = *patch.DisplayName
 	user.AvatarURL = info.Picture
 	user.LastSeenAt = &now
 	user.UpdatedAt = now
@@ -442,9 +453,7 @@ func (s *AuthService) refreshOIDCUser(ctx context.Context, user *model.User, inf
 	if patch.MSObjectID != nil {
 		user.MSObjectID = *patch.MSObjectID
 	}
-	if dirProfile != nil {
-		user.Phone, user.Manager = dirProfile.Phone, dirProfile.Manager
-	}
+	applyDirectoryProfile(user, dirProfile)
 	user.AuthProvider = model.AuthProviderOIDC
 	// Drop the cached profile and roster so the refreshed fields are visible
 	// immediately (UserService reads cache-first).
@@ -926,14 +935,20 @@ func (s *AuthService) authorizedInviteChannelIDs(ctx context.Context, inviterID 
 	return cleaned, nil
 }
 
-// applyDirectoryProfile stamps synced directory attributes onto a new user.
+// applyDirectoryProfile stamps synced directory attributes onto a user.
 // A nil profile (directory disabled, user not in the directory, or the lookup
 // failed) leaves the attributes untouched.
 func applyDirectoryProfile(user *model.User, dp *DirectoryProfile) {
 	if dp == nil {
 		return
 	}
+	if dp.DisplayName != "" {
+		user.DisplayName = dp.DisplayName
+	}
 	user.Phone = dp.Phone
+	user.Department = dp.Department
+	user.Squad = dp.Squad
+	user.JobTitle = dp.JobTitle
 	user.Manager = dp.Manager
 	if dp.ObjectID != "" {
 		user.MSObjectID = dp.ObjectID
