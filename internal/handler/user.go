@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/middleware"
@@ -27,6 +28,24 @@ func NewUserHandler(userSvc *service.UserService, s3 *storage.S3Client) *UserHan
 		return &UserHandler{userSvc: userSvc}
 	}
 	return &UserHandler{userSvc: userSvc, s3: s3}
+}
+
+// ListFrequentPeople returns the IDs of the people the caller mentions and
+// messages most, highest first, capped by the optional `limit` query
+// parameter. The composer's @-list puts them first.
+func (h *UserHandler) ListFrequentPeople(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.UserIDFromContext(r.Context())
+	if userID == "" {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+	limit, _ := strconv.Atoi(queryParam(r, "limit", ""))
+	ids, err := h.userSvc.FrequentPeople(r.Context(), userID, limit)
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, ids)
 }
 
 // GetMe returns the authenticated user's profile.
@@ -103,6 +122,35 @@ func (h *UserHandler) SetMyNotificationSettings(w http.ResponseWriter, r *http.R
 		return
 	}
 
+	writeJSON(w, http.StatusOK, user)
+}
+
+// SnoozeMyNotifications turns Do Not Disturb on for {"minutes": n}, or off
+// with 0.
+func (h *UserHandler) SnoozeMyNotifications(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.UserIDFromContext(r.Context())
+	if userID == "" {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+	var body struct {
+		Minutes int64 `json:"minutes"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
+		return
+	}
+	// Bounded before it becomes a duration, so a huge number can't overflow
+	// into a short or negative one.
+	if body.Minutes < 0 || body.Minutes > int64(service.MaxSnooze/time.Minute) {
+		writeError(w, http.StatusBadRequest, "invalid_minutes", "minutes is out of range")
+		return
+	}
+	user, err := h.userSvc.SnoozeNotifications(r.Context(), userID, time.Duration(body.Minutes)*time.Minute)
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, user)
 }
 

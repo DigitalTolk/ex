@@ -106,10 +106,12 @@ describe('isVideoAttachment', () => {
     expect(isVideoAttachment('VIDEO/X-M4V')).toBe(true);
     expect(isVideoAttachment('application/octet-stream', 'clip.MP4')).toBe(true);
     expect(isVideoAttachment('', 'clip.m4v')).toBe(true);
+    // A phone's .mov: QuickTime, which browsers play when the codec is theirs.
+    expect(isVideoAttachment('video/quicktime', 'IMG_0042.MOV')).toBe(true);
+    expect(isVideoAttachment('application/octet-stream', 'clip.mov')).toBe(true);
   });
 
   it('leaves other files to the download card', () => {
-    expect(isVideoAttachment('video/quicktime', 'clip.mov')).toBe(false);
     expect(isVideoAttachment('application/pdf', 'spec.pdf')).toBe(false);
     expect(isVideoAttachment('video/webm')).toBe(false);
   });

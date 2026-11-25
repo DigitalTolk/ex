@@ -1,5 +1,6 @@
 import { create } from 'zustand';
-import type { RunApprovalPayload } from '@/lib/ws-schemas';
+import { apiFetch } from '@/lib/api';
+import { runApprovalSchema, type RunApprovalPayload } from '@/lib/ws-schemas';
 
 // Pending agent-approval requests, per parent — fed by run.approval events.
 // A request appears when its state is "pending" and disappears the moment
@@ -93,11 +94,13 @@ function sweep(): void {
 // onRunApproval ingests a run.approval frame (request or settle), as its
 // schema parses it (lib/ws-schemas).
 export function onRunApproval(p: RunApprovalPayload): void {
-  if (!p.runID) return;
-  if (p.state !== 'pending') {
-    if (entries.delete(p.approvalID)) publish();
-    return;
-  }
+  if (ingest(p)) publish();
+}
+
+// ingest applies one frame and reports whether the cards changed.
+function ingest(p: RunApprovalPayload): boolean {
+  if (!p.runID) return false;
+  if (p.state !== 'pending') return entries.delete(p.approvalID);
   entries.set(p.approvalID, {
     approvalID: p.approvalID,
     runID: p.runID,
@@ -115,6 +118,30 @@ export function onRunApproval(p: RunApprovalPayload): void {
     deadline: p.deadline,
     updatedAt: Date.now(),
   });
+  return true;
+}
+
+// loadPendingApprovals asks the server what is still waiting on the caller.
+// Each card arrives once, as an event, so a page that loads (or comes back
+// from a gap in the socket) gets the cards it never saw, and drops the ones
+// whose settle it missed. A card an event delivered while the list was on
+// its way stays. A failed load keeps what is there.
+export async function loadPendingApprovals(): Promise<void> {
+  const asked = Date.now();
+  let res: { approvals?: unknown[] } | undefined;
+  try {
+    res = await apiFetch<{ approvals?: unknown[] }>('/api/v1/approvals/pending');
+  } catch {
+    return;
+  }
+  const listed = new Set<string>();
+  for (const raw of res?.approvals ?? []) {
+    const parsed = runApprovalSchema.safeParse(raw);
+    if (parsed.success && ingest(parsed.data)) listed.add(parsed.data.approvalID);
+  }
+  for (const [id, e] of entries) {
+    if (!listed.has(id) && e.updatedAt < asked) entries.delete(id);
+  }
   publish();
 }
 

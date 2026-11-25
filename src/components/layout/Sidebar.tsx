@@ -29,7 +29,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { isGuest } from '@/lib/roles';
+import { isAdmin, isGuest } from '@/lib/roles';
 import { useAuth } from '@/context/AuthContext';
 import { useUnread } from '@/context/UnreadContext';
 import { deviceKind } from '@/lib/device';
@@ -43,8 +43,12 @@ import { SidebarUnreadControls } from '@/components/layout/SidebarUnreadControls
 import { ChannelRow } from './ChannelRow';
 import { ConversationRow } from './ConversationRow';
 import { SidebarPageLinks } from './SidebarPageLinks';
+import { SidebarColumnHeader } from './SidebarColumnHeader';
+
+import { serverName } from '@/lib/server-identity';
 import { DeleteCategoryDialog, SidebarAddCategory } from './SidebarCategoryControls';
 import { CreateChannelDialog } from '@/components/channels/CreateChannelDialog';
+import { InviteDialog } from '@/components/InviteDialog';
 
 interface SidebarProps {
   onClose: () => void;
@@ -63,6 +67,10 @@ function SidebarSectionsSkeleton() {
     </div>
   );
 }
+
+// The quiet "+ Add …" row that ends a default section.
+const SECTION_ADD_ROW_CLASS =
+  'mt-1 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-gray-400 outline-none hover:bg-white/10 hover:text-white focus-visible:ring-2 focus-visible:ring-sidebar-ring mobile:hidden';
 
 export function Sidebar({ onClose }: SidebarProps) {
   const { user } = useAuth();
@@ -91,6 +99,7 @@ export function Sidebar({ onClose }: SidebarProps) {
   const pointerDevice = usePointerDevice();
   const dragDisabled = deviceKind() === 'touch' && !pointerDevice;
   const [createChannelOpen, setCreateChannelOpen] = useState(false);
+  const [inviteOpen, setInviteOpen] = useState(false);
   // null = closed; otherwise the section being deleted.
   const [categoryToDelete, setCategoryToDelete] = useState<{ id: string; title: string } | null>(null);
 
@@ -282,6 +291,15 @@ export function Sidebar({ onClose }: SidebarProps) {
 
   return (
     <div className="flex h-full w-full min-w-0 flex-col text-gray-300 touch:select-none touch:touch-pan-y touch:[-webkit-touch-callout:none] touch:[-webkit-user-select:none]">
+      {/* Off a phone the list has a header: the server this workspace runs
+          on, and the "+" that starts something new. */}
+      {!isMobile && (
+        <SidebarColumnHeader onNavigate={close}>
+          <h2 className="truncate px-1 text-lg leading-[150%] font-semibold text-sidebar-foreground" data-testid="sidebar-server-name">
+            {serverName()}
+          </h2>
+        </SidebarColumnHeader>
+      )}
       <ScrollArea
         className="min-h-0 w-full flex-1 mobile:touch-pan-y"
         scrollbarClassName="opacity-0 transition-opacity data-[scrolling]:opacity-100"
@@ -289,23 +307,27 @@ export function Sidebar({ onClose }: SidebarProps) {
       >
         {/* Bottom padding clears the home indicator on notched phones (the
             drawer is a full-height mobile surface with no bottom chrome). */}
-        {/* The extra top padding is the gap under the Home / Activity switch,
-            kept inside the scroller so rows scroll right up to the switch. */}
-        <div className="w-full min-w-0 space-y-1 p-2 pt-5 mobile:pt-2 mobile:pb-[calc(var(--bottom-safe-inset,env(safe-area-inset-bottom))+0.5rem)]">
-          {/* Threads first (Activity has its own sidebar mode — see the
-              Home / Activity switch above). */}
-          <SidebarPageLinks onClose={onClose} />
+        {/* The top padding is the gap under the list's header, kept inside
+            the scroller so rows scroll right up to it. */}
+        <div className="w-full min-w-0 space-y-1 p-2 pt-1 mobile:pt-2 mobile:pb-[calc(var(--bottom-safe-inset,env(safe-area-inset-bottom))+0.5rem)]">
+          {/* Phone: the pages lead the list, Agents & tools last (its tab bar
+              holds Home and Activity), then a break before the channels and DMs. On desktop
+              every page lives on the rail, so the list holds only chats,
+              channels and their categories. */}
+          {isMobile && (
+            <>
+              <SidebarPageLinks onClose={onClose} />
+              <div
+                data-testid="sidebar-top-divider"
+                role="separator"
+                className="my-2 h-px bg-white/10"
+              />
+            </>
+          )}
 
-          {/* Visual break between top-level pages and the channel/DM list. */}
-          <div
-            data-testid="sidebar-top-divider"
-            role="separator"
-            className="my-2 h-px bg-white/10"
-          />
-
-          {/* "Add category" sits above the sections so the affordance is
-              obvious before users scroll into the list; the unread view
-              options icon shares its row. */}
+          {/* "Add category" leads the sections (on desktop the header's "+"
+              opens the same field), and the unread view options share its
+              row. */}
           <div className="flex items-center gap-1">
             <div className="min-w-0 flex-1">
               <SidebarAddCategory />
@@ -329,7 +351,7 @@ export function Sidebar({ onClose }: SidebarProps) {
             aria-label="Channels and direct messages"
             data-testid="sidebar-primary-sections"
           >
-            {unreadOnly && (
+            {unreadOnly && isMobile && (
               <div
                 data-testid="sidebar-unread-only-strip"
                 className="mt-1 flex items-center justify-between rounded-md bg-white/5 px-2 py-1 text-xs text-gray-400 mobile:px-3 mobile:py-2 mobile:text-sm"
@@ -405,7 +427,7 @@ export function Sidebar({ onClose }: SidebarProps) {
               return (
                 <div
                   key={section.key}
-                  className={`relative ${spaced ? 'mt-5 mobile:mt-3' : 'mt-2'}`}
+                  className={`relative ${spaced ? 'mt-3' : 'mt-1 mobile:mt-2'}`}
                   data-testid={`sidebar-group-${section.key}`}
                 >
                   {categoryGap && <SidebarDropGap sectionKey={section.key} testId={`sidebar-drop-gap-cat-${section.key}`} />}
@@ -441,10 +463,38 @@ export function Sidebar({ onClose }: SidebarProps) {
                     {/* Tail gap: drop resolves past the last row (area 'end'). */}
                     {channelGap != null && channelGap.area === 'end' && <SidebarDropGap sectionKey={section.key} />}
                   </div>
+                  {/* Where the default sections grow from: more channels to
+                      join, more people to bring in. */}
+                  {!collapsedSections[section.key] && !unreadOnly && section.key === SidebarSectionKeys.Channels && (
+                    <a
+                      href="/directory/channels"
+                      onClick={(event) => {
+                        if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                        event.preventDefault();
+                        navigateTo('/directory/channels');
+                        close();
+                      }}
+                      className={SECTION_ADD_ROW_CLASS}
+                      data-testid="sidebar-add-channels"
+                    >
+                      <span className="flex h-5 w-5 shrink-0 items-center justify-center">
+                        <Plus className="h-4 w-4" aria-hidden="true" />
+                      </span>
+                      Add channels
+                    </a>
+                  )}
+                  {!collapsedSections[section.key] && !unreadOnly && section.key === SidebarSectionKeys.DirectMessages && isAdmin(user?.systemRole) && (
+                    <button type="button" onClick={() => setInviteOpen(true)} className={SECTION_ADD_ROW_CLASS} data-testid="sidebar-add-coworkers">
+                      <span className="flex h-5 w-5 shrink-0 items-center justify-center">
+                        <Plus className="h-4 w-4" aria-hidden="true" />
+                      </span>
+                      Add coworkers
+                    </button>
+                  )}
                   <PragmaticSection
                     data={{ type: 'channel-target', sectionKey: section.key, index: dropCount(section.key, visibleItems), area: 'end' }}
                     disabled={!acceptsDrops}
-                    className="min-h-2 pb-2"
+                    className="min-h-2 mobile:pb-2"
                     testID={acceptsDrops ? `sidebar-section-tail-drop-${section.key}` : undefined}
                   >
                     {/* Land-in-place: no drop line. The row itself re-sorts to
@@ -466,6 +516,7 @@ export function Sidebar({ onClose }: SidebarProps) {
         onOpenChange={setCreateChannelOpen}
       />
       <DeleteCategoryDialog category={categoryToDelete} onClose={() => setCategoryToDelete(null)} />
+      <InviteDialog open={inviteOpen} onOpenChange={setInviteOpen} />
     </div>
   );
 }

@@ -44,6 +44,7 @@ func (a *App) buildAgents(ctx context.Context) error {
 	ag.runnerTokens.SetPublisher(in.pubsub)
 	c.users.SetRunnerRevoker(ag.runnerTokens)
 	c.auth.SetRunnerRevoker(ag.runnerTokens)
+	ag.runnerTokens.UseWorkbenchURL(cfg.WorkbenchURL, cfg.WorkbenchToken, cfg.BaseURL)
 
 	// Agents-as-users + the run orchestrator. Additive: agents ride the
 	// existing user rows, runs/timelines are new RUN# items, fan-out uses the
@@ -52,6 +53,9 @@ func (a *App) buildAgents(ctx context.Context) error {
 	// Agent prefs are partitioned by user, so the admin panel's "how many
 	// people have their own settings" and its reset both walk the roster.
 	ag.svc.SetUserLister(in.users)
+	// Every model an admin or a member saves for an agent comes from the
+	// admin's list (Admin › Agents › Models).
+	ag.svc.SetModelCatalog(c.settings)
 	ag.orch = agents.NewOrchestrator(store.NewRunStore(in.db), ag.svc, cachedUserReader{c.users}, c.messages, in.pubsub, in.jwt)
 	c.users.SetAutomationStopper(ag.orch) // deactivating an account stops its agents
 	c.messages.SetAgentDispatcher(ag.orch)
@@ -86,6 +90,7 @@ func (a *App) buildAgents(ctx context.Context) error {
 	// Metabase) may be reached on a private 10.x address; no other host may.
 	agents.ConfigureConnectorDomains(ctx, cfg.ConnectorPrivateDomains)
 	ag.orch.SetConnectorRegistry(ag.connectors)
+	ag.orch.SetGitHost(cfg.AgentGitHost)
 	ag.engine = newServerEngine(cfg, ag.orch, ag.connectors)
 	if ag.engine != nil {
 		ag.orch.SetServerEngine(ag.engine)

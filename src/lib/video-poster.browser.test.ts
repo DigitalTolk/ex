@@ -84,6 +84,36 @@ describe('readVideoPoster', () => {
     await expect(pending).resolves.toMatchObject({ width: CLIP_WIDTH, height: CLIP_HEIGHT });
   });
 
+  // The frame callback is asked for before the seek starts, so a busy browser
+  // could paint the clip's black opening in between, and that frame was
+  // taken as the poster.
+  it('skips a frame painted while the seek is still under way', async () => {
+    const create = document.createElement.bind(document);
+    let video: HTMLVideoElement | undefined;
+    vi.spyOn(document, 'createElement').mockImplementation((tag: string, options?: ElementCreationOptions) => {
+      const el = create(tag, options);
+      if (tag === 'video') video = el as HTMLVideoElement;
+      return el;
+    });
+    const frames: VideoFrameRequestCallback[] = [];
+    vi.spyOn(HTMLVideoElement.prototype, 'requestVideoFrameCallback').mockImplementation((callback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    const seeking = vi.spyOn(HTMLVideoElement.prototype, 'seeking', 'get').mockReturnValue(true);
+    const pending = readVideoPoster(clipWebm());
+    await vi.waitFor(() => expect(frames).toHaveLength(1));
+
+    // Painted mid-seek: not the poster; the next frame is asked for instead.
+    frames[0](performance.now(), {} as VideoFrameCallbackMetadata);
+    expect(frames).toHaveLength(2);
+
+    seeking.mockReturnValue(false);
+    await vi.waitFor(() => expect(video!.readyState).toBeGreaterThanOrEqual(HTMLMediaElement.HAVE_CURRENT_DATA));
+    frames[1](performance.now(), {} as VideoFrameCallbackMetadata);
+    await expect(pending).resolves.toMatchObject({ width: CLIP_WIDTH, height: CLIP_HEIGHT });
+  });
+
   it('draws on `seeked` in a browser without frame callbacks', async () => {
     const own = Object.getOwnPropertyDescriptor(HTMLVideoElement.prototype, 'requestVideoFrameCallback')!;
     Object.defineProperty(HTMLVideoElement.prototype, 'requestVideoFrameCallback', { configurable: true, value: undefined });

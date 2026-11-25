@@ -70,6 +70,7 @@ func (a *App) buildHTTP(context.Context) error {
 	// Mail diagnostics: an admin can read the effective transport and send a
 	// real test message through it.
 	admin.SetMailer(c.mailer, cfg.EmailProvider, cfg.EmailFrom)
+	admin.SetWorkbenchEnabled(ag.runnerTokens.WorkbenchEnabled())
 	if s.client != nil {
 		admin.SetSearch(s.client, s.reindexer)
 		admin.SetMappingRebuilder(s.mappingRebuilder)
@@ -129,6 +130,7 @@ func (a *App) buildHTTP(context.Context) error {
 		Webhook:      handler.NewWebhookHandler(c.webhooks),
 		Interaction:  handler.NewInteractionHandler(c.interactions),
 		Bot:          handler.NewBotHandler(c.bots),
+		UserGroup:    handler.NewUserGroupHandler(c.userGroups),
 		Mattermost:   handler.NewMattermostHandler(c.bots, c.users, c.mattermost),
 		Activity:     handler.NewActivityHandler(c.activity, c.reminders),
 		Command:      handler.NewCommandHandler(c.commands),

@@ -18,8 +18,10 @@ export const queryKeys = {
   // The deployed server build (hooks/useServerVersion).
   serverVersion: () => ['server-version'] as const,
   runnerTokens: () => ['runner-tokens'] as const,
+  workbenchStatus: () => ['runner-tokens', 'workbench'] as const,
   emojis: () => ['emojis'] as const,
   frequentEmojis: () => ['emojis', 'frequent'] as const,
+  frequentPeople: () => ['users', 'frequent-people'] as const,
   sidebarCategories: () => ['sidebarCategories'] as const,
 
   // Channels
@@ -97,6 +99,16 @@ export const queryKeys = {
   // Bot accounts (admin page); a bot's tokens sit under it.
   bots: () => ['bots'] as const,
   botTokens: (botID: string) => ['bots', botID, 'tokens'] as const,
+  // User groups: the list (enabled, or all), one group with its members,
+  // and the groups one person belongs to. usergroup.changed invalidates the
+  // whole 'usergroups' prefix.
+  userGroups: (includeDisabled: boolean) => ['usergroups', 'list', includeDisabled] as const,
+  userGroup: (id: string) => ['usergroups', 'detail', id] as const,
+  userGroupsForUser: (userId: string) => ['usergroups', 'user', userId] as const,
+  userGroupsAll: () => ['usergroups'] as const,
+  userGroupPermissions: () => ['usergroups', 'permissions'] as const,
+  // How the groups' sync from Microsoft 365 went (admins).
+  userGroupSync: () => ['usergroups', 'sync'] as const,
   // Projects page (products + design references). project(key) nests under
   // projects() so one invalidation refreshes the list and every open detail.
   projects: () => ['projects'] as const,

@@ -320,6 +320,10 @@ func (s *hrunnerCovRunStore) ConsumeApproval(_ context.Context, runID, approvalI
 	return nil
 }
 
+func (s *hrunnerCovRunStore) ListPendingApprovals(context.Context, string) ([]*model.Approval, error) {
+	return nil, nil
+}
+
 func (s *hrunnerCovRunStore) ListApprovals(_ context.Context, runID string) ([]*model.Approval, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1858,4 +1862,9 @@ func TestHrunnerCovLinkMessage(t *testing.T) {
 			t.Errorf("url = %v, want %s", got["url"], want)
 		}
 	})
+}
+
+func (s hrunnerCovConvStore) SetMuted(context.Context, string, string, bool) error { return nil }
+func (s hrunnerCovConvStore) ConversationMuted(context.Context, string, string) (bool, error) {
+	return false, nil
 }

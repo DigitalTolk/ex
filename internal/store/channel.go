@@ -232,7 +232,9 @@ func (s *ChannelStoreImpl) GetByName(ctx context.Context, name string) (*model.C
 type ChannelPatch struct {
 	// Description "" removes it.
 	Description *string
-	Archived    *bool
+	// Icon "" removes it.
+	Icon     *string
+	Archived *bool
 	// MakePrivate turns a public channel private, taking it out of the
 	// public listing (GSI2) the directory and channel browser read.
 	MakePrivate bool
@@ -247,6 +249,13 @@ func (s *ChannelStoreImpl) PatchChannel(ctx context.Context, id string, p Channe
 			upd = upd.Remove(expression.Name("description"))
 		} else {
 			upd = upd.Set(expression.Name("description"), expression.Value(*p.Description))
+		}
+	}
+	if p.Icon != nil {
+		if *p.Icon == "" {
+			upd = upd.Remove(expression.Name("icon"))
+		} else {
+			upd = upd.Set(expression.Name("icon"), expression.Value(*p.Icon))
 		}
 	}
 	if p.Archived != nil {

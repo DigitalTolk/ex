@@ -49,6 +49,9 @@ export interface NotificationSettings {
   ignoreGroupMentions: boolean;
   followAllThreads: boolean;
   keywords?: string[];
+  // Do Not Disturb: until then nothing alerts the user. Set through its own
+  // endpoint (see useDoNotDisturb).
+  snoozeUntil?: string;
 }
 
 // ChannelNotificationOverride is the per-channel override payload. Each field
@@ -72,6 +75,8 @@ export interface Channel {
   name: string;
   slug: string;
   description?: string;
+  // An emoji (the glyph or its name) shown in place of the globe or lock.
+  icon?: string;
   type: 'public' | 'private';
   createdBy: string;
   archived: boolean;
@@ -471,6 +476,14 @@ export interface ChannelMembership {
   joinedAt: string;
 }
 
+// One model an admin offers for an engine (Admin › Agents › Models).
+export interface AgentModelOption {
+  harness: string;
+  id: string;
+  // What the dropdown shows; the id when blank.
+  label?: string;
+}
+
 export interface WorkspaceSettings {
   maxUploadBytes: number;
   allowedExtensions: string[];
@@ -485,6 +498,12 @@ export interface WorkspaceSettings {
   // Hosts whose links are shared SharePoint files ("*.example.com" matches
   // every subdomain); absent when SharePoint sharing is off.
   sharePointHosts?: string[];
+  // Connect to Claude on the Agents page: ex sets up a runner for the
+  // person on the shared agent workbench. Off unless the server has one.
+  workbenchEnabled?: boolean;
+  // The models agents may run on, per engine (Claude Code and Bedrock); the
+  // agent forms pick from these. Changed on Admin › Agents.
+  agentModels?: AgentModelOption[];
 }
 
 export interface IncomingWebhook {
@@ -570,6 +589,8 @@ export interface UserChannel {
   // Read-only: the channel is archived. Listed in the sidebar's Archived
   // section, history readable, nobody can post.
   archived?: boolean;
+  // The channel's emoji, drawn in place of its globe or lock.
+  icon?: string;
   muted?: boolean;
   favorite?: boolean;
   categoryID?: string;
@@ -613,6 +634,10 @@ export interface UserConversation {
   // Alerted-unread badge, mirroring UserChannel.unreadNotifyCount (DM
   // messages always alert unless muted).
   unreadNotifyCount?: number;
+  // The other side of this DM is a bot or a webhook: such a chat can be
+  // muted (a chat with a person can't). `muted` is the user's own choice.
+  bot?: boolean;
+  muted?: boolean;
   favorite?: boolean;
   categoryID?: string;
   sidebarPosition?: number;
@@ -671,7 +696,7 @@ export type ActivityType =
   | 'channel_added'
   | 'channel_message';
 
-export type MentionKind = 'user' | 'all' | 'here' | 'keyword';
+export type MentionKind = 'user' | 'all' | 'here' | 'keyword' | 'usergroup';
 
 export interface ActivityItem {
   id: string;
@@ -697,6 +722,9 @@ export interface ActivityItem {
   parentName?: string;
   // mention-only
   mentionKind?: MentionKind;
+  // usergroup mentions: the group that named the user.
+  userGroupID?: string;
+  userGroupHandle?: string;
   read?: boolean;
 }
 
@@ -799,6 +827,7 @@ export type WireDriftChecks = [
   AssertAssignable<Required<Attachment>, wire.Attachment>,
   AssertAssignable<Required<ChannelMembership>, wire.ChannelMembership>,
   AssertAssignable<Required<WorkspaceSettings>, wire.WorkspaceSettings>,
+  AssertAssignable<Required<AgentModelOption>, wire.AgentModelOption>,
   AssertAssignable<Required<IncomingWebhook>, wire.IncomingWebhook>,
   AssertAssignable<Required<UserChannel>, wire.UserChannel>,
   AssertAssignable<Required<SidebarCategory>, wire.UserChannelCategory>,

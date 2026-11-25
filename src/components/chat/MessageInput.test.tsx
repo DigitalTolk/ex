@@ -369,6 +369,47 @@ describe('MessageInput', () => {
     setMobileMatch(false);
   });
 
+  // Regression: the phone's edit composer emptied the moment Save was
+  // tapped, so an edit the server refused (a file it wouldn't take) was lost
+  // with nothing sent. It keeps everything until the save lands.
+  it('keeps an edit until its save lands, and all of it when the save is refused', async () => {
+    const user = userEvent.setup();
+    setMobileMatch(true);
+    let refuse!: (err: Error) => void;
+    const onSend = vi.fn(() => new Promise((_resolve, reject) => { refuse = reject; }));
+    render(<MessageInput onSend={onSend} initialBody="Edited text" submitLabel="Save" />);
+
+    const editor = await screen.findByLabelText('Message input');
+    await user.click(screen.getByLabelText('Save'));
+    expect(onSend).toHaveBeenCalledWith({ body: 'Edited text', attachmentIDs: [] });
+    expect(editor).toHaveTextContent('Edited text');
+
+    await act(async () => {
+      refuse(new Error('refused'));
+      await flushMicrotasks();
+    });
+    expect(editor).toHaveTextContent('Edited text');
+    setMobileMatch(false);
+  });
+
+  it('empties an edit once its save lands', async () => {
+    const user = userEvent.setup();
+    setMobileMatch(true);
+    let land!: () => void;
+    const onSend = vi.fn(() => new Promise<void>((resolve) => { land = resolve; }));
+    render(<MessageInput onSend={onSend} initialBody="Edited text" submitLabel="Save" />);
+
+    const editor = await screen.findByLabelText('Message input');
+    await user.click(screen.getByLabelText('Save'));
+    expect(editor).toHaveTextContent('Edited text');
+    await act(async () => {
+      land();
+      await flushMicrotasks();
+    });
+    expect(editor).not.toHaveTextContent('Edited text');
+    setMobileMatch(false);
+  });
+
   it('shows edit formatting controls immediately on mobile before focus', async () => {
     setMobileMatch(true);
     render(

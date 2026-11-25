@@ -17,7 +17,7 @@ func (a *App) checkWiring(context.Context) error {
 	checkers := []wiring.Checker{
 		c.auth, c.users, c.channels, c.conversations, c.messages, c.userState,
 		c.emoji, c.presence, c.attachments, c.settings, c.unfurl, c.webhooks,
-		c.commands, c.activity, c.reminders, c.scheduled,
+		c.commands, c.activity, c.reminders, c.scheduled, c.userGroups,
 		a.notify.svc,
 		ag.runnerTokens, ag.svc, ag.orch, ag.codingTasks, ag.projects,
 		h.ws, h.presence, h.userState, h.runnerToken, h.agent, h.agentRun,

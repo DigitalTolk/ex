@@ -68,6 +68,9 @@ export const conversationConvertedSchema = z.looseObject({
 // Go map payload.
 export const presenceSchema = z.object({ userID: id, online: z.boolean() });
 
+// Go map payload: the user group that was created or changed.
+export const userGroupChangedSchema = z.object({ groupId: id });
+
 // Go map payload. `parentMessageID` is set only when the typing happened
 // inside a thread reply composer; absent for ordinary channel/DM typing. Both
 // shapes share a topic on the wire — the receiver routes by presence/absence.
@@ -170,6 +173,7 @@ const notificationSettingsSchema: z.ZodType<NotificationSettings> = z.looseObjec
   ignoreGroupMentions: z.boolean(),
   followAllThreads: z.boolean(),
   keywords: z.array(z.string()).optional(),
+  snoozeUntil: z.string().optional(),
 });
 // notification.settings_updated (a map carrying model.NotificationSettings).
 export const notificationSettingsUpdatedSchema = z.looseObject({ settings: notificationSettingsSchema });
@@ -222,6 +226,9 @@ export const notificationSchema = z.looseObject({
   // from the own-author echo suppression. Whether to notify at all is the
   // backend's level-gated decision, same as any other message.
   webhook: z.boolean().optional().catch(undefined),
+  // The recipient has Do Not Disturb on: taken in (badges, Activity) but not
+  // surfaced. The server's decision, like every other part of whether to alert.
+  silent: z.boolean().optional().catch(undefined),
   // Authoritative alerted-unread badge for the parent AFTER this alert
   // (top-level messages only). Clients SET the sidebar row to this value —
   // never increment locally — so duplicate/replayed events can't drift it.
@@ -246,7 +253,9 @@ const activityItemSchema = z.looseObject({
   webhook: z.boolean().optional(),
   emoji: z.string().optional(),
   parentName: z.string().optional(),
-  mentionKind: z.enum(['user', 'all', 'here', 'keyword']).optional(),
+  mentionKind: z.enum(['user', 'all', 'here', 'keyword', 'usergroup']).optional(),
+  userGroupID: z.string().optional(),
+  userGroupHandle: z.string().optional(),
   read: z.boolean().optional(),
 });
 export const activityNewSchema = z.looseObject({ item: activityItemSchema });

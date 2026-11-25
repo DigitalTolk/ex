@@ -124,6 +124,7 @@ func fullConfig(t *testing.T) *config.Config {
 	cfg.ConnectorProviderURL, cfg.ConnectorProviderKey = provider.URL, "key"
 	cfg.MSTenantID, cfg.MSClientID, cfg.MSClientSecret = "tenant", "ex", "secret"
 	cfg.MSTokenKey = base64.StdEncoding.EncodeToString(make([]byte, 32))
+	cfg.UserGroupEntraParentGroup, cfg.UserGroupSyncInterval = "parent-1", time.Hour
 	withGraphAt(t, graphStub(t))
 	cfg.OpenSearchURL = searchStub(t).URL
 	return cfg

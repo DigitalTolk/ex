@@ -18,6 +18,8 @@ import { AgentActivityIndicator } from './AgentActivityIndicator';
 import { AgentApprovalCard } from './AgentApprovalCard';
 import { WatcherCatchUpCard } from './WatcherCatchUpCard';
 import { useEventCallback } from '@/hooks/useEventCallback';
+import { isKnownEmoji } from '@/lib/emoji-shortcodes';
+import { showToast } from '@/lib/toast';
 import { useEqualValue } from '@/hooks/useEqualValue';
 import { sameUserMap } from '@/lib/user-map-equal';
 import {
@@ -28,6 +30,7 @@ import {
   useMuteChannel,
   useUnarchiveChannel,
   useUpdateChannelDescription,
+  useSetChannelIcon,
   useMakeChannelPrivate,
   useUserChannels,
 } from '@/hooks/useChannels';
@@ -35,6 +38,7 @@ import { useChannelMessages } from '@/hooks/useMessages';
 import { useAuth } from '@/context/AuthContext';
 import { useUnread } from '@/context/UnreadContext';
 import { canEditChannel, canArchiveChannel, canUnarchiveChannel, canLeaveChannel, roleNumber, GENERAL_CHANNEL_SLUG } from '@/lib/roles';
+import { isHomeNav } from '@/lib/home-nav';
 import { ArchivedChannelNotice } from '@/components/chat/ArchivedChannelNotice';
 import { slugify } from '@/lib/format';
 import { NonMemberInvitePrompt } from './NonMemberInvitePrompt';
@@ -83,7 +87,7 @@ export function ChannelView() {
   const panels = useSidePanels<'members' | 'pinned' | 'files'>();
   // Tag panel takes the same right-rail slot as thread/pinned/files.
   // Opening any of those closes a tag, and opening a tag closes them.
-  const { activeTag, closeTag } = useTagState();
+  const { activeTag, tagNonce, closeTag } = useTagState();
   const { data: channel, error: channelError, isLoading: channelLoading } = useChannelBySlug(slug);
   // The sidebar already knows the channels you're in by name, so while the
   // channel itself is looked up its messages start loading too, and its name
@@ -123,6 +127,21 @@ export function ChannelView() {
     panels.close();
   }, [closeTag, panels]);
   const closeThread = dismissThread;
+  // A tag opened from a message (one in the open thread included) takes the
+  // right-hand slot, so the thread and the other panels make way for it. The
+  // tag itself opens through context, where this view has no say: its nonce
+  // moving is the signal. (Not on mount: a tag left open from the last chat
+  // must not close a thread a link opened here.)
+  const onTagOpened = useEventCallback(() => {
+    dismissThread();
+    panels.close();
+  });
+  const servedTagNonce = useRef(tagNonce);
+  useEffect(() => {
+    if (servedTagNonce.current === tagNonce) return;
+    servedTagNonce.current = tagNonce;
+    onTagOpened();
+  }, [tagNonce, onTagOpened]);
   const togglePinned = () => { dismissThread(); closeTag(); panels.toggle('pinned'); };
   const toggleFiles = () => { dismissThread(); closeTag(); panels.toggle('files'); };
   const showMembers = panels.isActive('members');
@@ -145,7 +164,7 @@ export function ChannelView() {
   const channelID = channel?.id ?? knownChannel?.channelID;
   // After sending a message that @mentions people not in the channel, offer to
   // invite them in one click (see NonMemberInvitePrompt).
-  const { pendingInvites, checkMentions, clearInvites } = useNonMemberInvite(channel?.id, user?.id);
+  const { pendingInvites, pendingGroupInvites, channelIsPrivate, checkMentions, clearInvites } = useNonMemberInvite(channel?.id, user?.id);
   // Surface an invite prompt for any mentioned non-members (supersedes a
   // previous prompt; empty result clears it).
   const inviteMentioned = useCallback((value: { body: string }) => checkMentions(value.body), [checkMentions]);
@@ -155,7 +174,7 @@ export function ChannelView() {
     draft,
     draftAttachments,
     editing: { setEditingMessage, activeEditingMessage, editDraftAttachments, editReady },
-    editMessage,
+    editSaving,
     handleDraftChange,
     handleSendMessage,
     handleEditMessage,
@@ -175,6 +194,21 @@ export function ChannelView() {
   // resetting here — it's pulled fresh from the new URL on every render.
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => setThreadRootID(null), [channel?.id]);
+  // The workspace mark on the rail goes home to this channel's default view:
+  // whatever thread, side panel or tag was open closes, even when this was
+  // already the channel on screen (each click is a new history entry). Once
+  // per click: the entry keeps its state, and a panel opened after it must
+  // stay open.
+  const homeNavKey = isHomeNav(location.state) ? location.key : undefined;
+  const servedHomeNav = useRef<string | undefined>(undefined);
+  const closePanels = panels.close;
+  useEffect(() => {
+    if (!homeNavKey || servedHomeNav.current === homeNavKey) return;
+    servedHomeNav.current = homeNavKey;
+    setThreadRootID(null);
+    closeTag();
+    closePanels();
+  }, [homeNavKey, closeTag, closePanels]);
   useEffect(() => clearInvites(), [channel?.id, clearInvites]);
 
   // Local "open thread via UI button" state. The URL ?thread= param
@@ -275,6 +309,7 @@ export function ChannelView() {
   const unarchiveChannel = useUnarchiveChannel();
   const leaveChannel = useLeaveChannel();
   const updateDescription = useUpdateChannelDescription();
+  const setIcon = useSetChannelIcon();
   const makePrivate = useMakeChannelPrivate();
 
   function handleArchive() {
@@ -312,6 +347,19 @@ export function ChannelView() {
   // what it shows changes.
   const toggleMembers = useEventCallback(() => (showMembers ? closeMembers() : openMembers()));
   const onDescriptionSave = useEventCallback(handleDescriptionSave);
+  // The picker hands back `:name:` (with a skin tone after it, when one is
+  // set); the channel keeps the name. A workspace's own emojis can't be drawn
+  // in the channel list yet.
+  const onIconChange = useEventCallback((picked: string) => {
+    const name = /^:([a-z0-9_+-]+):/.exec(picked)?.[1] ?? '';
+    if (picked !== '' && !isKnownEmoji(name)) {
+      showToast("A custom emoji can't be a channel icon yet. Pick a standard one.");
+      return;
+    }
+    // Only the header's icon button and its "Remove icon" item call this, and
+    // the header draws them only for a loaded channel.
+    setIcon.run({ channelId: channel!.id, icon: name });
+  });
   const onMakePrivate = useEventCallback(handleMakePrivate);
   const onArchive = useEventCallback(handleArchive);
   const onUnarchive = useEventCallback(handleUnarchive);
@@ -379,6 +427,7 @@ export function ChannelView() {
           canEdit={canEdit}
           onDescriptionSave={onDescriptionSave}
           onRename={canRename ? openRename : undefined}
+          onIconChange={canEdit && !channel?.archived ? onIconChange : undefined}
           onMakePrivate={canMakePrivate ? onMakePrivate : undefined}
           canArchive={canArchive}
           onArchive={onArchive}
@@ -426,11 +475,13 @@ export function ChannelView() {
               ) : undefined
             }
           />
-          {channel && !archived && !activeEditingMessage && pendingInvites.length > 0 && (
+          {channel && !archived && !activeEditingMessage && (pendingInvites.length > 0 || pendingGroupInvites.length > 0) && (
             <NonMemberInvitePrompt
               channelId={channel.id}
               channelName={channel.slug}
               users={pendingInvites}
+              groups={pendingGroupInvites}
+              isPrivate={channelIsPrivate}
               onDismiss={clearInvites}
             />
           )}
@@ -446,7 +497,7 @@ export function ChannelView() {
               onSchedule={schedule.onSchedule}
               scheduledCount={schedule.scheduledCount}
               onCancel={activeEditingMessage ? () => setEditingMessage(null) : undefined}
-              disabled={!!activeEditingMessage && editMessage.isPending}
+              disabled={!!activeEditingMessage && editSaving}
               placeholder={activeEditingMessage ? 'Edit message...' : `Write to ~${channel?.name ?? knownChannel?.channelName ?? '...'}`}
               focusKey={activeEditingMessage ? `edit-${activeEditingMessage.id}` : channelID}
               initialBody={activeEditingMessage?.body ?? draft?.body ?? ''}

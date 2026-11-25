@@ -26,6 +26,7 @@ import { NotSentMark } from '@/components/chat/MessageSendState';
 import { useMessageRowData, useProvidedMessageRowData, type MessageRowData } from '@/hooks/useMessageRowData';
 import { EmojiPicker } from '@/components/EmojiPicker';
 import { UserHoverCard } from '@/components/UserHoverCard';
+import { UserGroupMentionCard } from '@/components/UserGroupMentionCard';
 import { UserAvatar } from '@/components/UserAvatar';
 import { useEditMessage, useToggleReaction } from '@/hooks/useMessages';
 import { renderMarkdown, type RenderOpts } from '@/lib/markdown';
@@ -35,6 +36,7 @@ import { padQuickReactions } from '@/lib/quick-reactions';
 import { triggerReactionHaptic } from '@/lib/haptics';
 import { blurActiveInput } from '@/lib/blur-input';
 import { showToast } from '@/lib/toast';
+import { EDIT_SAVE_FAILED } from '@/lib/edit-save';
 import { MESSAGE_LONG_PRESS_MS, useLongPress } from '@/hooks/useLongPress';
 import { useTagOpen } from '@/context/TagSearchContext';
 import { EmojiGlyph } from '@/components/EmojiGlyph';
@@ -80,6 +82,9 @@ const messageHoverListeners = new Set<MessageHoverListener>();
 function notifyMessageHovered(id: string) {
   for (const cb of messageHoverListeners) cb(id);
 }
+// How long the pointer must stay on another row before an open "..." menu
+// closes: longer than crossing a row's edge on the way to the menu.
+const MENU_CLOSE_ON_OTHER_ROW_MS = 300;
 
 // The sheet's sections settle in one after another, a beat apart, so the
 // eye lands on the reactions first. Short enough never to feel like waiting.
@@ -444,14 +449,21 @@ function MessageItemImpl({
     }
   }, [canEdit, isMobile, message, onEditMessage]);
 
+  // Another row taking the pointer closes the open menu, after a moment: the
+  // way from the toolbar to the menu can cross a sliver of the row next to it
+  // (a menu opening upward from a short row sits a pixel off the toolbar),
+  // and reaching the menu or coming back to this row keeps it open.
   useEffect(() => {
     if (!actionsMenuOpen) return;
     const ownID = message.id;
+    let closing: ReturnType<typeof setTimeout> | undefined;
     const onHover = (activeID: string) => {
-      if (activeID !== ownID) setActionsMenuOpen(false);
+      clearTimeout(closing);
+      if (activeID !== ownID) closing = setTimeout(() => setActionsMenuOpen(false), MENU_CLOSE_ON_OTHER_ROW_MS);
     };
     messageHoverListeners.add(onHover);
     return () => {
+      clearTimeout(closing);
       messageHoverListeners.delete(onHover);
     };
   }, [actionsMenuOpen, message.id]);
@@ -634,7 +646,8 @@ function MessageItemImpl({
         channelId,
         conversationId,
       },
-      { onSuccess: endEdit },
+      // A refused save leaves the edit box open with its text and files.
+      { onSuccess: endEdit, onError: () => showToast(EDIT_SAVE_FAILED) },
     );
   }
 
@@ -1419,7 +1432,8 @@ function MessageItemImpl({
               </TooltipTrigger>
               <TooltipContent>More actions</TooltipContent>
             </Tooltip>
-            <DropdownMenuContent align="end" className="w-44">
+            {/* The menu is part of this row: reaching it keeps it open. */}
+            <DropdownMenuContent align="end" className="w-44" onPointerEnter={() => notifyMessageHovered(message.id)}>
               {/* Static labels: the menu closes on click, so a "… copied"
                   swap would never be seen on desktop. */}
               {[actions.activity, actions.copyLink, actions.copyText, actions.pin, actions.markUnread].map(
@@ -1621,6 +1635,16 @@ const MessageBody = memo(function MessageBody({
           >
             {pill}
           </UserHoverCard>
+        ),
+        renderUserGroupMention: (groupId, handle, pill) => (
+          <UserGroupMentionCard
+            key={`usergroup-${groupId}-${message.id}`}
+            groupId={groupId}
+            handle={handle}
+            currentUserId={currentUserId}
+          >
+            {pill}
+          </UserGroupMentionCard>
         ),
       })}
     </>

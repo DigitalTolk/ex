@@ -1353,7 +1353,7 @@ func TestSetState_AttributesWatchRunsToTheWatcherCreator(t *testing.T) {
 }
 
 // Nobody in the conversation asked a watcher for anything, so its run leaves
-// only 👀 on their message: no ⚙️/⛔/✅/❌ trail. A mentioned agent's run keeps
+// only 👀 on their message: no ⚙️/✋/✅/❌ trail. A mentioned agent's run keeps
 // the full trail.
 func TestSetState_WatchRunsOnlyLeaveTheSeenReaction(t *testing.T) {
 	fx := newOrchFixture(t)
@@ -1362,7 +1362,7 @@ func TestSetState_WatchRunsOnlyLeaveTheSeenReaction(t *testing.T) {
 		ParentID: "chan1", ParentType: service.ParentChannel, MessageID: "m1"}
 	direct := &model.Run{ID: "r-direct", AgentID: testGGID, InvokerID: "u-bob", Mode: model.RunModeDirect,
 		ParentID: "chan1", ParentType: service.ParentChannel, MessageID: "m2"}
-	trail := []string{service.StateEmojiRead, service.StateEmojiWorking, service.StateEmojiBlocked,
+	trail := []string{service.StateEmojiRead, service.StateEmojiWorking, service.StateEmojiAwaiting,
 		service.StateEmojiDone, service.StateEmojiFailed}
 
 	for _, emoji := range trail {

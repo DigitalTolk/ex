@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MessageItem } from '@/components/chat/MessageItem';
@@ -210,12 +210,13 @@ describe('MessageItem - hover bar and avatar', () => {
     expect(screen.getByLabelText('Add another reaction')).toBeInTheDocument();
   });
 
-  it('closes an open kebab menu when another message row gets hovered', () => {
+  it('closes an open kebab menu when another message row gets hovered', async () => {
     // Bug: clicking "..." opened the menu and pinned the toolbar, but
     // moving the mouse to a different message left the toolbar stuck on
     // the original row because the dropdown was still open. The fix
     // listens for pointerEnter on every row and closes any other open
-    // menu — so hovering message B drops message A's menu instantly.
+    // menu — so resting on message B drops message A's menu (after a moment,
+    // so crossing B on the way to A's menu doesn't).
     renderWithProviders(
       <>
         <MessageItem message={makeMessage({ id: 'msg-a' })} authorName="Alice" isOwn={false} />
@@ -231,7 +232,7 @@ describe('MessageItem - hover bar and avatar', () => {
     // the menu root with it, unmount).
     const rowB = document.querySelector('[data-message-id="msg-b"]') as HTMLElement;
     fireEvent.pointerEnter(rowB, { pointerType: 'mouse' });
-    expect(rootA.isConnected).toBe(false);
+    await waitFor(() => expect(rootA.isConnected).toBe(false));
     expect(document.querySelector('[data-message-id="msg-a"] [data-testid="dropdown-root"]')).toBeNull();
   });
 
@@ -365,7 +366,7 @@ describe('MessageItem - hover bar and avatar', () => {
     expect(root.getAttribute('data-modal')).toBe('false');
   });
 
-  it('hovering another message hides the original toolbar AND closes its menu', () => {
+  it('hovering another message hides the original toolbar AND closes its menu', async () => {
     // Full bug reproduction: open the menu on A, then hover B. A's
     // menu must close, A's pin must clear, and A's toolbar must
     // disappear (because actionsMenuOpen=false AND hovered=false).
@@ -387,11 +388,11 @@ describe('MessageItem - hover bar and avatar', () => {
 
     // Hover B — A's menu closes and its toolbar unmounts.
     fireEvent.pointerEnter(rowB, { pointerType: 'mouse' });
-    expect(rowA.querySelector('[role="toolbar"][aria-label="Message actions"]')).toBeNull();
+    await waitFor(() => expect(rowA.querySelector('[role="toolbar"][aria-label="Message actions"]')).toBeNull());
     expect(toolbarA.isConnected).toBe(false);
   });
 
-  it('the closed-toolbar style cannot be re-shown by hovering another message (no resurrection)', () => {
+  it('the closed-toolbar style cannot be re-shown by hovering another message (no resurrection)', async () => {
     // Full reproduction of the user-reported "reappears when I hover
     // another message" bug. After A's menu closes, hovering B many
     // times must not bring A's toolbar back.
@@ -408,6 +409,7 @@ describe('MessageItem - hover bar and avatar', () => {
     fireEvent.pointerEnter(rowA, { pointerType: 'mouse' });
     fireEvent.click(rowA.querySelector('[data-testid="message-actions-trigger"]')!);
     fireEvent.pointerEnter(rowB, { pointerType: 'mouse' });
+    await waitFor(() => expect(toolbarA.isConnected).toBe(false));
     // Multiple hovers / leaves on B should never resurrect A's toolbar.
     for (let i = 0; i < 3; i++) {
       fireEvent.pointerLeave(rowB, { pointerType: 'mouse' });

@@ -147,7 +147,7 @@ describe('RunnersPage', () => {
     expect(await screen.findByRole('link', { name: 'Admin → Agents' })).toHaveAttribute('href', '/admin/agents');
   });
 
-  it('in a browser, lists the computers with live status and shows the command-line setup', async () => {
+  it('in a browser, lists the computers with live status and leaves the command-line setup to the account menu', async () => {
     renderPage();
     const macRow = await screen.findByTestId('runner-row-rt1');
     expect(within(macRow).getByTestId('runner-status-rt1')).toHaveTextContent('Online');
@@ -163,18 +163,24 @@ describe('RunnersPage', () => {
     expect(sparseRow).not.toHaveTextContent('ex-runner');
     expect(within(screen.getByTestId('runner-row-rt4')).queryByTestId('runner-harness-claude')).toBeNull();
 
+    // A browser has no computer of its own to set up, and the page no longer
+    // carries the command-line steps: the list is all of it.
     expect(screen.queryByTestId('this-computer-card')).toBeNull();
-    expect(screen.getByRole('heading', { name: 'Connect a computer' })).toBeInTheDocument();
-    expect(screen.getByText('brew install digitaltolk/tools/ex-runner')).toBeInTheDocument();
-    expect(screen.getByText(`ex-runner login ${ORIGIN}`)).toBeInTheDocument();
-    expect(screen.getByText('brew services start ex-runner')).toBeInTheDocument();
+    expect(screen.queryByTestId('runners-unsupported')).toBeNull();
+    expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual(['Your computers']);
+    expect(screen.queryByTestId('runner-setup-steps')).toBeNull();
+    expect(screen.queryByText(`ex-runner login ${ORIGIN}`)).toBeNull();
   });
 
   it('says so when this app version cannot run ex-runner', async () => {
     installBridge({ supported: false });
     renderPage();
-    expect(await screen.findByTestId('runners-unsupported')).toBeInTheDocument();
+    expect(await screen.findByTestId('runners-unsupported')).toHaveTextContent(
+      "This version of the ex app can't run ex-runner itself. Set it up from Runners in your account menu, on this computer or any other.",
+    );
     expect(screen.queryByTestId('this-computer-card')).toBeNull();
+    // The computers already connected are still listed under it.
+    expect(await screen.findByTestId('runner-row-rt1')).toBeInTheDocument();
   });
 
   it('installs, connects, starts and stops ex-runner on this computer', async () => {
@@ -216,7 +222,9 @@ describe('RunnersPage', () => {
     expect(screen.getByTestId('runner-meta')).toHaveTextContent('ex-runner 0.0.3 · installed by ex · connected as Alice');
     // The computer this app runs on is marked in the list.
     expect(within(await screen.findByTestId('runner-row-rt1')).getByText('This computer')).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Connect another computer' })).toBeInTheDocument();
+    // Connecting another computer is no longer offered from this page.
+    expect(screen.queryByRole('heading', { name: /Connect a(nother)? computer/ })).toBeNull();
+    expect(screen.queryByTestId('runner-setup-steps')).toBeNull();
 
     fireEvent.click(screen.getByTestId('runner-stop'));
     await waitFor(() => expect(bridge.call).toHaveBeenCalledWith('stop', undefined));
@@ -444,10 +452,15 @@ describe('RunnersPage', () => {
     expect(card()).toHaveTextContent('Installing ex-runner…');
   });
 
-  it('keeps the setup steps when the app never answers', async () => {
+  it('still lists the computers, with no card for this one, when the app never answers', async () => {
     window.__EX_RUNNER__ = { call: () => Promise.reject(new Error('gone')), subscribe: () => () => {} };
     renderPage();
-    expect(await screen.findByTestId('runner-setup-steps')).toBeInTheDocument();
+    const macRow = await screen.findByTestId('runner-row-rt1');
+    expect(within(macRow).getByTestId('runner-status-rt1')).toHaveTextContent('Online');
+    // No state ever arrived, so no computer here is marked as this one.
+    expect(within(macRow).queryByText('This computer')).toBeNull();
     expect(screen.queryByTestId('this-computer-card')).toBeNull();
+    expect(screen.queryByTestId('runners-unsupported')).toBeNull();
+    expect(screen.queryByTestId('runner-setup-steps')).toBeNull();
   });
 });

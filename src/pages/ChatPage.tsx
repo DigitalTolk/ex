@@ -47,7 +47,7 @@ import {
   onRunProgress as onAgentRunProgress,
   onRunUpdated as onAgentRunUpdated,
 } from '@/stores/agent-runs';
-import { onRunApproval as onAgentRunApproval } from '@/stores/agent-approvals';
+import { loadPendingApprovals, onRunApproval as onAgentRunApproval } from '@/stores/agent-approvals';
 import { RunActivityDrawer } from '@/components/chat/RunActivityDrawer';
 import { AppViewHost } from '@/components/apps/AppViewHost';
 import { openAppView, updateAppView } from '@/stores/app-view';
@@ -158,6 +158,13 @@ export default function ChatPage() {
   const isActiveThread = (threadRootID?: string) =>
     !!threadRootID && (activeThreadID === threadRootID || isActiveThreadScope(threadRootID));
 
+  // Approval cards arrive once, as events: on load, ask what is still
+  // waiting on this person so a refresh never strands a run on a card
+  // nobody can see.
+  useEffect(() => {
+    void loadPendingApprovals();
+  }, [user?.id]);
+
   useEffect(() => {
     setCurrentUserID(user?.id ?? null);
     setSelfUserID(user?.id ?? null);
@@ -193,6 +200,8 @@ export default function ChatPage() {
     // happened while disconnected is gone, so refetch the authoritative online
     // set or the dots drift stale until the next full re-auth.
     refreshPresence(queryClient);
+    // Approvals asked or settled while disconnected.
+    void loadPendingApprovals();
   };
 
   // A channel was archived or unarchived: refetch it (by ID and by slug, so
@@ -418,6 +427,16 @@ export default function ChatPage() {
       // An admin changed a bot or its tokens: the admin page's lists refetch.
       queryClient.invalidateQueries({ queryKey: queryKeys.bots() });
     },
+    [EventType.UserGroupChanged]: () => {
+      // A user group was created, edited, enabled/disabled or had its members
+      // changed: the directory, autocomplete roster, open details, pills'
+      // popovers and profiles' group lists all refetch.
+      queryClient.invalidateQueries({ queryKey: queryKeys.userGroupsAll() });
+    },
+    [EventType.UserGroupSync]: () => {
+      // A user-group sync started or ended: the admin sync report refetches.
+      queryClient.invalidateQueries({ queryKey: queryKeys.userGroupSync() });
+    },
     [EventType.ProjectChanged]: () => {
       // A project or its design references changed (any member, any device):
       // the list and every open project detail refetch.
@@ -427,6 +446,8 @@ export default function ChatPage() {
       // An admin saved the workspace settings — refetch what they gate (the
       // Runners tab appears or goes away without a reload).
       queryClient.invalidateQueries({ queryKey: queryKeys.workspaceSettings() });
+      // …and who may manage user groups, which the settings decide.
+      queryClient.invalidateQueries({ queryKey: queryKeys.userGroupPermissions() });
     },
     [EventType.RunnersChanged]: () => {
       // One of my computers was connected or disconnected, or came online.

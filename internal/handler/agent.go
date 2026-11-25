@@ -425,6 +425,19 @@ func (h *AgentHandler) DecideApproval(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, JSON{"state": a.State, "choice": a.Choice})
 }
 
+// PendingApprovals lists the caller's approvals, questions and draft replies
+// still waiting on them, as run.approval frames, so a page that loads or
+// reconnects shows the cards the live events delivered before it.
+// GET /api/v1/approvals/pending
+func (h *AgentHandler) PendingApprovals(w http.ResponseWriter, r *http.Request) {
+	list, err := h.orch.PendingApprovals(r.Context(), middleware.UserIDFromContext(r.Context()))
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, JSON{"approvals": list})
+}
+
 // ---------------------------------------------------------- subscriptions
 
 type createSubscriptionBody struct {

@@ -31,11 +31,16 @@ const (
 	// MaxChannelNameLen / MaxChannelDescriptionLen / MaxDistinctReactions
 	// guard the rest of the message-adjacent surface against abuse.
 	MaxChannelNameLen        = 32
-	MaxChannelDescriptionLen = 255
+	MaxChannelDescriptionLen = 1000
 	MaxDistinctReactions     = 16
 
 	// MaxDisplayNameChars caps a user's display name in codepoints.
 	MaxDisplayNameChars = 80
+
+	// MaxUserGroupNameChars / MaxUserGroupDescriptionChars cap a user
+	// group's name and description in codepoints.
+	MaxUserGroupNameChars        = 80
+	MaxUserGroupDescriptionChars = 250
 )
 
 // channelNamePattern is the slug-style identifier we accept for channel

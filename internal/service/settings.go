@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -91,6 +92,13 @@ func (s *SettingsService) Update(ctx context.Context, ws *model.WorkspaceSetting
 		ws.MaxUploadBytes = 0
 	}
 	ws.GiphyAPIKey = strings.TrimSpace(ws.GiphyAPIKey)
+	// The model list has its own route (SetAgentModels): a save of the other
+	// settings keeps it as stored, whatever the client sent.
+	current, err := s.saved(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ws.AgentModels = current.AgentModels
 
 	if err := s.store.PutSettings(ctx, ws); err != nil {
 		return nil, err
@@ -103,12 +111,55 @@ func (s *SettingsService) Update(ctx context.Context, ws *model.WorkspaceSetting
 	return s.applyDefaults(&c), nil
 }
 
+// SetAgentModels replaces the models agents may run on (see
+// model.NormalizeAgentModels for what a list must hold). Admin-gated at the
+// route. Every client hears settings.updated and reloads its dropdowns.
+func (s *SettingsService) SetAgentModels(ctx context.Context, list []model.AgentModelOption) (*model.WorkspaceSettings, error) {
+	cleaned, err := model.NormalizeAgentModels(list)
+	if err != nil {
+		return nil, apperr.Invalid("settings: %s", err.Error())
+	}
+	ws, err := s.saved(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ws.AgentModels = cleaned
+	if err := s.store.PutSettings(ctx, ws); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	s.cache = ws
+	s.mu.Unlock()
+	events.Publish(ctx, s.pub, pubsub.GlobalChannelEvents(), events.EventSettingsUpdated, map[string]any{})
+	c := *ws
+	return s.applyDefaults(&c), nil
+}
+
+// saved reads the settings as stored, without defaults: an empty record when
+// nothing has been saved yet.
+func (s *SettingsService) saved(ctx context.Context) (*model.WorkspaceSettings, error) {
+	ws, err := s.store.GetSettings(ctx)
+	if errors.Is(err, store.ErrNotFound) || (err == nil && ws == nil) {
+		return &model.WorkspaceSettings{}, nil
+	}
+	return ws, err
+}
+
+// OffersAgentModel reports whether agents may run on model id with harness:
+// the agent service asks before it stores a model an admin or a member picked.
+func (s *SettingsService) OffersAgentModel(ctx context.Context, harness, id string) bool {
+	return model.OffersAgentModel(s.Effective(ctx).AgentModels, harness, id)
+}
+
 func (s *SettingsService) applyDefaults(ws *model.WorkspaceSettings) *model.WorkspaceSettings {
 	if ws.MaxUploadBytes <= 0 {
 		ws.MaxUploadBytes = model.DefaultMaxUploadBytes
 	}
 	if len(ws.AllowedExtensions) == 0 {
 		ws.AllowedExtensions = model.DefaultAllowedExtensions
+	}
+	if len(ws.AgentModels) == 0 {
+		ws.AgentModels = model.DefaultAgentModels
 	}
 	return ws
 }

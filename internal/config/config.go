@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log/slog"
 	"reflect"
 	"strings"
 	"time"
@@ -68,6 +69,13 @@ type Config struct {
 	// (MS_STATUS_SYNC_INTERVAL, default 1h). One tenant-wide Graph listing
 	// and one read of every account per interval.
 	MSStatusSyncInterval time.Duration `env:"MS_STATUS_SYNC_INTERVAL" envDefault:"1h"`
+	// UserGroupEntraParentGroup turns on user groups from Microsoft 365: the
+	// object ID of the Entra group whose member groups become ex's user
+	// groups (USERGROUP_ENTRA_PARENT_GROUP). Needs MS_TENANT_ID.
+	UserGroupEntraParentGroup string `env:"USERGROUP_ENTRA_PARENT_GROUP"`
+	// UserGroupSyncInterval paces the user-group sync
+	// (USERGROUP_SYNC_INTERVAL, default 30m); admins can also sync at once.
+	UserGroupSyncInterval time.Duration `env:"USERGROUP_SYNC_INTERVAL" envDefault:"30m"`
 	// MSTokenKey turns on SharePoint link sharing: a SharePoint link posted
 	// in a channel or conversation is shared with its members as the person
 	// who posted it. It is the base64 of 32 random bytes that seal each
@@ -138,6 +146,18 @@ type Config struct {
 	// registry holds only directly-ingested connectors. Set per environment
 	// (stg-ex → stg provider, prd-ex → prod provider) — never hardcoded.
 	ConnectorProviderURL string `env:"CONNECTOR_PROVIDER_URL"`
+
+	// WorkbenchURL is the shared agent workbench (WORKBENCH_URL). When set,
+	// the Agents page offers Connect to Claude: ex issues the person a runner
+	// token and the workbench runs ex-runner for them. Empty → off.
+	WorkbenchURL string `env:"WORKBENCH_URL"`
+	// WorkbenchToken is the bearer token ex calls the workbench with
+	// (WORKBENCH_TOKEN, a secret).
+	WorkbenchToken string `env:"WORKBENCH_TOKEN"`
+	// AgentGitHost is the team's GitLab (AGENT_GIT_HOST, e.g.
+	// gitlab.example.com). Agents with a shell are told to use it with the
+	// machine's own git and glab sign-in. Empty → they aren't told.
+	AgentGitHost         string `env:"AGENT_GIT_HOST"`
 	ConnectorProviderKey string `env:"CONNECTOR_PROVIDER_API_KEY"`
 	// ConnectorPrivateDomains lists the domains whose hosts connector calls
 	// may reach on a private 10.x address ("digitaltolk.net" covers the domain
@@ -276,6 +296,12 @@ func Load() (*Config, error) {
 	if c.MSStatusSyncInterval <= 0 {
 		return nil, fmt.Errorf("invalid MS_STATUS_SYNC_INTERVAL %s: must be a positive duration", c.MSStatusSyncInterval)
 	}
+	if c.UserGroupSyncInterval <= 0 {
+		return nil, fmt.Errorf("invalid USERGROUP_SYNC_INTERVAL %s: must be a positive duration", c.UserGroupSyncInterval)
+	}
+	if c.UserGroupEntraParentGroup != "" && c.MSTenantID == "" {
+		return nil, fmt.Errorf("USERGROUP_ENTRA_PARENT_GROUP is set but MS_TENANT_ID isn't: user groups are read from Microsoft 365")
+	}
 	if err := c.loadSharePoint(); err != nil {
 		return nil, err
 	}
@@ -336,8 +362,10 @@ func (c *Config) MSGraphEnabled() bool {
 	return c.MSTenantID != ""
 }
 
-// loadSharePoint checks the SharePoint settings, failing closed: a key set
-// without what sharing needs must abort boot, not run with sharing off.
+// loadSharePoint checks the SharePoint settings. A key set without what
+// sharing needs aborts boot. A key that isn't one (the placeholder a secret
+// store is seeded with before its real value is set) only turns sharing off,
+// loudly: the chat must start whatever that secret holds.
 func (c *Config) loadSharePoint() error {
 	hosts := c.MSSharePointHosts
 	c.MSSharePointHosts = nil
@@ -353,7 +381,8 @@ func (c *Config) loadSharePoint() error {
 		return errors.New("MS_TOKEN_KEY is set but SharePoint sharing also needs MS_TENANT_ID and OIDC_ISSUER")
 	}
 	if len(c.SharePointTokenKey()) != 32 {
-		return errors.New("invalid MS_TOKEN_KEY: must be the base64 of 32 random bytes (openssl rand -base64 32)")
+		slog.Error("MS_TOKEN_KEY is not the base64 of 32 random bytes (openssl rand -base64 32); SharePoint sharing is off until it is")
+		c.MSTokenKey = ""
 	}
 	return nil
 }
@@ -362,7 +391,7 @@ func (c *Config) loadSharePoint() error {
 func (c *Config) SharePointEnabled() bool { return c.MSTokenKey != "" }
 
 // SharePointTokenKey is the key that seals users' Microsoft tokens: MS_TOKEN_KEY
-// decoded (Load has checked it decodes to 32 bytes).
+// decoded (Load has dropped a key that doesn't decode to 32 bytes).
 func (c *Config) SharePointTokenKey() []byte {
 	key, _ := base64.StdEncoding.DecodeString(strings.TrimSpace(c.MSTokenKey))
 	return key

@@ -1,4 +1,5 @@
 import { PageContainer } from '@/components/layout/PageContainer';
+import { AgentModelsCard } from '@/components/admin/AgentModelsCard';
 import { AgentsAdminPanel } from '@/components/admin/AgentsAdminPanel';
 import { RunnersInAppCard } from '@/components/admin/RunnersInAppCard';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
@@ -13,9 +14,10 @@ export default function AdminAgentsPage() {
   return (
     <PageContainer
       title="Agents"
-      description="Defaults every member inherits unless they set their own, and where agents may run."
+      description="Defaults every member inherits unless they set their own, the models agents may run on, and where agents may run."
     >
       <AgentsAdminPanel />
+      <AgentModelsCard />
       <RunnersInAppCard />
     </PageContainer>
   );

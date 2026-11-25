@@ -41,6 +41,8 @@ export const EventType = {
   SessionRenewed: wire.EventSessionRenewed,
   WebhookChanged: wire.EventWebhookChanged,
   BotChanged: wire.EventBotChanged,
+  UserGroupChanged: wire.EventUserGroupChanged,
+  UserGroupSync: wire.EventUserGroupSync,
   ProjectChanged: wire.EventProjectChanged,
   SettingsUpdated: wire.EventSettingsUpdated,
   RunnersChanged: wire.EventRunnersChanged,
@@ -93,6 +95,7 @@ export const EPHEMERAL_EVENT_TYPES: ReadonlySet<string> = new Set<EventTypeName>
   EventType.ScheduledMessagesChanged,
   EventType.RemindersChanged,
   EventType.ThreadUpdated,
+  EventType.UserGroupSync,
   EventType.RunProgress,
   EventType.Typing,
 ]);

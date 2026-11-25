@@ -469,6 +469,44 @@ func (s *ChannelService) Update(ctx context.Context, actorID, channelID string, 
 	return ch, nil
 }
 
+// SetIcon gives the channel an emoji shown in place of its globe or lock (the
+// emoji itself, or its name), or takes it away (""). Whether the channel is
+// public or private is still the channel's type: clients mark a private one
+// beside its icon.
+func (s *ChannelService) SetIcon(ctx context.Context, actorID, channelID, icon string) (*model.Channel, error) {
+	if err := s.checkPermission(ctx, actorID, channelID, model.ChannelRoleAdmin); err != nil {
+		return nil, err
+	}
+	icon, err := emojiIcon("icon", icon)
+	if err != nil {
+		return nil, apperr.Invalid("channel: an icon is an emoji like 🚀 or its name like rocket")
+	}
+	ch, err := s.channels.GetChannel(ctx, channelID)
+	if err != nil {
+		return nil, fmt.Errorf("channel: get: %w", err)
+	}
+	if ch.Archived {
+		return nil, ErrChannelArchived
+	}
+	if ch.Icon == icon {
+		return ch, nil
+	}
+	now := time.Now()
+	if err := s.channels.PatchChannel(ctx, channelID, store.ChannelPatch{Icon: &icon, UpdatedAt: now}); err != nil {
+		return nil, fmt.Errorf("channel: set icon: %w", err)
+	}
+	ch.Icon, ch.UpdatedAt = icon, now
+	// Members refetch their channel list and the open channel on this event.
+	events.Publish(ctx, s.publisher, pubsub.ChannelName(channelID), events.EventChannelUpdated, map[string]any{
+		"channelID":   channelID,
+		"name":        ch.Name,
+		"slug":        ch.Slug,
+		"description": ch.Description,
+		"icon":        ch.Icon,
+	})
+	return ch, nil
+}
+
 // rename moves ch to name and its slug, refusing a slug another channel
 // holds. The pre-check answers the common case; the store's transaction on
 // the slug lock is what makes a race safe. The old slug stays an alias, so
@@ -1093,7 +1131,7 @@ func (s *ChannelService) ListUserChannels(ctx context.Context, userID string) ([
 				if ch == nil {
 					continue // channel row missing: drop like the fan-out did
 				}
-				uc.Archived = ch.Archived
+				uc.Archived, uc.Icon = ch.Archived, ch.Icon
 				uc.ChannelName, uc.ChannelType = ch.Name, ch.Type
 				// Exact unread: messages added since this user last read.
 				// O(1) from the seq pair; survives reload and reconnect.
@@ -1121,7 +1159,7 @@ func (s *ChannelService) ListUserChannels(ctx context.Context, userID string) ([
 				return
 			}
 			keep[i] = true
-			uc.Archived = ch.Archived
+			uc.Archived, uc.Icon = ch.Archived, ch.Icon
 			uc.ChannelName, uc.ChannelType = ch.Name, ch.Type
 			// Exact unread: messages added since this user last read. O(1) from
 			// the seq pair — no per-channel count query. Survives reload and

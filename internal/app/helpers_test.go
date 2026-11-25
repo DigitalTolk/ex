@@ -293,3 +293,14 @@ func TestMustBuildPanicsOnAnImpossibleFailure(t *testing.T) {
 	}()
 	mustBuild(0, errors.New("validated config failed"))
 }
+
+// goTracked runs fn on its own goroutine as a tracked background job, so
+// shutdown waits for it, and a panic in it stays confined to it.
+func TestGoTracked(t *testing.T) {
+	a := &App{}
+	ran := make(chan struct{})
+	a.goTracked(func() { close(ran) })
+	a.goTracked(func() { panic("boom") })
+	<-ran
+	a.jobs.Wait()
+}

@@ -17,7 +17,7 @@ const maxPosterBytes = 4 << 20
 
 // Refusals the uploader's browser gets.
 var (
-	errPosterNotVideo = fmt.Errorf("attachment: only an MP4 video takes a poster: %w", ErrValidation)
+	errPosterNotVideo = fmt.Errorf("attachment: only a video takes a poster: %w", ErrValidation)
 	errPosterTooBig   = fmt.Errorf("attachment: the poster is over %d bytes: %w", maxPosterBytes, ErrValidation)
 	errPosterNotImage = fmt.Errorf("attachment: the poster is not a JPEG, PNG or WebP image: %w", ErrValidation)
 	errPosterPixels   = fmt.Errorf("attachment: the poster is too large to decode: %w", ErrValidation)
@@ -41,7 +41,7 @@ func (s *AttachmentService) SetVideoPoster(ctx context.Context, userID, attachme
 	if a.CreatedBy != userID {
 		return nil, ErrForbidden
 	}
-	if k := claimedKindOf(a); k == nil || k.contentType != "video/mp4" {
+	if k := claimedKindOf(a); k == nil || !k.video {
 		return nil, errPosterNotVideo
 	}
 	if a.ThumbnailS3Key != "" {

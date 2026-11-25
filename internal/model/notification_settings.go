@@ -1,6 +1,9 @@
 package model
 
-import "strings"
+import (
+	"strings"
+	"time"
+)
 
 // NotificationLevel controls which messages fire a user-facing notification
 // (sound + popup on desktop; push on mobile). It is deliberately small: the
@@ -45,6 +48,16 @@ type NotificationSettings struct {
 	IgnoreGroupMentions bool                    `json:"ignoreGroupMentions" dynamodbav:"ignoreGroupMentions"`
 	FollowAllThreads    bool                    `json:"followAllThreads" dynamodbav:"followAllThreads"`
 	Keywords            []string                `json:"keywords,omitempty" dynamodbav:"keywords,omitempty"`
+	// SnoozeUntil is Do Not Disturb: until then nothing alerts this user (no
+	// popup, sound or phone push), though everything is still listed in
+	// Activity and counted on badges. Set through its own endpoint, never
+	// with the rest of the settings.
+	SnoozeUntil *time.Time `json:"snoozeUntil,omitempty" dynamodbav:"snoozeUntil,omitempty"`
+}
+
+// Snoozed reports whether Do Not Disturb is on at `now`.
+func (s NotificationSettings) Snoozed(now time.Time) bool {
+	return s.SnoozeUntil != nil && now.Before(*s.SnoozeUntil)
 }
 
 // DefaultNotificationSettings is the baseline applied to any user who has

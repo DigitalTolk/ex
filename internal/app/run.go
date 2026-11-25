@@ -76,6 +76,13 @@ func (a *App) startBackground() {
 		go a.track(func() { c.directorySync.Run(ctx, a.cfg.MSProfileSyncInterval) })()
 		go a.track(func() { c.directorySync.RunStatus(ctx, a.cfg.MSStatusSyncInterval) })()
 	}
+	// User groups from Microsoft 365: every interval, never at boot;
+	// an admin's Sync now runs on the same context, tracked like the rest.
+	if c.userGroups.SyncConfigured() {
+		go a.track(func() {
+			c.userGroups.RunSync(ctx, a.goTracked)
+		})()
+	}
 	// Fire due reminders into their owners' activity streams + alerts.
 	// Claiming is atomic in Redis, so running this on every instance never
 	// double-fires.

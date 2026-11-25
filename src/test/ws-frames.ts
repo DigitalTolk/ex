@@ -98,6 +98,8 @@ export const CALLBACK_EVENTS = {
   onDraftUpdated: 'draft.updated',
   onWebhookChanged: 'webhook.changed',
   onBotChanged: 'bot.changed',
+  onUserGroupChanged: 'usergroup.changed',
+  onUserGroupSync: 'usergroup.sync',
   onProjectChanged: 'project.changed',
   onSettingsUpdated: 'settings.updated',
   onRunnersChanged: 'runners.changed',

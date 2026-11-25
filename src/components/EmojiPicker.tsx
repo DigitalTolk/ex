@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useMemo } from 'react';
+import { useEffect, useRef, useState, useMemo, useSyncExternalStore } from 'react';
 import {
   Flag,
   Hash,
@@ -78,12 +78,61 @@ const CATEGORY_ICONS: Record<string, LucideIcon> = {
 };
 
 const CUSTOM_CATEGORY_SLUG = 'custom';
-const PICKER_WIDTH = 336;
-const PICKER_HEIGHT = 380;
+// Ten 40px tiles across on a desktop: big enough to tell emojis apart.
+const PICKER_WIDTH = 432;
+const PICKER_HEIGHT = 520;
+
+// The emoji under the pointer (or focus), named in the preview bar at the
+// picker's foot the moment it's reached: the tiles' own tooltips waited a
+// second or more, and never showed on touch. A store per picker that only
+// the bar reads, so a hover never re-renders the grid of tiles.
+interface PreviewEmoji {
+  // What the tile shows (a unicode glyph, or :name: for a custom one).
+  glyph: string;
+  // Its name, as typed in a message.
+  name: string;
+}
+
+function createPreviewStore() {
+  let current: PreviewEmoji | null = null;
+  const listeners = new Set<() => void>();
+  return {
+    subscribe(cb: () => void) {
+      listeners.add(cb);
+      return () => {
+        listeners.delete(cb);
+      };
+    },
+    get: () => current,
+    // Reads the tile an event came from (data-emoji-name / -glyph).
+    show(target: Element) {
+      const tile = target.closest<HTMLElement>('[data-emoji-name]');
+      if (!tile) return;
+      const name = tile.dataset.emojiName!;
+      if (current?.name === name) return;
+      current = { name, glyph: tile.dataset.emojiGlyph ?? name };
+      for (const cb of listeners) cb();
+    },
+  };
+}
+type PreviewStore = ReturnType<typeof createPreviewStore>;
+
+function EmojiPreview({ store, customMap }: { store: PreviewStore; customMap: Record<string, string> }) {
+  const emoji = useSyncExternalStore(store.subscribe, store.get);
+  if (!emoji) {
+    return <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground touch:hidden">Point at an emoji to see its name</span>;
+  }
+  return (
+    <span className="flex min-w-0 flex-1 items-center gap-2 touch:hidden" data-testid="emoji-preview" aria-live="polite">
+      <EmojiGlyph emoji={emoji.glyph} customMap={customMap} size="lg" className="h-7 w-7 text-[28px]" />
+      <span className="truncate font-mono text-xs text-foreground">{emoji.name}</span>
+    </span>
+  );
+}
 // The frequently-used shelf shows two rows; column counts match the grid
-// below (9 on desktop, 7 on mobile) so the rows line up visually.
+// below (10 on desktop, 7 on mobile) so the rows line up visually.
 const FREQUENT_ROWS = 2;
-const DESKTOP_COLS = 9;
+const DESKTOP_COLS = 10;
 const MOBILE_COLS = 7;
 // Over-fetch the frequent list well past the two visible rows so that after
 // the "Getting Work Done" emojis are deduped out, there are still enough left
@@ -134,6 +183,7 @@ function useEmojiPickerAuth() {
 export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerClassName = 'inline-block', ariaLabel = 'Emoji picker' }: EmojiPickerProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
+  const [preview] = useState(createPreviewStore);
   /* istanbul ignore next -- EMOJI_CATEGORIES is a non-empty compile-time constant, so the ?.slug / ?? '' fallbacks are dead defensive arms */
   const [activeCategory, setActiveCategory] = useState<string>(EMOJI_CATEGORIES[0]?.slug ?? '');
   const auth = useEmojiPickerAuth();
@@ -298,7 +348,7 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
         preferredAlign="end"
         ariaLabel={ariaLabel}
         mobileSheet
-        className="flex h-[460px] w-[336px] max-w-[calc(100vw-16px)] flex-col rounded-md border bg-popover p-2 shadow-md touch:h-[50dvh] touch:w-screen touch:max-w-none touch:rounded-b-none touch:rounded-t-xl touch:border-x-0 touch:border-b-0 touch:pb-[calc(var(--sheet-safe-bottom,env(safe-area-inset-bottom))+0.5rem)]"
+        className="flex h-[520px] w-[432px] max-w-[calc(100vw-16px)] flex-col rounded-md border bg-popover p-2 shadow-md touch:h-[50dvh] touch:w-screen touch:max-w-none touch:rounded-b-none touch:rounded-t-xl touch:border-x-0 touch:border-b-0 touch:pb-[calc(var(--sheet-safe-bottom,env(safe-area-inset-bottom))+0.5rem)]"
       >
         {/* The grid is built only while open: a closed picker sits in every
             message row's toolbar and in the composer, and building hundreds
@@ -362,6 +412,10 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
           className="flex min-h-0 flex-1 flex-col overflow-y-auto"
           data-swipe-scroll="true"
           data-testid="emoji-scroll-body"
+          // One listener for every tile: names the one the pointer (or the
+          // keyboard) is on in the preview bar.
+          onPointerOver={(e) => preview.show(e.target as Element)}
+          onFocus={(e) => preview.show(e.target)}
         >
           {onLandingPage && visibleFrequent.length > 0 && (
             <div className="mb-1.5 shrink-0 border-b pb-1.5">
@@ -369,7 +423,7 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
                 Frequently used
               </div>
               <div
-                className="grid grid-cols-[repeat(9,2rem)] content-start justify-center gap-0.5 touch:grid-cols-[repeat(7,2.75rem)]"
+                className="grid grid-cols-[repeat(10,2.5rem)] content-start justify-center gap-0.5 touch:grid-cols-[repeat(7,2.75rem)]"
                 role="list"
                 aria-label="Frequently used emojis"
                 data-testid="emoji-frequent-grid"
@@ -381,14 +435,14 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
                     role="listitem"
                     data-testid="emoji-frequent-tile"
                     onClick={() => handlePick(shortcode)}
-                    className="flex h-8 w-8 items-center justify-center rounded hover:bg-muted touch:h-11 touch:w-11"
+                    className="flex h-10 w-10 items-center justify-center rounded hover:bg-muted touch:h-11 touch:w-11"
                     aria-label={`React with ${shortcode}`}
-                    title={shortcode}
+                    data-emoji-name={shortcode}
                   >
                     <EmojiGlyph
                       emoji={shortcode}
                       customMap={customMap}
-                      size="lg"
+                      size="picker"
                       className="touch:h-[30px] touch:w-[30px] touch:text-[30px]"
                     />
                   </button>
@@ -402,7 +456,7 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
                 Getting Work Done
               </div>
               <div
-                className="grid grid-cols-[repeat(9,2rem)] content-start justify-center gap-0.5 touch:grid-cols-[repeat(7,2.75rem)]"
+                className="grid grid-cols-[repeat(10,2.5rem)] content-start justify-center gap-0.5 touch:grid-cols-[repeat(7,2.75rem)]"
                 role="list"
                 aria-label="Getting Work Done emojis"
                 data-testid="emoji-workpack-grid"
@@ -414,14 +468,14 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
                     role="listitem"
                     data-testid="emoji-workpack-tile"
                     onClick={() => handlePick(`:${e.name}:`)}
-                    className="flex h-8 w-8 items-center justify-center rounded hover:bg-muted touch:h-11 touch:w-11"
+                    className="flex h-10 w-10 items-center justify-center rounded hover:bg-muted touch:h-11 touch:w-11"
                     aria-label={`React with :${e.name}:`}
-                    title={`:${e.name}:`}
+                    data-emoji-name={`:${e.name}:`}
                   >
                     <EmojiGlyph
                       emoji={`:${e.name}:`}
                       customMap={customMap}
-                      size="lg"
+                      size="picker"
                       className="touch:h-[30px] touch:w-[30px] touch:text-[30px]"
                     />
                   </button>
@@ -437,7 +491,7 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
                 : standardCategoryLabel}
           </div>
           <div
-            className="grid grid-cols-[repeat(9,2rem)] content-start justify-center gap-0.5 touch:grid-cols-[repeat(7,2.75rem)]"
+            className="grid grid-cols-[repeat(10,2.5rem)] content-start justify-center gap-0.5 touch:grid-cols-[repeat(7,2.75rem)]"
             role="list"
             aria-label={activeCategory === CUSTOM_CATEGORY_SLUG && !query.trim() ? 'Custom emojis' : 'Standard emojis'}
           >
@@ -448,14 +502,14 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
                 role="listitem"
                 data-testid="emoji-picker-tile"
                 onClick={() => handlePick(`:${e.name}:`)}
-                className="flex h-8 w-8 items-center justify-center rounded hover:bg-muted touch:h-11 touch:w-11"
+                className="flex h-10 w-10 items-center justify-center rounded hover:bg-muted touch:h-11 touch:w-11"
                 aria-label={`React with :${e.name}:`}
-                title={`:${e.name}:`}
+                data-emoji-name={`:${e.name}:`}
               >
                 <EmojiGlyph
                   emoji={`:${e.name}:`}
                   customMap={{ [e.name]: e.imageURL }}
-                  size="lg"
+                  size="picker"
                   className="touch:h-[30px] touch:w-[30px] touch:text-[30px]"
                 />
               </button>
@@ -470,26 +524,31 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
                   role="listitem"
                   data-testid="emoji-picker-tile"
                   onClick={() => handlePick(shortcode)}
-                  className="flex h-8 w-8 items-center justify-center rounded hover:bg-muted touch:h-11 touch:w-11"
+                  className="flex h-10 w-10 items-center justify-center rounded hover:bg-muted touch:h-11 touch:w-11"
                   aria-label={`React with ${shortcode}`}
-                  title={shortcode}
+                  data-emoji-name={shortcode}
+                  data-emoji-glyph={supportsEmojiSkinTone(e.unicode) ? tonedEmoji : e.unicode}
                 >
                   <EmojiGlyph
                     emoji={supportsEmojiSkinTone(e.unicode) ? tonedEmoji : e.unicode}
-                    size="lg"
+                    size="picker"
                     className="touch:text-[30px]"
                   />
                 </button>
               );
             })}
             {filteredStandard.length === 0 && filteredCustom.length === 0 && (
-              <p className="col-span-9 py-3 text-center text-xs text-muted-foreground">No emojis found</p>
+              <p className="col-span-full py-3 text-center text-xs text-muted-foreground">No emojis found</p>
             )}
           </div>
         </div>
         {/* Chrome band (see the category tablist): drags here dismiss the sheet. */}
-        <div className="mt-1.5 flex shrink-0 items-center justify-center gap-0.5 border-t pt-1.5" role="radiogroup" aria-label="Emoji skin tone" data-sheet-drag="true" style={{ touchAction: 'none' }}>
-          <span className="text-xs font-medium text-muted-foreground">Skin tone</span>
+        <div className="mt-1.5 flex shrink-0 items-center gap-2 border-t pt-1.5" data-sheet-drag="true" style={{ touchAction: 'none' }}>
+        <EmojiPreview store={preview} customMap={customMap} />
+        <div className="flex shrink-0 items-center justify-center gap-0.5 touch:flex-1" role="radiogroup" aria-label="Emoji skin tone">
+          {/* On a desktop the bar's room goes to the emoji's name; the
+              swatches keep their group's accessible name. */}
+          <span className="hidden text-xs font-medium text-muted-foreground touch:inline">Skin tone</span>
           {EMOJI_SKIN_TONES.map((tone) => (
             <button
               key={tone.value || 'default'}
@@ -507,6 +566,7 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
               {tone.swatch}
             </button>
           ))}
+        </div>
         </div>
         </>
         ) : null}

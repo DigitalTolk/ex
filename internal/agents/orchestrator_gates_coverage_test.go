@@ -28,6 +28,7 @@ type ogateCovStore struct {
 	listActiveErr    error
 	getRunErr        error
 	listApprovalsErr error
+	listPendingErr   error
 	putArtifactErr   error
 	listArtifactsErr error
 	listEventsErr    error
@@ -87,6 +88,13 @@ func (s *ogateCovStore) ListApprovals(ctx context.Context, runID string) ([]*mod
 		return nil, s.listApprovalsErr
 	}
 	return s.fakeRunStore.ListApprovals(ctx, runID)
+}
+
+func (s *ogateCovStore) ListPendingApprovals(ctx context.Context, invokerID string) ([]*model.Approval, error) {
+	if s.listPendingErr != nil {
+		return nil, s.listPendingErr
+	}
+	return s.fakeRunStore.ListPendingApprovals(ctx, invokerID)
 }
 
 func (s *ogateCovStore) PutArtifact(ctx context.Context, a *model.Artifact) error {
@@ -657,4 +665,61 @@ func TestOgateCovThreadTimeline(t *testing.T) {
 		t.Fatal("run listing failure swallowed")
 	}
 	fx.store.listByParentErr = nil
+}
+
+// PendingApprovals is what a page that loads or reconnects shows: the
+// caller's live gates as run.approval frames. A lapsed one is expired on the
+// way, never listed; one whose run is gone is left out.
+func TestOgateCovPendingApprovals(t *testing.T) {
+	fx := newOgateCovFX(t)
+	ctx := context.Background()
+	run := fx.run("ogc-p1", "mP", "")
+	put := func(a *model.Approval) {
+		t.Helper()
+		if err := fx.store.fakeRunStore.PutApproval(ctx, a); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pending := func(id, runID string, deadline time.Time) *model.Approval {
+		return &model.Approval{ID: id, RunID: runID, AgentID: testGGID, InvokerID: "u-alice",
+			Summary: "run " + id, Kind: "shell", Options: nil, State: model.ApprovalPending, Deadline: deadline, CreatedAt: fx.now}
+	}
+	put(pending("ap-1", run.ID, fx.now.Add(time.Minute)))
+	put(&model.Approval{ID: "ap-2", RunID: run.ID, AgentID: testGGID, InvokerID: "u-alice", Summary: "Draft reply",
+		ReplyText: "hello", ReplyToMessageID: "mP", State: model.ApprovalPending, Deadline: fx.now.Add(time.Hour), CreatedAt: fx.now})
+	put(pending("ap-3", run.ID, fx.now.Add(-time.Second)))    // lapsed
+	put(pending("ap-4", "ogc-gone", fx.now.Add(time.Minute))) // its run is gone
+	put(&model.Approval{ID: "ap-5", RunID: run.ID, InvokerID: "u-bob", State: model.ApprovalPending, Deadline: fx.now.Add(time.Minute)})
+
+	list, err := fx.orch.PendingApprovals(ctx, "u-alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("pending = %v", list)
+	}
+	first, second := list[0], list[1]
+	if first["approvalID"] != "ap-1" || first["agentName"] != "gg" || first["parentID"] != "ogc-chan" ||
+		first["messageID"] != "mP" || first["kind"] != "shell" || first["state"] != model.ApprovalPending {
+		t.Fatalf("first frame = %v", first)
+	}
+	if second["approvalID"] != "ap-2" || second["replyText"] != "hello" || second["agentName"] != "gg" {
+		t.Fatalf("second frame = %v", second)
+	}
+	if got, _ := fx.store.fakeRunStore.GetApproval(ctx, run.ID, "ap-3"); got.State != model.ApprovalExpired {
+		t.Fatalf("lapsed approval state = %q, want expired", got.State)
+	}
+
+	// A lapsed one that can't be expired is still left out.
+	put(pending("ap-6", run.ID, fx.now.Add(-time.Second)))
+	fx.store.getApprovalFn = func(string, string) (*model.Approval, error) { return nil, errors.New("boom") }
+	if list, err = fx.orch.PendingApprovals(ctx, "u-alice"); err != nil || len(list) != 2 {
+		t.Fatalf("with a failing expiry: %v, %v", list, err)
+	}
+	fx.store.getApprovalFn = nil
+
+	fx.store.listPendingErr = errors.New("down")
+	if _, err := fx.orch.PendingApprovals(ctx, "u-alice"); err == nil {
+		t.Fatal("list failure not reported")
+	}
 }

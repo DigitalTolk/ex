@@ -71,7 +71,7 @@ function ProjectRow({ project }: { project: ProjectSummary }) {
   return (
     <Link
       to={`/projects/${encodeURIComponent(project.key)}`}
-      className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-muted"
+      className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-muted mobile:flex-wrap mobile:gap-y-1"
       data-testid={`project-row-${project.key}`}
     >
       <FolderKanban className="h-5 w-5 shrink-0 text-muted-foreground" aria-hidden="true" />
@@ -81,7 +81,7 @@ function ProjectRow({ project }: { project: ProjectSummary }) {
           {project.description || project.appURL || 'No description yet'}
         </div>
       </div>
-      <div className="flex shrink-0 flex-col items-end gap-0.5 text-sm text-muted-foreground">
+      <div className="flex shrink-0 flex-col items-end gap-0.5 text-sm text-muted-foreground mobile:w-full mobile:flex-row mobile:items-center mobile:gap-3 mobile:pl-8 mobile:text-xs">
         <span className="inline-flex items-center gap-1">
           <Images className="h-4 w-4" aria-hidden="true" />
           {project.screenCount} {project.screenCount === 1 ? 'screen' : 'screens'}

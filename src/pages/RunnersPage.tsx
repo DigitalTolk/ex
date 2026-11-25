@@ -4,7 +4,6 @@ import { MonitorCog } from 'lucide-react';
 import { PageContainer } from '@/components/layout/PageContainer';
 import { Skeleton } from '@/components/ui/skeleton';
 import { RunnerList } from '@/components/runners/RunnerList';
-import { RunnerSetupSteps } from '@/components/runners/RunnerSetupSteps';
 import { ThisComputerCard } from '@/components/runners/ThisComputerCard';
 import { useAuth } from '@/context/AuthContext';
 import { useDesktopRunner } from '@/hooks/useDesktopRunner';
@@ -19,8 +18,9 @@ const ONLINE_POLL_MS = 30_000;
 // RunnersPage is the AI hub's Runners tab: the computers that run the
 // caller's Claude Code and Codex agents. Inside the desktop app it can set up
 // and run ex-runner on this computer; everywhere it lists the connected
-// computers and shows the command-line setup for others. It exists only
-// while an admin has "Runners in the app" turned on.
+// computers. (The command-line setup for other computers is in the account
+// menu's Runners dialog; it is off this page for now.) It exists only while
+// an admin has "Runners in the app" turned on.
 export default function RunnersPage() {
   useDocumentTitle('Runners');
   const { data: settings, isLoading } = useWorkspaceSettings();
@@ -71,7 +71,7 @@ function RunnersBody() {
       {desktop && state && <ThisComputerCard state={state} ownInstalls={ownInstalls} />}
       {available && state && !state.supported && (
         <p className="rounded-lg border bg-muted/40 px-4 py-3 text-sm text-muted-foreground" data-testid="runners-unsupported">
-          This version of the ex app can't run ex-runner itself. Use the command-line setup below on this computer, or any other.
+          This version of the ex app can't run ex-runner itself. Set it up from Runners in your account menu, on this computer or any other.
         </p>
       )}
 
@@ -80,18 +80,6 @@ function RunnersBody() {
           Your computers
         </h2>
         <RunnerList runners={runners} isLoading={isLoading} error={error} thisComputerID={thisComputerID} />
-      </section>
-
-      <section className="space-y-3 rounded-lg border bg-card p-5" aria-labelledby="runner-setup">
-        <div>
-          <h2 id="runner-setup" className="text-base font-semibold">
-            {desktop ? 'Connect another computer' : 'Connect a computer'}
-          </h2>
-          <p className="mt-0.5 text-sm text-muted-foreground">
-            From a terminal on that computer. It keeps running in the background, even with ex closed.
-          </p>
-        </div>
-        <RunnerSetupSteps />
       </section>
     </div>
   );

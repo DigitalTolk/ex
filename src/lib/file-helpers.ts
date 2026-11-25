@@ -144,10 +144,14 @@ export function isPdfAttachment(contentType: string, filename = ''): boolean {
   return contentType.toLowerCase() === 'application/pdf' || /\.pdf$/i.test(filename);
 }
 
-// MP4s play in-app. As with PDFs, the extension covers uploads that arrived
+// MP4s and .mov movies play in-app. As with PDFs, the extension covers uploads that arrived
 // as `application/octet-stream`; the server checks that a file claiming to be
-// an MP4, either way, really is one.
+// one, either way, really is.
 export function isVideoAttachment(contentType: string, filename = ''): boolean {
   const type = contentType.toLowerCase();
-  return type === 'video/mp4' || type === 'video/x-m4v' || /\.(mp4|m4v)$/i.test(filename);
+  // A phone's .mov is QuickTime: it plays when the browser has its codec
+  // (HEVC outside Safari may not), and falls back to the download card if not.
+  return (
+    type === 'video/mp4' || type === 'video/x-m4v' || type === 'video/quicktime' || /\.(mp4|m4v|mov)$/i.test(filename)
+  );
 }

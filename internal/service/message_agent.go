@@ -23,34 +23,41 @@ const (
 	StateEmojiThinking  = "🧠"  // consulting/planning
 	StateEmojiReviewing = "🔍"  // reviewing
 	StateEmojiDone      = "✅"  // completed
-	StateEmojiBlocked   = "⛔"  // blocked / awaiting approval
+	StateEmojiAwaiting  = "✋"  // waiting on the invoker: an approval, a question, a draft reply
 	StateEmojiFailed    = "❌"  // failed
 	StateEmojiQueued    = "⏳"  // queued until the invoker's runner is online
 	StateEmojiStopped   = "⏹️" // canceled by a human (StopThread)
+	// stateEmojiAwaitingOld is what "waiting on the invoker" used to be. It
+	// read as "blocked" and matched the ⛔ that starts a failure message, so
+	// it moved to ✋; it stays reserved and transient so the ones already on
+	// messages still clear when the next state lands.
+	stateEmojiAwaitingOld = "⛔"
 )
 
 // machineStateEmojis is the closed set of reaction names reserved for the
 // run-state display.
 var machineStateEmojis = map[string]struct{}{
-	StateEmojiRead:      {},
-	StateEmojiWorking:   {},
-	StateEmojiThinking:  {},
-	StateEmojiReviewing: {},
-	StateEmojiDone:      {},
-	StateEmojiBlocked:   {},
-	StateEmojiFailed:    {},
-	StateEmojiQueued:    {},
-	StateEmojiStopped:   {},
+	StateEmojiRead:        {},
+	StateEmojiWorking:     {},
+	StateEmojiThinking:    {},
+	StateEmojiReviewing:   {},
+	StateEmojiDone:        {},
+	StateEmojiAwaiting:    {},
+	stateEmojiAwaitingOld: {},
+	StateEmojiFailed:      {},
+	StateEmojiQueued:      {},
+	StateEmojiStopped:     {},
 }
 
 // transientStateEmojis describe what is happening RIGHT NOW (queued, blocked
 // on approval, thinking, reviewing) — they leave when the next state lands.
 // The rest (👀 ⚙️ ✅ ❌) are the durable trail: saw it → worked → outcome.
 var transientStateEmojis = map[string]struct{}{
-	StateEmojiQueued:    {},
-	StateEmojiBlocked:   {},
-	StateEmojiThinking:  {},
-	StateEmojiReviewing: {},
+	StateEmojiQueued:      {},
+	StateEmojiAwaiting:    {},
+	stateEmojiAwaitingOld: {},
+	StateEmojiThinking:    {},
+	StateEmojiReviewing:   {},
 }
 
 // IsMachineStateEmoji reports whether the emoji name is reserved for
@@ -129,7 +136,7 @@ func (s *MessageService) SetMachineReaction(ctx context.Context, actorID, watche
 		msg.Reactions = map[string][]string{}
 	}
 	changed := false
-	// A new state ends whatever transient state preceded it — ⛔ must not
+	// A new state ends whatever transient state preceded it — ✋ must not
 	// outlive the approval it announced, ⏳ must not outlive the queue.
 	for emoji := range transientStateEmojis {
 		if emoji == state {

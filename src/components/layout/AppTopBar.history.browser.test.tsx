@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import type { ReactNode } from 'react';
 import { render } from 'vitest-browser-react';
 import { page } from 'vitest/browser';
 import { BrowserRouter, Link, useLocation } from 'react-router-dom';
@@ -12,9 +13,6 @@ import { navigateInApp } from '@/lib/navigate-in-app';
 // Back and Forward in the top bar, Slack-style: through the tab's real
 // history, beside the sidebar, with the search field still centred.
 
-vi.mock('@/components/activity/ActivityModeSwitch', () => ({
-  ActivityModeSwitch: () => <div data-testid="sidebar-mode-switch" />,
-}));
 vi.mock('./MobileTabBar', () => ({ MobileTabBar: () => <nav data-testid="mobile-tab-bar" /> }));
 vi.mock('@/components/activity/ActivityPanel', () => ({
   ActivityPanel: () => <div data-testid="activity-panel" />,
@@ -31,7 +29,20 @@ vi.mock('@/context/ThemeContext', () => ({
   useTheme: () => ({ theme: 'light', setTheme: vi.fn() }),
 }));
 vi.mock('./Sidebar', () => ({ Sidebar: () => <nav data-testid="sidebar-body">channels</nav> }));
+// The phone tab bar still draws the account menu.
 vi.mock('./AccountMenu', () => ({ AccountMenu: () => <div data-testid="sidebar-account" /> }));
+// The icon rail and the column header have their own tests; here they are
+// markers, so the layout's structure can be read without their providers.
+vi.mock('./SidebarRail', () => ({
+  SidebarRail: ({ onNavigate }: { onNavigate?: () => void }) => (
+    <nav data-testid="sidebar-rail">
+      <button type="button" onClick={onNavigate}>Rail link</button>
+    </nav>
+  ),
+}));
+vi.mock('./SidebarColumnHeader', () => ({
+  SidebarColumnHeader: ({ children }: { children?: ReactNode }) => <div data-testid="sidebar-column-header">{children}</div>,
+}));
 vi.mock('@/components/NotificationPermissionBanner', () => ({ NotificationPermissionBanner: () => null }));
 vi.mock('./LoadingBar', () => ({ LoadingBar: () => null }));
 vi.mock('@/components/UpdateBanner', () => ({ UpdateBanner: () => null }));

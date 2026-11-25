@@ -1,4 +1,5 @@
-import { NavLink, Outlet } from 'react-router-dom';
+import { useEffect, useRef } from 'react';
+import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useWorkspaceSettings } from '@/hooks/useSettings';
 import { visibleAiHubTabs } from '@/lib/ai-hub';
 
@@ -12,9 +13,20 @@ import { visibleAiHubTabs } from '@/lib/ai-hub';
 export default function AiHubLayout() {
   const { data: settings } = useWorkspaceSettings();
   const tabs = visibleAiHubTabs(settings?.runnersInApp === true);
+  const { pathname } = useLocation();
+  const stripRef = useRef<HTMLElement>(null);
+  // On a phone the strip is wider than the screen: keep the open tab in view
+  // (Projects, say, starts off the right edge).
+  // No tab is open on /runners while its switch is off; jsdom has no
+  // scrollIntoView at all.
+  useEffect(() => {
+    const strip = stripRef.current as HTMLElement;
+    strip.querySelector('[aria-current="page"]')?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+  }, [pathname, tabs.length]);
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-testid="ai-hub">
       <nav
+        ref={stripRef}
         aria-label="AI sections"
         className="mx-auto flex w-full max-w-4xl shrink-0 gap-1 overflow-x-auto border-b border-border px-4 pt-2 sm:px-6"
       >

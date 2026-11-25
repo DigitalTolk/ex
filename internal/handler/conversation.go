@@ -156,6 +156,33 @@ func (h *ConversationHandler) MarkRead(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// SetMute mutes or unmutes ({"muted": bool}) the caller's chat with a bot or
+// a webhook. A chat with a person is refused.
+func (h *ConversationHandler) SetMute(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.UserIDFromContext(r.Context())
+	id := pathParam(r, "id")
+	if userID == "" {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "missing_id", "conversation ID is required")
+		return
+	}
+	var body struct {
+		Muted bool `json:"muted"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
+		return
+	}
+	if err := h.convSvc.SetMuted(r.Context(), userID, id, body.Muted); err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // Get returns a single conversation by ID.
 func (h *ConversationHandler) Get(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromContext(r.Context())

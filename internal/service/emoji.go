@@ -224,6 +224,11 @@ func (s *EmojiService) Create(ctx context.Context, userID, name, imageKey string
 	if err := ValidateEmojiName(name); err != nil {
 		return nil, err
 	}
+	// A custom emoji named like a standard one would stand in for it
+	// everywhere :name: is drawn (custom emojis are looked up first).
+	if _, standard := emojiShortcodeToUnicode[name]; standard {
+		return nil, apperr.Reject(apperr.ErrAlreadyExists, ":%s: is already a standard emoji. Pick another name.", name)
+	}
 	if imageKey == "" {
 		return nil, apperr.Invalid("emoji: imageKey is required")
 	}
@@ -267,7 +272,7 @@ func (s *EmojiService) Create(ctx context.Context, userID, name, imageKey string
 	if err := s.emojis.Create(ctx, e); err != nil {
 		s.discardKept(ctx, keptKey)
 		if errors.Is(err, store.ErrAlreadyExists) {
-			return nil, fmt.Errorf("emoji: name already taken: %w", ErrAlreadyExists)
+			return nil, apperr.Reject(apperr.ErrAlreadyExists, "There's already a custom emoji called :%s:. Pick another name.", name)
 		}
 		return nil, fmt.Errorf("emoji: create: %w", err)
 	}

@@ -17,9 +17,11 @@ func TestWiredReportsMissingDependencies(t *testing.T) {
 	}{
 		{"auth service", &AuthService{}, "password reset store"},
 		{"user service", &UserService{}, "reminder canceller"},
+		{"user service", &UserService{}, "people ranking"},
 		{"channel service", &ChannelService{}, "conversation converter"},
 		{"conversation service", &ConversationService{}, "channel memberships"},
 		{"message service", &MessageService{}, "agent dispatcher"},
+		{"message service", &MessageService{}, "people frequency"},
 		{"notification service", &NotificationService{}, "ack store"},
 		{"user state service", &UserStateService{}, "activity tracker"},
 		{"emoji service", &EmojiService{}, "frequency store"},

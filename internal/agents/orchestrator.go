@@ -176,6 +176,7 @@ type orchestratorRunStore interface {
 	SettleApproval(ctx context.Context, runID, approvalID, state, decidedBy, choice, note string, decidedAt time.Time) error
 	ConsumeApproval(ctx context.Context, runID, approvalID string, at time.Time) error
 	ListApprovals(ctx context.Context, runID string) ([]*model.Approval, error)
+	ListPendingApprovals(ctx context.Context, invokerID string) ([]*model.Approval, error)
 	PutArtifact(ctx context.Context, a *model.Artifact) error
 	ListArtifacts(ctx context.Context, runID string) ([]*model.Artifact, error)
 }
@@ -294,6 +295,10 @@ type Orchestrator struct {
 	// connectors validates /connector picks against the registry (nil → the
 	// feature is off and picks never attach to runs).
 	connectors connectorRegistry
+
+	// gitHost is the team's GitLab (SetGitHost); "" leaves the bundle's git
+	// layer out.
+	gitHost string
 
 	// archive tiers a terminal run's timeline into object storage and prunes
 	// the hot DynamoDB rows (nil → archiving is off and events stay in
@@ -3149,6 +3154,11 @@ func (b *bundleBuilder) codingTask() {
 // location from keyword hits instead of just reading it.
 func (b *bundleBuilder) toolCraft() {
 	b.must("\n# Using workspace tools\n" +
+		"- First decide whether the request needs anything from chat at all. Most don't: a general question, " +
+		"a calculation, writing or rewriting text, work in a connector or the shell. Answer those from the # Task " +
+		"with no read or search calls; when it is about this conversation, the # Thread section already holds it. " +
+		"Look something up only when the request points at what you can't see here (an earlier discussion, another " +
+		"channel or DM, what someone said, a linked message), and then fetch exactly that.\n" +
 		"- Read, don't search, when you hold a handle: a [m:<id>] marker, a #msg-<id> permalink, a [ch:<id>] or a " +
 		"user id names exactly where something lives — open it directly (read_channel with thread, read_dm, " +
 		"read_pins, get_thread). Search is for DISCOVERY, when you have no reference at all; it returns scattered " +
@@ -3493,6 +3503,7 @@ func (o *Orchestrator) buildBundle(ctx context.Context, run *model.Run) (string,
 	b.taskBrief()
 	b.codingTask()
 	b.toolCraft()
+	b.gitAccess()
 	b.memory()
 	b.coRoster()
 	b.design()
@@ -3673,11 +3684,9 @@ func (o *Orchestrator) RenderMessages(ctx context.Context, msgs []*model.Message
 	return b.String()
 }
 
-// mentionMarkupRE / channelMarkupRE match the editor's raw mention tokens.
-var (
-	mentionMarkupRE = regexp.MustCompile(`@\[[^|\]]+\|([^\]]+)\]`)
-	channelMarkupRE = regexp.MustCompile(`~\[[^|\]]+\|([^\]]+)\]`)
-)
+// channelMarkupRE matches the editor's raw channel tokens; @-mention tokens
+// go through service.PlainMentions, the one scanner of that syntax.
+var channelMarkupRE = regexp.MustCompile(`~\[[^|\]]+\|([^\]]+)\]`)
 
 // defangThreadBody makes another participant's message safe to place in an
 // agent's context. Chat bodies are UNTRUSTED — a hostile member can write
@@ -3689,7 +3698,7 @@ var (
 // instruction-like prose — that is the job of the # Thread framing and the
 // system rules, which tell the model thread content is data, not commands.
 func defangThreadBody(body string) string {
-	body = mentionMarkupRE.ReplaceAllString(body, "@$1")
+	body = service.PlainMentions(body)
 	body = channelMarkupRE.ReplaceAllString(body, "~$1")
 	return body
 }

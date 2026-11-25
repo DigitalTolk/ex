@@ -20,7 +20,9 @@ interface ComposerSubmitOptions {
   variant: 'composer' | 'inline';
   isMobile: boolean;
   submitLabel?: string;
-  onSend: (value: MessageInputValue) => void;
+  // An edit's save returns its promise: the composer keeps the text until
+  // the save lands, so a refused one loses nothing.
+  onSend: (value: MessageInputValue) => void | Promise<unknown>;
   onSchedule?: (value: MessageInputValue, sendAt: Date) => Promise<void>;
   submitCommand: (trimmed: string, hasAttachments: boolean) => SlashCommandOutcome;
   clearDraft: () => void;
@@ -87,10 +89,14 @@ export function useComposerSubmit({
     const trimmed = text.trim();
     const command = submitCommand(trimmed, drafts.length > 0);
     if (command === 'busy') return;
-    if (command === 'not-a-command') {
-      onSend(composerValue(normalizeEmojiInBody(trimmed), drafts));
-    }
+    const sent = command === 'not-a-command' ? onSend(composerValue(normalizeEmojiInBody(trimmed), drafts)) : undefined;
     if (variant === 'inline') return; // parent unmounts the inline edit
+    // A save empties the composer once it has landed; a failed one keeps the
+    // text and files to try again (the caller says what went wrong).
+    if (sent instanceof Promise) {
+      sent.then(clearAfterSubmit, () => {});
+      return;
+    }
     clearAfterSubmit();
   }, [sendable, currentBody, drafts, onSend, variant, submitCommand, clearAfterSubmit]);
 

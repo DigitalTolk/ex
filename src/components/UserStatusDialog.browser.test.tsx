@@ -198,7 +198,7 @@ describe('UserStatusDialog browser', () => {
       expect(t).not.toBeNull();
       return t!;
     });
-    const picked = tile.title; // ':shortcode:'
+    const picked = tile.dataset.emojiName!; // ':shortcode:'
     tile.click();
     // The pick flips the preset select to the synthetic custom value…
     await vi.waitFor(() => {

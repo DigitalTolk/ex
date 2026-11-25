@@ -266,6 +266,23 @@ describe('activity, emoji, settings and agent-run payloads', () => {
     expect(parseSettings({ settings: { ...settings, desktopLevel: 'loud' } })).toBeNull();
   });
 
+  // Do Not Disturb rides the settings as the time it runs until.
+  it('notification.settings_updated carries Do Not Disturb as snoozeUntil, when it is on', () => {
+    const settings = {
+      desktopLevel: 'all',
+      mobileLevel: 'default',
+      threadReplies: true,
+      ignoreGroupMentions: false,
+      followAllThreads: false,
+    };
+    expect(parseSettings({ settings: { ...settings, snoozeUntil: '2026-11-18T17:00:00Z' } })?.settings.snoozeUntil).toBe(
+      '2026-11-18T17:00:00Z',
+    );
+    expect(parseSettings({ settings })?.settings).not.toHaveProperty('snoozeUntil');
+    // A time that is not a string is a frame the client cannot act on.
+    expect(parseSettings({ settings: { ...settings, snoozeUntil: 1763485200 } })).toBeNull();
+  });
+
   it('run frames need the run, its agent and its parent', () => {
     expect(parseRunUpdated({ id: 'r1', agentID: 'a', parentID: 'ch-1', state: 'running', round: 2 })).toMatchObject({
       id: 'r1',

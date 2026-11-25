@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Sidebar } from './Sidebar';
+import { requestAddCategory } from '@/stores/sidebar-add-category';
 import type { User, UserChannel, UserConversation } from '@/types';
 
 // --- mocks ---------------------------------------------------------------
@@ -439,6 +440,7 @@ describe('Sidebar', () => {
   });
 
   it('uses the same mobile row sizing across top links, section headers, channels, and DMs', () => {
+    setMobileMatch(true);
     renderSidebar();
 
     expect(screen.getByText('Directory').closest('a')).toHaveClass('mobile:h-12', 'mobile:px-3', 'mobile:text-base');
@@ -468,9 +470,76 @@ describe('Sidebar', () => {
     expect(screen.getByText('Project Team')).toBeInTheDocument();
   });
 
-  it('renders Directory link', () => {
+  it('leads the phone list with the pages, then a break before the chats', () => {
+    setMobileMatch(true);
     renderSidebar();
-    expect(screen.getByText('Directory')).toBeInTheDocument();
+    for (const page of ['Threads', 'Drafts', 'Directory']) {
+      expect(screen.getByText(page).closest('a')).toBeInTheDocument();
+    }
+    expect(screen.getByTestId('sidebar-top-divider')).toBeInTheDocument();
+    // A phone has no column header: its top bar names the screen.
+    expect(screen.queryByTestId('sidebar-server-name')).toBeNull();
+  });
+
+  it('holds only chats on desktop: the pages live on the rail, and the header names the server', () => {
+    renderSidebar();
+    for (const page of ['Threads', 'Drafts', 'Directory']) {
+      expect(screen.queryByText(page)).toBeNull();
+    }
+    expect(screen.queryByTestId('sidebar-top-divider')).toBeNull();
+    expect(screen.getByTestId('sidebar-server-name')).toHaveTextContent(window.location.hostname);
+    // The list still leads with "+ Add category" and the unread options.
+    expect(screen.getByTestId('sidebar-unread-options')).toBeInTheDocument();
+    expect(screen.getByText('general')).toBeInTheDocument();
+  });
+
+  it('ends Channels with "Add channels", which opens the channel directory and closes the drawer', async () => {
+    const onClose = vi.fn();
+    renderSidebar(onClose);
+    const row = screen.getByTestId('sidebar-add-channels');
+    expect(row).toHaveAttribute('href', '/directory/channels');
+    // It sits inside the Channels section, after its rows.
+    expect(screen.getByTestId('sidebar-group-__channels__')).toContainElement(row);
+    fireEvent.click(row);
+    await waitFor(() => expect(window.location.pathname).toBe('/directory/channels'));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves a modified click on "Add channels" to the browser (open in a new tab)', () => {
+    const onClose = vi.fn();
+    renderSidebar(onClose);
+    const row = screen.getByTestId('sidebar-add-channels');
+    // jsdom would try to follow the link: stop it after the handler ran.
+    row.addEventListener('click', (event) => event.preventDefault());
+    for (const modifier of [{ metaKey: true }, { ctrlKey: true }, { shiftKey: true }, { altKey: true }, { button: 1 }]) {
+      fireEvent.click(row, modifier);
+    }
+    expect(window.location.pathname).toBe('/');
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('ends Direct Messages with "Add coworkers" for an admin, which opens the invite dialog', async () => {
+    renderSidebar();
+    const row = screen.getByTestId('sidebar-add-coworkers');
+    expect(screen.getByTestId('sidebar-group-__dms__')).toContainElement(row);
+    fireEvent.click(row);
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+  });
+
+  it('shows "Add coworkers" to admins only', () => {
+    mockUser.systemRole = 'member';
+    renderSidebar();
+    expect(screen.queryByTestId('sidebar-add-coworkers')).toBeNull();
+    expect(screen.getByTestId('sidebar-add-channels')).toBeInTheDocument();
+  });
+
+  it('drops the "Add" rows from a collapsed section', () => {
+    renderSidebar();
+    fireEvent.click(screen.getByTestId('sidebar-group-toggle-__channels__'));
+    expect(screen.queryByTestId('sidebar-add-channels')).toBeNull();
+    expect(screen.getByTestId('sidebar-add-coworkers')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('sidebar-group-toggle-__dms__'));
+    expect(screen.queryByTestId('sidebar-add-coworkers')).toBeNull();
   });
 
   it('renders Create channel button', () => {
@@ -560,6 +629,9 @@ describe('Sidebar', () => {
       return undefined;
     });
     const draftsLink = () => screen.getByRole('link', { name: /Drafts/ });
+    // The phone list carries the Drafts link, whose count shows the drafts
+    // have loaded.
+    setMobileMatch(true);
 
     const closed = renderSidebar();
     await waitFor(() => expect(draftsLink()).toHaveTextContent('2'));
@@ -963,20 +1035,22 @@ describe('Sidebar', () => {
   it('spaces open sections widely and packs collapsed ones', () => {
     renderSidebar();
     const group = (key: string) => screen.getByTestId(`sidebar-group-${key}`);
-    expect(group('__channels__')).toHaveClass('mt-5');
-    expect(group('__dms__')).toHaveClass('mt-5');
+    expect(group('__channels__')).toHaveClass('mt-3');
+    expect(group('__dms__')).toHaveClass('mt-3');
     // DMs collapsed right after an open Channels: still set apart from it.
     fireEvent.click(screen.getByTestId('sidebar-group-toggle-__dms__'));
-    expect(group('__dms__')).toHaveClass('mt-5');
+    expect(group('__dms__')).toHaveClass('mt-3');
     // Both collapsed: the DMs heading packs up under the Channels heading.
     fireEvent.click(screen.getByTestId('sidebar-group-toggle-__channels__'));
-    expect(group('__dms__')).toHaveClass('mt-2');
+    expect(group('__dms__')).toHaveClass('mt-1', 'mobile:mt-2');
+    expect(group('__dms__')).not.toHaveClass('mt-3');
     // Reopen DMs: an open section always gets its gap.
     fireEvent.click(screen.getByTestId('sidebar-group-toggle-__dms__'));
-    expect(group('__dms__')).toHaveClass('mt-5');
+    expect(group('__dms__')).toHaveClass('mt-3');
   });
 
   it('marks the Threads link active on the /threads route', () => {
+    setMobileMatch(true);
     window.history.pushState({}, '', '/threads');
     renderSidebar();
     const link = screen.getByText('Threads').closest('a')!;
@@ -1000,6 +1074,7 @@ describe('Sidebar', () => {
       if (url === '/api/v1/drafts') return drafts;
       return undefined;
     });
+    setMobileMatch(true);
     window.history.pushState({}, '', '/drafts');
     renderSidebar();
     const link = screen.getByText('Drafts').closest('a')!;
@@ -1044,6 +1119,7 @@ describe('Sidebar', () => {
       }
       return undefined;
     });
+    setMobileMatch(true);
     renderSidebar();
     // Threads counts the threads with unread replies, like Drafts counts
     // drafts, capped at "99+".
@@ -1069,6 +1145,7 @@ describe('Sidebar', () => {
       if (url === '/api/v1/drafts') return manyDrafts;
       return undefined;
     });
+    setMobileMatch(true);
     renderSidebar();
     expect(await screen.findByText('99+')).toBeInTheDocument();
   });
@@ -2057,21 +2134,43 @@ describe('Sidebar unread view', () => {
   });
 
 
-  it('"Show unread only" filters to unread chats plus the open one, with a way back', async () => {
+  it('"Show unread only" filters to unread chats plus the open one, and the options undo it', async () => {
     mockChannels = mockChannels.map((c) => (c.channelID === 'ch-3' ? { ...c, unread: true } : c));
     window.history.pushState({}, '', '/channel/secret');
     const user = userEvent.setup();
     renderSidebar();
     await toggle(user, 'sidebar-unread-filter');
 
-    expect(screen.getByTestId('sidebar-unread-only-strip')).toHaveTextContent('Showing unread only');
     expect(screen.getByText('My Cool Channel!')).toBeInTheDocument();
     expect(screen.getByText('secret')).toBeInTheDocument(); // the open chat
     expect(screen.queryByText('general')).toBeNull();
-    // Sections with nothing to show disappear.
+    // Sections with nothing to show disappear, and nothing offers to add to
+    // a filtered list.
     expect(screen.queryByTestId('sidebar-group-__dms__')).toBeNull();
+    expect(screen.queryByTestId('sidebar-add-channels')).toBeNull();
     expect(localStorage.getItem('sidebar.unreadOnly')).toBe('1');
-    expect(screen.getByTestId('sidebar-unread-options')).toHaveAttribute('title', 'Unread view: unread only');
+    // On desktop the lit options icon says the filter is on; there is no
+    // strip above the list.
+    const options = screen.getByTestId('sidebar-unread-options');
+    expect(options).toHaveAttribute('title', 'Unread view: unread only');
+    expect(options).toHaveAttribute('data-active', 'true');
+    expect(screen.queryByTestId('sidebar-unread-only-strip')).toBeNull();
+
+    await toggle(user, 'sidebar-unread-filter');
+    expect(screen.getByText('general')).toBeInTheDocument();
+    expect(screen.getByTestId('sidebar-unread-options')).toHaveAttribute('data-active', 'false');
+    expect(localStorage.getItem('sidebar.unreadOnly')).toBe('0');
+  });
+
+  it('on a phone, says "Showing unread only" above the list with a way back', async () => {
+    mockChannels = mockChannels.map((c) => (c.channelID === 'ch-3' ? { ...c, unread: true } : c));
+    localStorage.setItem('sidebar.unreadOnly', '1');
+    setMobileMatch(true);
+    const user = userEvent.setup();
+    renderSidebar();
+
+    expect(screen.getByTestId('sidebar-unread-only-strip')).toHaveTextContent('Showing unread only');
+    expect(screen.queryByText('general')).toBeNull();
 
     await user.click(screen.getByTestId('sidebar-unread-show-all'));
     expect(screen.getByText('general')).toBeInTheDocument();
@@ -2094,6 +2193,25 @@ describe('Sidebar add-category feedback', () => {
     localStorage.clear();
     window.history.pushState({}, '', '/');
     setMobileMatch(false);
+  });
+
+  it('opens the new-category field from the header\'s "+" menu, each time it is asked', async () => {
+    const user = userEvent.setup();
+    renderSidebar();
+    expect(screen.queryByTestId('sidebar-new-category-input')).toBeNull();
+
+    await user.click(screen.getByTestId('sidebar-create-menu'));
+    await user.click(await screen.findByTestId('sidebar-create-category'));
+    const input = await screen.findByTestId('sidebar-new-category-input');
+    // The field takes the place of "+ Add category", so nothing moves.
+    expect(screen.queryByTestId('sidebar-add-category')).toBeNull();
+
+    // Escape puts the button back; asking again opens the field again.
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(screen.queryByTestId('sidebar-new-category-input')).toBeNull();
+    expect(screen.getByTestId('sidebar-add-category')).toBeInTheDocument();
+    act(() => requestAddCategory());
+    expect(screen.getByTestId('sidebar-new-category-input')).toBeInTheDocument();
   });
 
   it('shows "Creating…" while saving, ignores a repeat Enter, and closes once it is created', async () => {

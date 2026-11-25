@@ -482,3 +482,8 @@ func TestDraftHandler_ErrorBranches(t *testing.T) {
 		t.Fatalf("failed delete status = %d, want 500; body=%s", rec.Code, rec.Body.String())
 	}
 }
+
+func (handlerConversationStore) SetMuted(context.Context, string, string, bool) error { return nil }
+func (handlerConversationStore) ConversationMuted(context.Context, string, string) (bool, error) {
+	return false, nil
+}

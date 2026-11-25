@@ -10,6 +10,7 @@ function Harness({
   triggerRect,
   preferredAlign,
   preferredSide,
+  beside,
   mobileSheet,
   estimatedHeight = 100,
   estimatedWidth = 100,
@@ -19,6 +20,7 @@ function Harness({
   triggerRect: { top: number; bottom: number; left: number; right: number };
   preferredAlign?: 'start' | 'end';
   preferredSide?: 'top' | 'bottom';
+  beside?: boolean;
   mobileSheet?: boolean;
   estimatedHeight?: number;
   estimatedWidth?: number;
@@ -54,6 +56,7 @@ function Harness({
         estimatedWidth={estimatedWidth}
         preferredAlign={preferredAlign}
         preferredSide={preferredSide}
+        beside={beside}
         mobileSheet={mobileSheet}
       >
         <div>popover content</div>
@@ -125,6 +128,47 @@ describe('PopoverPortal', () => {
     );
     const portal = screen.getByTestId('popover-portal');
     expect(portal.getAttribute('data-popover-side')).toBe('top');
+  });
+
+  // `beside`: the Activity bell's preview opens to the right of the bell,
+  // not under it where it would cover the chat list.
+  it('opens beside the trigger, to its right with their tops level', () => {
+    render(<Harness open beside triggerRect={{ top: 100, bottom: 120, left: 20, right: 60 }} />);
+    const portal = screen.getByTestId('popover-portal');
+    expect(portal.style.top).toBe('100px');
+    // The trigger's right edge plus the 8px margin.
+    expect(portal.style.left).toBe('68px');
+  });
+
+  it('opens under the trigger when beside is not asked for', () => {
+    render(<Harness open triggerRect={{ top: 100, bottom: 120, left: 20, right: 60 }} />);
+    const portal = screen.getByTestId('popover-portal');
+    expect(portal.style.top).toBe('124px');
+    expect(portal.style.left).toBe('20px');
+  });
+
+  it('falls back to under the trigger when there is no room beside it', () => {
+    // 700 + 8 + 100 + 8 is past the 800px viewport.
+    render(<Harness open beside triggerRect={{ top: 100, bottom: 120, left: 650, right: 700 }} />);
+    const portal = screen.getByTestId('popover-portal');
+    expect(portal.style.top).toBe('124px');
+    expect(portal.style.left).toBe('650px');
+  });
+
+  it('takes the last pixel of room beside the trigger', () => {
+    // 684 + 8 + 100 + 8 is exactly the 800px viewport.
+    render(<Harness open beside triggerRect={{ top: 100, bottom: 120, left: 640, right: 684 }} />);
+    const portal = screen.getByTestId('popover-portal');
+    expect(portal.style.top).toBe('100px');
+    expect(portal.style.left).toBe('692px');
+  });
+
+  it('keeps a beside popover inside the viewport when its trigger is near the bottom', () => {
+    render(<Harness open beside triggerRect={{ top: 550, bottom: 570, left: 20, right: 60 }} />);
+    const portal = screen.getByTestId('popover-portal');
+    // 600 - 100 (height) - 8 (margin): level tops would run off the bottom.
+    expect(portal.style.top).toBe('492px');
+    expect(portal.style.left).toBe('68px');
   });
 
   it('clamps top so popover never renders below the viewport', () => {

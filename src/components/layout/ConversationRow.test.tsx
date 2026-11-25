@@ -1,10 +1,12 @@
-import { describe, it, expect, vi } from 'vitest';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import { BrowserRouter } from 'react-router-dom';
 import type { UserConversation } from '@/types';
 import { ConversationRow } from './ConversationRow';
 
+const muteConversation = vi.hoisted(() => vi.fn());
 vi.mock('@/hooks/useSidebar', () => ({
+  useMuteConversation: () => ({ mutate: muteConversation }),
   useReorderSidebar: () => ({ mutate: vi.fn(), isPending: false }),
   markLocalSidebarReorder: vi.fn(),
   shouldRefetchSidebarForRemoteUpdate: vi.fn(() => true),
@@ -44,6 +46,62 @@ function renderRow(props: Partial<Parameters<typeof ConversationRow>[0]> = {}) {
 }
 
 describe('ConversationRow', () => {
+  beforeEach(() => {
+    muteConversation.mockReset();
+  });
+
+  // The long-press that opens the row's menu on a phone.
+  function openMenu() {
+    const row = screen.getByTestId('conversation-row-c-1');
+    fireEvent.pointerDown(row, { pointerType: 'touch' });
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+  }
+
+  it("offers to mute a bot's chat, and asks for exactly that", () => {
+    vi.useFakeTimers();
+    try {
+      renderRow({ conversation: dm({ displayName: 'Uptime Kuma', bot: true }) });
+      // Not muted: an ordinary row, with no muted mark.
+      expect(screen.queryByTestId('conv-muted-c-1')).toBeNull();
+      expect(screen.getByText('Uptime Kuma')).not.toHaveClass('text-gray-500');
+      openMenu();
+      fireEvent.click(screen.getByTestId('conv-mute-c-1'));
+      expect(screen.queryByText('Unmute Uptime Kuma')).toBeNull();
+      expect(muteConversation).toHaveBeenCalledWith({ conversationID: 'c-1', muted: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("marks a muted bot's chat and offers to unmute it", () => {
+    vi.useFakeTimers();
+    try {
+      renderRow({ conversation: dm({ displayName: 'Uptime Kuma', bot: true, muted: true }) });
+      expect(screen.getByTestId('conv-muted-c-1')).toHaveAccessibleName('Muted');
+      expect(screen.getByText('Uptime Kuma')).toHaveClass('text-gray-500');
+      openMenu();
+      expect(screen.getByTestId('conv-mute-c-1')).toHaveTextContent('Unmute Uptime Kuma');
+      fireEvent.click(screen.getByTestId('conv-mute-c-1'));
+      expect(muteConversation).toHaveBeenCalledWith({ conversationID: 'c-1', muted: false });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("never offers to mute a person's chat", () => {
+    vi.useFakeTimers();
+    try {
+      renderRow();
+      openMenu();
+      expect(screen.getByText('Close conversation')).toBeInTheDocument();
+      expect(screen.queryByTestId('conv-mute-c-1')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('suppresses navigation and notifies when suppressNavigation is set', () => {
     const onClose = vi.fn();
     const onSuppressNavigationConsumed = vi.fn();

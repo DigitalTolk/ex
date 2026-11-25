@@ -63,13 +63,22 @@ export function readVideoPoster(file: Blob): Promise<VideoPoster | null> {
         0.85,
       );
     };
+    // A frame painted while the seek is still under way is the one before it
+    // (a busy browser can paint the black opening late): wait for the next.
+    const onFrame = () => {
+      if (video.seeking) {
+        video.requestVideoFrameCallback(onFrame);
+        return;
+      }
+      capture();
+    };
     video.addEventListener(
       'loadeddata',
       () => {
         // Drawn once the frame the seek lands on is on screen: `seeked` can
         // come before it is painted, and a busy Chromium then drew the clip's
         // black opening as the poster. Without the frame callback, `seeked`.
-        if (typeof video.requestVideoFrameCallback === 'function') video.requestVideoFrameCallback(capture);
+        if (typeof video.requestVideoFrameCallback === 'function') video.requestVideoFrameCallback(onFrame);
         else video.addEventListener('seeked', capture, { once: true });
         // A clip with no known length (a live recording) reports Infinity.
         video.currentTime = Math.min(POSTER_AT_SECONDS, video.duration / 2);

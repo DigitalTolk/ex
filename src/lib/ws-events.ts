@@ -26,6 +26,7 @@ import {
   typingSchema,
   userChannelUpdatedSchema,
   userUpdatedSchema,
+  userGroupChangedSchema,
 } from '@/lib/ws-schemas';
 
 // A data-less "refetch your list" nudge (or a payload its handler ignores):
@@ -71,6 +72,8 @@ export const wsEventSchemas = {
   [EventType.SessionRenewed]: sessionRenewedSchema,
   [EventType.WebhookChanged]: nudge,
   [EventType.BotChanged]: nudge,
+  [EventType.UserGroupChanged]: userGroupChangedSchema,
+  [EventType.UserGroupSync]: nudge,
   [EventType.ProjectChanged]: nudge,
   [EventType.SettingsUpdated]: nudge,
   [EventType.RunnersChanged]: nudge,

@@ -58,6 +58,11 @@ export const MentionKindAll: MentionKind = "all"; // @all / @channel
 export const MentionKindHere: MentionKind = "here"; // @here
 export const MentionKindKeyword: MentionKind = "keyword"; // matched one of the user's notification keywords
 /**
+ * MentionKindUserGroup: mentioned through a user group they belong to
+ * (UserGroupID / UserGroupHandle name it).
+ */
+export const MentionKindUserGroup: MentionKind = "usergroup";
+/**
  * ActivityItem is one entry in a user's personal activity stream (Slack-style
  * Activity tab). It is a denormalized hint: it carries enough context (preview
  * + parent + message id) to render a row and deep-link to the source message
@@ -113,6 +118,12 @@ export interface ActivityItem {
    * MentionKind is set on ActivityMention items.
    */
   mentionKind?: MentionKind;
+  /**
+   * UserGroupID / UserGroupHandle name the group of a MentionKindUserGroup
+   * item; the handle is snapshotted so the row renders without a lookup.
+   */
+  userGroupID?: string;
+  userGroupHandle?: string;
 }
 /**
  * ActivityFeedItem is an ActivityItem as listed to its owner: the stored item
@@ -1038,6 +1049,29 @@ export interface RunnerRegistration {
 }
 
 //////////
+// source: agent_models.go
+
+/**
+ * AgentModelOption is one model an admin offers for an engine: the agents
+ * page and the admin panel pick an agent's model from these instead of a free
+ * text field. Only the engines with a fixed set of models have a list:
+ * Claude Code (Claude models) and AWS Bedrock (Claude in the EU); Codex keeps
+ * its free text.
+ */
+export interface AgentModelOption {
+  harness: string;
+  id: string;
+  /**
+   * Label is what the dropdown shows; the id when blank.
+   */
+  label?: string;
+}
+/**
+ * MaxAgentModelsPerHarness caps each engine's list: it is a dropdown.
+ */
+export const MaxAgentModelsPerHarness = 25;
+
+//////////
 // source: attachment.go
 
 /**
@@ -1738,6 +1772,11 @@ export interface Channel {
   name: string;
   slug: string;
   description?: string;
+  /**
+   * Icon is an emoji (the glyph, or its name) shown in place of the
+   * channel's globe or lock; empty keeps those.
+   */
+  icon?: string;
   type: ChannelType;
   createdBy: string;
   archived: boolean;
@@ -2584,6 +2623,11 @@ export interface UserChannel {
    */
   archived?: boolean;
   /**
+   * Icon mirrors the channel's emoji icon, stamped at read time like
+   * Archived, so changing it writes one row, not one per member.
+   */
+  icon?: string;
+  /**
    * UnreadNotifyCount counts unread messages that actually ALERTED this
    * user per their notification rules (mentions, keywords, "all messages"
    * level; mute suppresses) — the sidebar's numeric badge. Plain unread
@@ -2674,6 +2718,12 @@ export interface UserConversation {
    */
   unreadNotifyCount?: number /* int64 */;
   /**
+   * Muted: this user muted the chat. Only a chat with a bot or a webhook
+   * can be muted (never one with a person); its messages then alert them
+   * for nothing but a direct @-mention.
+   */
+  muted?: boolean;
+  /**
    * AvatarURL and UserStatus are read-time enrichments for DM sidebar rows.
    * They are intentionally not persisted so profile changes stay single
    * sourced from the User record.
@@ -2681,6 +2731,12 @@ export interface UserConversation {
   avatarURL?: string;
   userStatus?: UserStatus;
   profileResolved?: boolean;
+  /**
+   * Bot: the other side of this DM is a bot or a webhook, read from its
+   * profile like the avatar. Such a chat can be muted; one with a person
+   * can't.
+   */
+  bot?: boolean;
   /**
    * Favorite pins this DM/group to the user's "Favorites" sidebar
    * section. Same per-user semantics as on UserChannel.
@@ -2952,6 +3008,12 @@ export interface Notification {
    * duplicated events can't drift the count.
    */
   parentUnreadNotifyCount?: number /* int64 */;
+  /**
+   * Silent: the recipient has Do Not Disturb on. The client takes the
+   * notification in (badges, Activity) but shows no popup and plays no
+   * sound; the server sends no phone push for it either.
+   */
+  silent?: boolean;
 }
 
 //////////
@@ -2988,6 +3050,13 @@ export interface NotificationSettings {
   ignoreGroupMentions: boolean;
   followAllThreads: boolean;
   keywords?: string[];
+  /**
+   * SnoozeUntil is Do Not Disturb: until then nothing alerts this user (no
+   * popup, sound or phone push), though everything is still listed in
+   * Activity and counted on badges. Set through its own endpoint, never
+   * with the rest of the settings.
+   */
+  snoozeUntil?: string /* RFC3339 */;
 }
 /**
  * ChannelNotificationOverride carries the per-channel override values a user
@@ -3022,6 +3091,11 @@ export interface RunnerToken {
   label: string;
   createdAt: string /* RFC3339 */;
   expiresAt: string /* RFC3339 */;
+  /**
+   * Workbench marks the install ex set up on the shared agent workbench
+   * for this person (Connect to Claude), not one they paired themselves.
+   */
+  workbench?: boolean;
 }
 /**
  * RunnerGrant is the short-lived, single-use approval a signed-in user gives
@@ -3109,6 +3183,13 @@ export interface WorkspaceSettings {
    * set up from the command line and the account menu's Runners dialog.
    */
   runnersInApp: boolean;
+  /**
+   * AgentModels are the models agents may run on, per engine: the agents
+   * page and the admin panel offer them in a dropdown. Empty means the
+   * built-in list (DefaultAgentModels). Changed only through its own admin
+   * route, never by a save of the other settings.
+   */
+  agentModels: AgentModelOption[];
 }
 /**
  * DefaultMaxUploadBytes is the fallback ceiling when the workspace hasn't
@@ -3399,6 +3480,134 @@ export interface MarkUnreadResult {
   unreadCount: number /* int64 */;
   threadRootID?: string;
   seenAt?: string /* RFC3339 */;
+}
+
+//////////
+// source: usergroup.go
+
+/**
+ * UserGroupIDPrefix starts every user-group ID. A group is mentioned with the
+ * same "@[id|label]" token as a person, so the prefix is what tells a mention
+ * parser it names a group (ULID user IDs and "bot-" IDs never start with it).
+ */
+export const UserGroupIDPrefix = "group-";
+/**
+ * UserGroup is a named set of people mentioned together through its handle
+ * (Slack-style "@oncall"). Groups come from Microsoft 365 (Entra ID): each
+ * security group in the configured parent group is one user group, its
+ * display name the handle, kept in sync by the user-group sync. A disabled
+ * group keeps its members and its handle but is not mentionable.
+ */
+export interface UserGroup {
+  id: string;
+  handle: string;
+  name: string;
+  description: string;
+  disabled: boolean;
+  memberCount: number /* int */;
+  createdBy: string;
+  createdAt: string /* RFC3339 */;
+  updatedAt: string /* RFC3339 */;
+  /**
+   * Source is the Entra group the group follows.
+   */
+  source: UserGroupSource;
+  /**
+   * SyncSkipped counts the people in the Entra group who aren't group
+   * members in ex (no ex account, a guest, a bot or deactivated).
+   */
+  syncSkipped?: number /* int */;
+  /**
+   * SyncState flags something about the source an admin should know (""
+   * when there's nothing).
+   */
+  syncState?: UserGroupSyncState;
+}
+/**
+ * UserGroupSourceEntraGroup is the kind of a group that follows an Entra
+ * security group.
+ */
+export const UserGroupSourceEntraGroup = "entra-group";
+/**
+ * UserGroupSource is where a group's members come from. Key identifies it
+ * ("entra-group:<object id>") and is claimed, so one source backs at most one
+ * group; it never changes, so renaming the Entra group renames this group.
+ */
+export interface UserGroupSource {
+  kind: string;
+  id: string;
+  key: string;
+}
+/**
+ * UserGroupSyncState flags a group's source for admins.
+ */
+export type UserGroupSyncState = string;
+/**
+ * UserGroupSyncSourceMissing: the Entra group left the parent group (or
+ * was deleted), so the group has no members; an admin can disable it.
+ */
+export const UserGroupSyncSourceMissing: UserGroupSyncState = "source-missing";
+/**
+ * UserGroupSyncHandleConflict: the Entra group was renamed to a handle ex
+ * can't use (invalid, reserved, or held by another group or a bot), so
+ * the group keeps its handle until that's fixed.
+ */
+export const UserGroupSyncHandleConflict: UserGroupSyncState = "handle-conflict";
+/**
+ * UserGroupSyncStatus is how the user-group sync went, for admins.
+ */
+export interface UserGroupSyncStatus {
+  /**
+   * Configured is false when no parent group is set, so nothing syncs.
+   */
+  configured: boolean;
+  /**
+   * IntervalMinutes is how often the scheduled sync runs.
+   */
+  intervalMinutes: number /* int */;
+  /**
+   * Running is set while a sync runs; StartedAt and Trigger ("scheduled"
+   * or "manual") describe it.
+   */
+  running: boolean;
+  startedAt?: string /* RFC3339 */;
+  trigger?: string;
+  /**
+   * LastSyncedAt is when the last successful sync finished; nil before
+   * the first.
+   */
+  lastSyncedAt?: string /* RFC3339 */;
+  /**
+   * FinishedAt is when the last sync, successful or not, finished.
+   */
+  finishedAt?: string /* RFC3339 */;
+  /**
+   * LastError says why the last sync failed; "" when it succeeded.
+   */
+  lastError?: string;
+  /**
+   * Skipped lists the Entra groups the last sync couldn't create or rename.
+   */
+  skipped: UserGroupSyncSkip[];
+}
+/**
+ * UserGroupSyncSkip is an Entra group a sync couldn't use as it is, and why.
+ */
+export interface UserGroupSyncSkip {
+  /**
+   * GroupID is the ex group (when it exists), Name the Entra group's name.
+   */
+  groupId?: string;
+  name: string;
+  reason: string;
+}
+/**
+ * UserGroupDetail is a group with its member IDs. The members are rows of
+ * their own (one per member), so a group has no size limit. Version is the
+ * group row's optimistic-concurrency counter.
+ */
+export interface UserGroupDetail extends UserGroup {
+  memberIds: string[];
 }
 
 //////////

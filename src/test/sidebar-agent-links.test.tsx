@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { Sidebar } from '@/components/layout/Sidebar';
@@ -50,54 +50,49 @@ vi.mock('@/lib/api', () => ({
   ApiError: class extends Error { status = 0; },
 }));
 
-function renderAt(path: string) {
+function renderAt(path: string, onClose = vi.fn()) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
       <MemoryRouter initialEntries={[path]}>
-        <Sidebar onClose={vi.fn()} />
+        <Sidebar onClose={onClose} />
       </MemoryRouter>
     </QueryClientProvider>,
   );
 }
 
-// The three agent-feature pages share ONE sidebar entry ("Agents"); it lights up
-// on every hub route and only there, and the old per-page links are gone.
-describe('Sidebar — Agents hub entry', () => {
-  it.each([['/agents'], ['/skills'], ['/connectors'], ['/connectors/cliffhub']])(
-    'marks the Agents entry active on %s',
-    (path) => {
-      const view = renderAt(path);
-      const ai = screen.getByRole('link', { name: 'Agents' });
-      expect(ai.className).toContain('font-semibold');
-      expect(ai).toHaveAttribute('aria-current', 'page');
-      expect(ai).toHaveAttribute('href', '/agents');
-      for (const gone of ['Skills', 'Connectors']) {
-        expect(screen.queryByRole('link', { name: gone })).not.toBeInTheDocument();
-      }
-      view.unmount();
-    },
-  );
-
-  it('is not active elsewhere', () => {
-    renderAt('/activity');
-    const ai = screen.getByRole('link', { name: 'Agents' });
-    expect(ai.className).not.toContain('font-semibold');
-    expect(ai).not.toHaveAttribute('aria-current');
+// The AI hub's one entry lives on the desktop icon rail (SidebarRail tests
+// cover it lighting up on every hub route). The channel list itself carries
+// no page links on desktop; on a phone, which has no rail, "Agents & tools"
+// is the last of the pages that lead the list, right under Drafts.
+describe('Sidebar and the Agents hub entry', () => {
+  afterEach(() => {
+    isMobileRef.value = false;
   });
 
-  // The hub isn't built for a phone yet: the entry is gone there, the other
-  // top-level pages stay.
-  describe('on a phone', () => {
-    afterEach(() => {
-      isMobileRef.value = false;
-    });
+  it.each([['/agents'], ['/skills'], ['/connectors/cliffhub'], ['/activity']])('has no Agents link in the desktop list on %s', (path) => {
+    renderAt(path);
+    for (const gone of ['Agents', 'Skills', 'Connectors', 'Drafts', 'Threads']) {
+      expect(screen.queryByRole('link', { name: gone })).not.toBeInTheDocument();
+    }
+  });
 
-    it('has no Agents entry', () => {
-      isMobileRef.value = true;
-      renderAt('/activity');
-      expect(screen.queryByRole('link', { name: 'Agents' })).not.toBeInTheDocument();
-      expect(screen.getByRole('link', { name: 'Drafts' })).toBeInTheDocument();
-    });
+  it('lists Agents & tools under Drafts on a phone, and leaves the list for it', () => {
+    isMobileRef.value = true;
+    const onClose = vi.fn();
+    renderAt('/activity', onClose);
+    const pages = screen.getAllByRole('link').map((l) => l.textContent?.trim());
+    expect(pages.slice(0, 4)).toEqual(['Threads', 'Directory', 'Drafts', 'Agents & tools']);
+    const agents = screen.getByRole('link', { name: 'Agents & tools' });
+    expect(agents).toHaveAttribute('href', '/agents');
+    expect(agents).not.toHaveAttribute('aria-current');
+    fireEvent.click(agents);
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it.each([['/agents'], ['/skills'], ['/connectors/cliffhub']])('lights Agents & tools on a phone at %s', (path) => {
+    isMobileRef.value = true;
+    renderAt(path);
+    expect(screen.getByRole('link', { name: 'Agents & tools' }).className).toContain('font-semibold');
   });
 });

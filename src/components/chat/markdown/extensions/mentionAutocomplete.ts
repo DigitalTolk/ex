@@ -12,13 +12,14 @@ import {
   type ChannelInput,
   type GroupName,
   type MentionUser,
+  type MentionUserGroup,
   type UserSuggestion,
 } from './mentionData';
 import type { MentionCompletion } from './optionRender';
 
 // CodeMirror completion sources for @-mentions and ~-channels. The editor's
 // document stays raw markdown: selecting a suggestion inserts the canonical
-// token (`@[id|name]`, `~[id|slug]`, `@all`/`@here`) — exactly what the message
+// token (`@[id|name]` for a person or a user group, `~[id|slug]`, `@all`/`@here`) — exactly what the message
 // renderer and the Go validator parse — followed by a trailing space. The
 // matching mirrors the old Lexical trigger: the sigil must sit at a word
 // boundary so "email@host" doesn't pop the menu.
@@ -26,9 +27,20 @@ import type { MentionCompletion } from './optionRender';
 export interface MentionProviders {
   users: () => MentionUser[];
   online: () => Set<string>;
+  // The chat's people, listed first (see RankUsersCtx.memberIds), and what
+  // they are: a channel's members or a DM's participants (headers differ).
   memberIds: () => Set<string> | null;
+  memberScope?: () => MemberScope;
+  // The writers of the thread being replied to, ahead of the members.
+  threadIds?: () => Set<string> | null;
+  // The writer's people ranking, person ID → rank (0 most frequent).
+  frequent?: () => ReadonlyMap<string, number>;
   channels: () => ChannelInput[];
+  // The enabled user groups the author may mention; omitted → none.
+  userGroups?: () => MentionUserGroup[];
 }
+
+export type MemberScope = 'channel' | 'conversation';
 
 // Insert `text` over the matched range and drop the caret just after it.
 function applyInsert(text: string) {
@@ -52,9 +64,17 @@ function mkSection(name: string, rank: number): CompletionSection {
     },
   };
 }
-const SECTION_MEMBERS = mkSection('Channel members', 0);
-const SECTION_SPECIAL = mkSection('Special mentions', 1);
-const SECTION_OTHERS = mkSection('Not in channel', 2);
+const SECTION_THREAD = mkSection('In this thread', 0);
+const SECTION_MEMBERS: Record<MemberScope, CompletionSection> = {
+  channel: mkSection('Channel members', 1),
+  conversation: mkSection('In this conversation', 1),
+};
+const SECTION_SPECIAL = mkSection('Special mentions', 2);
+const SECTION_USERGROUPS = mkSection('User groups', 3);
+const SECTION_OTHERS: Record<MemberScope, CompletionSection> = {
+  channel: mkSection('Not in channel', 4),
+  conversation: mkSection('Not in this conversation', 4),
+};
 // `useUserChannels` returns only the channels the user has joined, so the
 // ~-popup is always "My Channels".
 const SECTION_CHANNELS = mkSection('My Channels', 0);
@@ -64,7 +84,27 @@ const GROUP_DETAIL: Record<GroupName, string> = {
   here: 'Notify everyone currently online',
 };
 
-function userCompletion(s: UserSuggestion, partitioned: boolean): MentionCompletion {
+function memberCountLabel(n: number): string {
+  return `${n} ${n === 1 ? 'member' : 'members'}`;
+}
+
+function userSection(s: Extract<UserSuggestion, { kind: 'user' }>, scope: MemberScope): CompletionSection {
+  if (s.inThread) return SECTION_THREAD;
+  return s.inChannel ? SECTION_MEMBERS[scope] : SECTION_OTHERS[scope];
+}
+
+function userCompletion(s: UserSuggestion, partitioned: boolean, scope: MemberScope): MentionCompletion {
+  if (s.kind === 'usergroup') {
+    const description = `${s.name} · ${memberCountLabel(s.memberCount)}`;
+    return {
+      label: `@${s.handle}`,
+      detail: description,
+      type: 'keyword',
+      section: partitioned ? SECTION_USERGROUPS : undefined,
+      apply: applyInsert(`@[${s.id}|${s.handle}] `),
+      meta: { kind: 'group', title: `@${s.handle}`, description },
+    };
+  }
   if (s.kind === 'group') {
     return {
       label: `@${s.group}`,
@@ -79,9 +119,9 @@ function userCompletion(s: UserSuggestion, partitioned: boolean): MentionComplet
     label: s.displayName,
     detail: s.email,
     type: 'variable',
-    // Only group under headers when there's a channel roster to partition by;
-    // DMs / edits show a flat ranked list with no headers.
-    section: partitioned ? (s.inChannel ? SECTION_MEMBERS : SECTION_OTHERS) : undefined,
+    // Only group under headers when there's a chat roster to partition by;
+    // edits (and a roster still loading) show a flat ranked list.
+    section: partitioned ? userSection(s, scope) : undefined,
     apply: applyInsert(`@[${s.id}|${s.displayName}] `),
     meta: { kind: 'user', displayName: s.displayName, email: s.email, avatarURL: s.avatarURL, online: s.online, statusEmoji: s.statusEmoji },
   };
@@ -101,12 +141,17 @@ export function userMentionSource(providers: MentionProviders): CompletionSource
     if (!atBoundary(context, before.from)) return null;
     const query = before.text.slice(1);
     const memberIds = providers.memberIds();
-    const partitioned = memberIds !== null;
+    const threadIds = providers.threadIds?.() ?? null;
+    const partitioned = memberIds !== null || (threadIds !== null && threadIds.size > 0);
+    const scope = providers.memberScope?.() ?? 'channel';
     const options = rankUsers(query, {
       users: providers.users(),
       online: providers.online(),
       memberIds,
-    }).map((s) => userCompletion(s, partitioned));
+      threadIds,
+      frequent: providers.frequent?.(),
+      userGroups: providers.userGroups?.() ?? [],
+    }).map((s) => userCompletion(s, partitioned, scope));
     return { from: before.from, to: before.to, options, filter: false };
   };
 }

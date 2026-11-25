@@ -339,7 +339,7 @@ describe('CreateChannelDialog browser', () => {
       </Wrap>,
     );
     setReactInputValue(document.getElementById('channel-name') as HTMLInputElement, 'ok-name');
-    setReactInputValue(document.getElementById('channel-desc') as HTMLInputElement, 'd'.repeat(300));
+    setReactInputValue(document.getElementById('channel-desc') as HTMLInputElement, 'd'.repeat(1001));
     await vi.waitFor(() => {
       const counter = document.querySelector('[data-testid="channel-desc-counter"]') as HTMLElement;
       expect(counter.className).toContain('text-destructive');

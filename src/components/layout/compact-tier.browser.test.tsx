@@ -97,9 +97,13 @@ describe('compact tier at a real 700px desktop viewport', () => {
 
     await expect.poll(() => document.querySelector('[data-testid="compact-sidebar"]')).not.toBeNull();
     const rect = (document.querySelector('[data-testid="compact-sidebar"]') as HTMLElement).getBoundingClientRect();
-    // Desktop-styled overlay panel: fixed 288px column pinned to the left,
-    // NOT a full-width mobile sheet.
-    expect(rect.width).toBe(288);
+    // Desktop-styled overlay panel pinned to the left, NOT a full-width
+    // mobile sheet: the 72px icon rail, the fixed 288px channel column, and
+    // the panel's 1px edge.
+    const rail = (document.querySelector('[data-testid="compact-sidebar"] [data-testid="sidebar-rail"]') as HTMLElement).getBoundingClientRect();
+    expect(rail.width).toBe(72);
+    expect(rail.left).toBe(0);
+    expect(rect.width).toBe(72 + 288 + 1);
     expect(rect.left).toBe(0);
     expect(rect.width).toBeLessThan(window.innerWidth);
 

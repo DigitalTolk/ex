@@ -1,12 +1,12 @@
 import { fuzzyMatch } from '@/lib/fuzzy';
 import { topK } from '@/lib/topk';
 
-// Pure ranking logic for the composer's @-mention and ~-channel autocomplete.
-// Extracted from the old Lexical UserMentionsPlugin / ChannelMentionsPlugin so
-// the behaviour (fuzzy match → prefix-then-online ordering → channel-member
-// partitioning → @all/@here group mentions) is preserved exactly, but now lives
-// in a side-effect-free module that the CodeMirror completion source consumes
-// and that can be unit-tested exhaustively without an editor.
+// Pure ranking logic for the composer's @-mention and ~-channel autocomplete:
+// fuzzy match, then sections (the thread's writers, the chat's members, the
+// @all/@here group mentions, everyone else), each ordered prefix match first,
+// then the people the writer mentions and messages most, then online. A
+// side-effect-free module the CodeMirror completion source consumes, tested
+// without an editor.
 
 export const MAX_MENTION_RESULTS = 20;
 
@@ -23,15 +23,44 @@ export interface MentionUser {
   statusEmoji?: string;
 }
 
+// The minimal shape the ranker needs from a user group ("@oncall").
+export interface MentionUserGroup {
+  id: string;
+  handle: string;
+  name: string;
+  memberCount: number;
+}
+
 export type UserSuggestion =
-  | { kind: 'user'; id: string; displayName: string; email?: string; avatarURL?: string; statusEmoji?: string; online: boolean; inChannel?: boolean }
-  | { kind: 'group'; group: GroupName };
+  | { kind: 'user'; id: string; displayName: string; email?: string; avatarURL?: string; statusEmoji?: string; online: boolean; inChannel?: boolean; inThread?: boolean }
+  | { kind: 'group'; group: GroupName }
+  | ({ kind: 'usergroup' } & MentionUserGroup);
 
 export interface RankUsersCtx {
   users: MentionUser[];
   online: Set<string>;
-  // null → no channel context (DM/flat list); a Set → partition members first.
+  // The people of the chat being written in (a channel's members, a DM's
+  // participants), listed first; null when unknown (an edit, a roster
+  // still loading): one flat list.
   memberIds: Set<string> | null;
+  // Who has written in the thread being replied to: ahead of the members.
+  threadIds?: Set<string> | null;
+  // The writer's people ranking (person ID → rank, 0 the most frequent):
+  // within each section, the people they mention and message most come
+  // first.
+  frequent?: ReadonlyMap<string, number>;
+  // The enabled user groups the author may mention (none for guests).
+  userGroups?: MentionUserGroup[];
+}
+
+// rankUserGroups keeps the groups whose handle or name starts with the query,
+// handle matches first, then by handle.
+function rankUserGroups(q: string, groups: MentionUserGroup[]): UserSuggestion[] {
+  const hits = groups.filter((g) => g.handle.toLowerCase().startsWith(q) || g.name.toLowerCase().startsWith(q));
+  const handleRank = (g: MentionUserGroup) => (g.handle.toLowerCase().startsWith(q) ? 0 : 1);
+  return topK(hits, MAX_MENTION_RESULTS, (a, b) => handleRank(a) - handleRank(b) || a.handle.localeCompare(b.handle)).map(
+    (g) => ({ kind: 'usergroup' as const, ...g }),
+  );
 }
 
 interface UserHit {
@@ -42,15 +71,19 @@ interface UserHit {
   statusEmoji?: string;
   online: boolean;
   inChannel?: boolean;
+  inThread?: boolean;
 }
 
 function toSuggestion(h: UserHit): UserSuggestion {
-  return { kind: 'user', id: h.id, displayName: h.displayName, email: h.email, avatarURL: h.avatarURL, statusEmoji: h.statusEmoji, online: h.online, inChannel: h.inChannel };
+  return { kind: 'user', id: h.id, displayName: h.displayName, email: h.email, avatarURL: h.avatarURL, statusEmoji: h.statusEmoji, online: h.online, inChannel: h.inChannel, inThread: h.inThread };
 }
+
+const NOT_FREQUENT = Number.MAX_SAFE_INTEGER;
 
 export function rankUsers(query: string, ctx: RankUsersCtx): UserSuggestion[] {
   const q = query.toLowerCase();
-  const partition = ctx.memberIds !== null;
+  const threadIds = ctx.threadIds && ctx.threadIds.size > 0 ? ctx.threadIds : null;
+  const partition = ctx.memberIds !== null || threadIds !== null;
   const matches: UserHit[] = ctx.users
     .filter((u) => fuzzyMatch(q, u.displayName, u.email ?? ''))
     .map((u) => ({
@@ -60,30 +93,40 @@ export function rankUsers(query: string, ctx: RankUsersCtx): UserSuggestion[] {
       avatarURL: u.avatarURL,
       statusEmoji: u.statusEmoji,
       online: ctx.online.has(u.id),
-      inChannel: partition ? ctx.memberIds!.has(u.id) : undefined,
+      inChannel: partition ? !!ctx.memberIds?.has(u.id) : undefined,
+      inThread: threadIds ? threadIds.has(u.id) : undefined,
     }));
 
-  // Prefix matches outrank substrings; ties broken by online presence.
+  // Prefix matches outrank substrings; then the people the writer mentions
+  // and messages most; then online presence.
   const prefixRank = (name: string) => (name.toLowerCase().startsWith(q) ? 0 : 1);
+  const frequentRank = (u: UserHit) => ctx.frequent?.get(u.id) ?? NOT_FREQUENT;
   const onlineRank = (u: UserHit) => (u.online ? 0 : 1);
-  const byRelevance = (a: UserHit, b: UserHit) => {
-    const byPrefix = prefixRank(a.displayName) - prefixRank(b.displayName);
-    return byPrefix !== 0 ? byPrefix : onlineRank(a) - onlineRank(b);
-  };
+  const byRelevance = (a: UserHit, b: UserHit) =>
+    prefixRank(a.displayName) - prefixRank(b.displayName) || frequentRank(a) - frequentRank(b) || onlineRank(a) - onlineRank(b);
 
   // @all / @here only surface once the full keyword is typed (Slack's rule:
   // "@a" must not suggest "@all" mid-type), matched case-insensitively.
   const groups: UserSuggestion[] = GROUP_NAMES.filter((g) => g === q).map((group) => ({ kind: 'group', group }));
 
+  const userGroups = rankUserGroups(q, ctx.userGroups ?? []);
+
   if (partition) {
-    // Channel context: members first, then group mentions, then everyone else.
-    // Each section gets its own budget so non-members ("Not in channel") always
-    // surface — even in a busy channel where members alone would fill the list.
-    const members = topK(matches.filter((u) => u.inChannel), MAX_MENTION_RESULTS, byRelevance);
-    const nonMembers = topK(matches.filter((u) => !u.inChannel), MAX_MENTION_RESULTS, byRelevance);
-    return [...members.map(toSuggestion), ...groups, ...nonMembers.map(toSuggestion)];
+    // A chat's own people first (the thread's writers, then its members),
+    // then group mentions, then user groups, then everyone else. Each
+    // section gets its own budget so the later ones always surface, even in
+    // a busy channel.
+    const section = (keep: (u: UserHit) => boolean) =>
+      topK(matches.filter(keep), MAX_MENTION_RESULTS, byRelevance).map(toSuggestion);
+    return [
+      ...section((u) => !!u.inThread),
+      ...section((u) => !u.inThread && !!u.inChannel),
+      ...groups,
+      ...userGroups,
+      ...section((u) => !u.inThread && !u.inChannel),
+    ];
   }
-  return [...groups, ...topK(matches, MAX_MENTION_RESULTS, byRelevance).map(toSuggestion)];
+  return [...groups, ...userGroups, ...topK(matches, MAX_MENTION_RESULTS, byRelevance).map(toSuggestion)];
 }
 
 export interface ChannelInput {

@@ -55,6 +55,7 @@ type UserService struct {
 	urlCache      *presignedURLCache
 	mediaCache    MediaURLCache
 	reminders     ReminderCanceller
+	userGroups    UserGroupMembershipRemover
 	automations   AutomationStopper
 	avatarObjects AvatarObjects
 	// avatarDecoding bounds the memory an avatar decode may take.
@@ -62,6 +63,34 @@ type UserService struct {
 	// audience is told when account notification settings change, so every
 	// instance's notification audience cache reloads the user.
 	audience AudienceInvalidator
+	// people ranks who each user mentions and messages (SetPeopleRanking).
+	people PeopleRanking
+}
+
+// PeopleRanking reads a user's people ranking (the Redis cache), fed by
+// their sends (MessageService.SetPeopleFrequency).
+type PeopleRanking interface {
+	FrequentPeople(ctx context.Context, userID string, limit int) ([]string, error)
+}
+
+// SetPeopleRanking wires the read side of the people ranking.
+func (s *UserService) SetPeopleRanking(p PeopleRanking) { s.people = p }
+
+// MaxFrequentPeople caps how much of the ranking a caller can ask for.
+const MaxFrequentPeople = 100
+
+// FrequentPeople lists the IDs of the people userID mentions and messages
+// most, highest first: what the composer's @-list puts first. A limit out of
+// range asks for the whole cap.
+func (s *UserService) FrequentPeople(ctx context.Context, userID string, limit int) ([]string, error) {
+	if limit <= 0 || limit > MaxFrequentPeople {
+		limit = MaxFrequentPeople
+	}
+	out, err := s.people.FrequentPeople(ctx, userID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("user: frequent people: %w", err)
+	}
+	return out, nil
 }
 
 // SetAudienceInvalidator wires the notification audience cache's
@@ -126,6 +155,15 @@ func (s *UserService) SetAvatarObjects(o AvatarObjects) { s.avatarObjects = o }
 // SetReminderCanceller wires reminder cleanup into deactivation, so an account
 // that can no longer sign in leaves no reminders queued to fire.
 func (s *UserService) SetReminderCanceller(r ReminderCanceller) { s.reminders = r }
+
+// UserGroupMembershipRemover takes a user out of every user group
+// (UserGroupService): a guest can't be in one.
+type UserGroupMembershipRemover interface {
+	RemoveUserFromAllGroups(ctx context.Context, userID string) error
+}
+
+// SetUserGroups wires the user-group cleanup a demotion to guest runs.
+func (s *UserService) SetUserGroups(r UserGroupMembershipRemover) { s.userGroups = r }
 
 // SetAutomationStopper wires agent-automation shutdown into deactivation, so
 // a deactivated account's watchers, schedules and runs stop with it.
@@ -320,6 +358,49 @@ func (s *UserService) SetNotificationSettings(ctx context.Context, userID string
 	}
 	settings.Keywords = normalizeKeywords(settings.Keywords)
 
+	user, err := s.notificationUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	// Do Not Disturb has its own endpoint (SnoozeNotifications): saving the
+	// other settings keeps whatever it set.
+	settings.SnoozeUntil = nil
+	if user.NotificationSettings != nil {
+		settings.SnoozeUntil = user.NotificationSettings.SnoozeUntil
+	}
+	return s.saveNotificationSettings(ctx, user, settings)
+}
+
+// MaxSnooze is the longest Do Not Disturb: what "until I turn it back on"
+// asks for.
+const MaxSnooze = 10 * 365 * 24 * time.Hour
+
+// SnoozeNotifications turns Do Not Disturb on for d, or off when d is zero.
+// While it is on the notifier alerts the user for nothing (no popup, sound or
+// phone push), yet still lists everything in Activity and counts it on
+// badges, so nothing is lost: it is only held back.
+func (s *UserService) SnoozeNotifications(ctx context.Context, userID string, d time.Duration) (*model.User, error) {
+	if d < 0 || d > MaxSnooze {
+		return nil, apperr.Invalid("user: invalid snooze duration")
+	}
+	user, err := s.notificationUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	settings := model.DefaultNotificationSettings()
+	if user.NotificationSettings != nil {
+		settings = *user.NotificationSettings
+	}
+	settings.SnoozeUntil = nil
+	if d > 0 {
+		until := time.Now().Add(d)
+		settings.SnoozeUntil = &until
+	}
+	return s.saveNotificationSettings(ctx, user, settings)
+}
+
+// notificationUser loads the user whose notification settings are changing.
+func (s *UserService) notificationUser(ctx context.Context, userID string) (*model.User, error) {
 	user, err := s.users.GetUser(ctx, userID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -327,11 +408,18 @@ func (s *UserService) SetNotificationSettings(ctx context.Context, userID string
 		}
 		return nil, fmt.Errorf("user: get: %w", err)
 	}
+	return user, nil
+}
+
+// saveNotificationSettings writes user's notification settings, moves the
+// notifier's cached audience on, and tells the user's own clients.
+func (s *UserService) saveNotificationSettings(ctx context.Context, user *model.User, settings model.NotificationSettings) (*model.User, error) {
+	userID := user.ID
 	cp := settings
 	user.NotificationSettings = &cp
 	user.UpdatedAt = time.Now()
 
-	err = s.users.UpdateUser(ctx, user)
+	err := s.users.UpdateUser(ctx, user)
 	// Even a failed write may have committed: move the audience on either way.
 	if s.audience != nil {
 		s.audience.UserAudienceChanged(ctx, userID)
@@ -834,6 +922,13 @@ func (s *UserService) UpdateRole(ctx context.Context, _, targetID string, role m
 	backfillAuthProvider(user)
 	if user.AuthProvider == model.AuthProviderGuest && role != model.SystemRoleGuest {
 		return nil, apperr.Invalid("user: guests cannot be promoted; member and admin roles are SSO-only")
+	}
+	// A guest can't be in a user group: leave them first, so a failure leaves
+	// the role unchanged rather than a guest still pinged through a group.
+	if role == model.SystemRoleGuest && s.userGroups != nil {
+		if err := s.userGroups.RemoveUserFromAllGroups(ctx, targetID); err != nil {
+			return nil, fmt.Errorf("user: leave user groups: %w", err)
+		}
 	}
 	now := time.Now()
 	if err := s.users.PatchUser(ctx, targetID, store.UserPatch{SystemRole: &role, UpdatedAt: now}); err != nil {

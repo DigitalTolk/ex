@@ -5,7 +5,7 @@
 export const MAX_MESSAGE_BODY_CHARS = 16384;
 export const MAX_ATTACHMENTS_PER_MESSAGE = 10;
 export const MAX_CHANNEL_NAME_LEN = 32;
-export const MAX_CHANNEL_DESCRIPTION_LEN = 255;
+export const MAX_CHANNEL_DESCRIPTION_LEN = 1000;
 export const MAX_DISTINCT_REACTIONS = 16;
 
 // CHANNEL_NAME_PATTERN is the slug-style identifier the backend accepts.

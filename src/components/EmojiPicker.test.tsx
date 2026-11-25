@@ -225,14 +225,14 @@ describe('EmojiPicker', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
-  it('uses larger monochrome SVG category tabs, nine emoji columns, and a custom tab at the right', async () => {
+  it('uses larger monochrome SVG category tabs, ten emoji columns, and a custom tab at the right', async () => {
     const user = userEvent.setup();
     render(<EmojiPicker onSelect={vi.fn()} />);
     await user.click(screen.getByRole('button', { name: /open emoji picker/i }));
 
     const dialog = screen.getByRole('dialog');
-    expect(dialog.className).toContain('w-[336px]');
-    expect(dialog.className).toContain('h-[460px]');
+    expect(dialog.className).toContain('w-[432px]');
+    expect(dialog.className).toContain('h-[520px]');
     expect(dialog.className).toContain('touch:h-[50dvh]');
 
     const tabs = screen.getAllByTestId('emoji-category-tab');
@@ -243,7 +243,7 @@ describe('EmojiPicker', () => {
     expect(tabs[0].textContent).toBe('');
     expect(tabs[tabs.length - 1]).toHaveAttribute('data-category', 'custom');
     expect(screen.getByRole('tablist', { name: /emoji categories/i }).className).toContain('justify-center');
-    expect(screen.getByRole('list', { name: /standard emojis/i }).className).toContain('grid-cols-[repeat(9,2rem)]');
+    expect(screen.getByRole('list', { name: /standard emojis/i }).className).toContain('grid-cols-[repeat(10,2.5rem)]');
   });
 
   it('uses larger emoji tap targets on touch', async () => {
@@ -316,8 +316,33 @@ describe('EmojiPicker', () => {
     const skinToneSelector = screen.getByRole('radiogroup', { name: /emoji skin tone/i });
 
     expect(list.compareDocumentPosition(skinToneSelector) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(skinToneSelector.className).toContain('mt-1.5');
-    expect(skinToneSelector.className).toContain('border-t');
+    // In the bar at the foot, beside the preview of the emoji pointed at.
+    const bar = skinToneSelector.parentElement!;
+    expect(bar.className).toContain('mt-1.5');
+    expect(bar.className).toContain('border-t');
+    expect(bar).toHaveTextContent('Point at an emoji to see its name');
+  });
+
+  // The name of the emoji pointed at shows at once in the bar at the foot
+  // (the tiles' own tooltips waited a second or more).
+  it('names the emoji under the pointer, or the one focused, at once', async () => {
+    window.__EX_FORCE_DEVICE__ = 'desktop';
+    const user = userEvent.setup();
+    render(<EmojiPicker onSelect={vi.fn()} />);
+    await user.click(screen.getByRole('button', { name: /open emoji picker/i }));
+    const tiles = screen.getAllByTestId('emoji-picker-tile');
+    expect(tiles[0]).not.toHaveAttribute('title');
+    fireEvent.pointerOver(tiles[0]);
+    const preview = screen.getByTestId('emoji-preview');
+    expect(preview).toHaveTextContent(tiles[0].getAttribute('data-emoji-name')!);
+    expect(preview).toHaveTextContent(tiles[0].getAttribute('data-emoji-glyph')!);
+    // Moving within the same tile changes nothing; another tile, or focus, does.
+    fireEvent.pointerOver(tiles[0].firstElementChild!);
+    fireEvent.focus(tiles[3]);
+    expect(screen.getByTestId('emoji-preview')).toHaveTextContent(tiles[3].getAttribute('data-emoji-name')!);
+    // Off the tiles (a section label) keeps the last one named.
+    fireEvent.pointerOver(screen.getByText('Smileys & Emotion'));
+    expect(screen.getByTestId('emoji-preview')).toHaveTextContent(tiles[3].getAttribute('data-emoji-name')!);
   });
 
   it('does not render a frequently-used shelf with no history', async () => {
@@ -328,16 +353,16 @@ describe('EmojiPicker', () => {
   });
 
   it('shows up to two rows of the most-used emojis at the top', async () => {
-    // Seed 20 entries — desktop shows 9 cols × 2 rows = 18. The column count
+    // Seed 24 entries — desktop shows 10 cols × 2 rows = 20. The column count
     // follows the input device (the jsdom default is touch), not the width.
     window.__EX_FORCE_DEVICE__ = 'desktop';
-    seedFrequency(Array.from({ length: 20 }, (_, i) => `:freq${i}:`));
+    seedFrequency(Array.from({ length: 24 }, (_, i) => `:freq${i}:`));
     const user = userEvent.setup();
     render(<EmojiPicker onSelect={vi.fn()} />);
     await user.click(screen.getByRole('button', { name: /open emoji picker/i }));
 
     const shelf = await screen.findByRole('list', { name: /frequently used emojis/i });
-    expect(within(shelf).getAllByTestId('emoji-frequent-tile')).toHaveLength(18);
+    expect(within(shelf).getAllByTestId('emoji-frequent-tile')).toHaveLength(20);
     expect(screen.getByText('Frequently used')).toBeInTheDocument();
   });
 
