@@ -234,11 +234,12 @@ describe('MessageItem desktop toolbar + menu branches', () => {
       <MessageItem message={makeMessage({ pinned: true })} authorName="Alice" isOwn channelId="channel-1" channelSlug="general" currentUserId="user-1" />,
     );
     const pinned = measure();
-    // The outline is painted over the row: the ordinary border, with a
-    // bracket round its left side (the whole edge, 18px along the top and
-    // the bottom) in the pin's colour. It takes no clicks and no room.
+    // The outline is painted over the row: the ordinary border, with the
+    // pin's colour down the left edge, far along the top and round the bottom
+    // corner. It takes no clicks and no room.
     const outline = getComputedStyle(pinned.row, '::before');
-    expect(outline.backgroundSize).toContain('18px 100%');
+    expect(outline.backgroundSize).toContain('min(36%, 240px) 50%');
+    expect(outline.backgroundSize).toContain('12px 100%');
     expect(outline.backgroundImage).not.toContain('deg');
     expect(outline.backgroundColor).not.toBe('rgba(0, 0, 0, 0)');
     expect(outline.paddingLeft).toBe('2px');

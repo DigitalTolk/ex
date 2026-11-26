@@ -15,6 +15,10 @@ const POSTER_AT_SECONDS = 0.5;
 const POSTER_MAX_SIDE = 1280;
 // Giving up: a video in a codec this browser lacks never loads.
 export const POSTER_TIMEOUT_MS = 10_000;
+// How long after the seek lands to wait for the browser to say its frame is
+// painted before drawing anyway: WebKit doesn't always say so for an unseen,
+// paused video, and the poster then waited out the whole timeout.
+export const SEEKED_FRAME_GRACE_MS = 500;
 
 // readVideoPoster loads a video file into a muted, unseen <video>, seeks into
 // it, and draws that frame. Null when the browser can't decode it, the file
@@ -24,10 +28,12 @@ export function readVideoPoster(file: Blob): Promise<VideoPoster | null> {
     const url = URL.createObjectURL(file);
     const video = document.createElement('video');
     let finished = false;
+    let grace: number | undefined;
     const finish = (poster: VideoPoster | null) => {
       if (finished) return;
       finished = true;
       window.clearTimeout(timer);
+      window.clearTimeout(grace);
       video.removeAttribute('src');
       video.load();
       URL.revokeObjectURL(url);
@@ -39,6 +45,8 @@ export function readVideoPoster(file: Blob): Promise<VideoPoster | null> {
     video.preload = 'auto';
     video.addEventListener('error', () => finish(null));
     const capture = () => {
+      // The painted frame came first: no drawing again after the grace.
+      window.clearTimeout(grace);
       const { videoWidth: width, videoHeight: height } = video;
       if (!width || !height) {
         finish(null);
@@ -78,8 +86,12 @@ export function readVideoPoster(file: Blob): Promise<VideoPoster | null> {
         // Drawn once the frame the seek lands on is on screen: `seeked` can
         // come before it is painted, and a busy Chromium then drew the clip's
         // black opening as the poster. Without the frame callback, `seeked`.
-        if (typeof video.requestVideoFrameCallback === 'function') video.requestVideoFrameCallback(onFrame);
-        else video.addEventListener('seeked', capture, { once: true });
+        if (typeof video.requestVideoFrameCallback === 'function') {
+          video.requestVideoFrameCallback(onFrame);
+          video.addEventListener('seeked', () => {
+            grace = window.setTimeout(capture, SEEKED_FRAME_GRACE_MS);
+          }, { once: true });
+        } else video.addEventListener('seeked', capture, { once: true });
         // A clip with no known length (a live recording) reports Infinity.
         video.currentTime = Math.min(POSTER_AT_SECONDS, video.duration / 2);
       },

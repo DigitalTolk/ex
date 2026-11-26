@@ -48,9 +48,12 @@ describe('EmojiPicker — readable sizes', () => {
     expect(standardLabel.className).not.toContain('text-[10px]');
 
     const tile = (await screen.findAllByTestId('emoji-picker-tile'))[0];
-    // Tile is 40px (h-10 w-10), big enough to tell faces apart.
-    expect(tile.className).toContain('h-10');
-    expect(tile.className).toContain('w-10');
+    // A square tile as wide as its column: up to 40px, big enough to tell
+    // faces apart, and narrower beside a classic scrollbar so all ten columns
+    // fit (EmojiPicker.browser.test measures both).
+    expect(tile.className).toContain('aspect-square');
+    expect(tile.className).toContain('w-full');
+    expect(tile.parentElement?.className).toContain('grid-cols-[repeat(10,minmax(0,2.5rem))]');
 
     // Glyph inside uses the picker size, 28px.
     const glyph = tile.querySelector('span');

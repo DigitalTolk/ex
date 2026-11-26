@@ -990,21 +990,23 @@ body > :not(#root) {
   }
 }
 
-/* A coloured card's outline (lib/card-tint): the ordinary 2px border with a
-   bracket in the card's hue (--card-hue) round its left side: the whole left
-   edge, and 18px along the top and the bottom. Three flat layers, painted as
-   backgrounds so the bracket follows the rounded corners: the surface, the
-   bracket, the border. */
+/* A coloured card's outline (lib/card-tint): the ordinary 2px border with
+   the card's hue (--card-hue) down its whole left edge, a long arm along the
+   top (a third of the card, at most 15rem) and only the corner along the
+   bottom. Flat layers, painted as backgrounds so the colour follows the
+   rounded corners: the surface, the top arm, the left edge with its corner,
+   the border. */
 .card-outline {
   border: 2px solid transparent;
   background:
     linear-gradient(var(--color-background), var(--color-background)) padding-box,
-    linear-gradient(var(--card-hue), var(--card-hue)) left / 18px 100% no-repeat border-box,
+    linear-gradient(var(--card-hue), var(--card-hue)) top left / min(36%, 15rem) 50% no-repeat border-box,
+    linear-gradient(var(--card-hue), var(--card-hue)) left / 12px 100% no-repeat border-box,
     linear-gradient(var(--color-border), var(--color-border)) border-box;
 }
 
-/* A pinned message wears the same outline, its left bracket in warning
-   yellow, in place of a bar down its side. The yellow is a brighter one on the light
+/* A pinned message wears the same outline in warning yellow, in place of a
+   bar down its side. The yellow is a brighter one on the light
    surface: the darker text yellow reads as red-brown in a 2px line. Only the
    outline is painted, over the row (the mask cuts the middle out), so the
    row keeps its own background, its hover tint and every pixel of its layout. */
@@ -1022,7 +1024,8 @@ html.dark {
   border-radius: inherit;
   pointer-events: none;
   background:
-    linear-gradient(var(--pinned-mark), var(--pinned-mark)) left / 18px 100% no-repeat,
+    linear-gradient(var(--pinned-mark), var(--pinned-mark)) top left / min(36%, 15rem) 50% no-repeat,
+    linear-gradient(var(--pinned-mark), var(--pinned-mark)) left / 12px 100% no-repeat,
     var(--color-border);
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   -webkit-mask-composite: xor;
