@@ -992,16 +992,16 @@ body > :not(#root) {
 
 /* A coloured card's outline (lib/card-tint): the ordinary 2px border with
    the card's hue (--card-hue) down its whole left edge, a long arm along the
-   top (a third of the card, at most 15rem) and only the corner along the
+   top (a third of the card, at most 15rem) and a short arm along the
    bottom. Flat layers, painted as backgrounds so the colour follows the
-   rounded corners: the surface, the top arm, the left edge with its corner,
+   rounded corners: the surface, the top arm, the left edge with its bottom arm,
    the border. */
 .card-outline {
   border: 2px solid transparent;
   background:
     linear-gradient(var(--color-background), var(--color-background)) padding-box,
     linear-gradient(var(--card-hue), var(--card-hue)) top left / min(36%, 15rem) 50% no-repeat border-box,
-    linear-gradient(var(--card-hue), var(--card-hue)) left / 12px 100% no-repeat border-box,
+    linear-gradient(var(--card-hue), var(--card-hue)) left / 48px 100% no-repeat border-box,
     linear-gradient(var(--color-border), var(--color-border)) border-box;
 }
 
@@ -1025,7 +1025,7 @@ html.dark {
   pointer-events: none;
   background:
     linear-gradient(var(--pinned-mark), var(--pinned-mark)) top left / min(36%, 15rem) 50% no-repeat,
-    linear-gradient(var(--pinned-mark), var(--pinned-mark)) left / 12px 100% no-repeat,
+    linear-gradient(var(--pinned-mark), var(--pinned-mark)) left / 48px 100% no-repeat,
     var(--color-border);
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   -webkit-mask-composite: xor;

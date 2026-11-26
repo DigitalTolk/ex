@@ -239,7 +239,7 @@ describe('MessageItem desktop toolbar + menu branches', () => {
     // corner. It takes no clicks and no room.
     const outline = getComputedStyle(pinned.row, '::before');
     expect(outline.backgroundSize).toContain('min(36%, 240px) 50%');
-    expect(outline.backgroundSize).toContain('12px 100%');
+    expect(outline.backgroundSize).toContain('48px 100%');
     expect(outline.backgroundImage).not.toContain('deg');
     expect(outline.backgroundColor).not.toBe('rgba(0, 0, 0, 0)');
     expect(outline.paddingLeft).toBe('2px');
