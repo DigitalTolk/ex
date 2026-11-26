@@ -77,6 +77,34 @@ describe('MessageInput - file upload', () => {
     expect(clickSpy).toHaveBeenCalled();
   });
 
+  it('takes a photo with the camera: the button opens a camera-only input, and the photo attaches like any file', async () => {
+    const user = userEvent.setup();
+    const init = { id: 'att-cam', uploadURL: 'http://s3/u', alreadyExists: false, filename: 'photo.jpg', contentType: 'image/jpeg', size: 1 };
+    mockUploadAttachment.mockImplementationOnce(async (_file: File, cb?: { onInit?: (i: typeof init) => void; onProgress?: (n: number) => void }) => {
+      cb?.onInit?.(init);
+      cb?.onProgress?.(1);
+      return init;
+    });
+    render(<MessageInput onSend={vi.fn()} />);
+
+    const camera = screen.getByTestId('composer-camera-input') as HTMLInputElement;
+    // Asks the phone for its camera (rear-facing), and for photos only.
+    expect(camera.getAttribute('capture')).toBe('environment');
+    expect(camera.accept).toBe('image/*');
+    const clickSpy = vi.spyOn(camera, 'click');
+    // Shown only on touch screens; a desktop browser would offer files instead.
+    const button = screen.getByLabelText('Take photo');
+    expect(button).toHaveClass('hidden', 'touch:flex', 'touch:max-[359px]:hidden');
+    await user.click(button);
+    expect(clickSpy).toHaveBeenCalled();
+
+    const photo = new File(['x'], 'photo.jpg', { type: 'image/jpeg' });
+    Object.defineProperty(camera, 'files', { value: [photo], configurable: true });
+    fireEvent.change(camera);
+    await waitFor(() => expect(screen.getByText('photo.jpg')).toBeInTheDocument());
+    expect(mockUploadAttachment.mock.calls[0][0]).toBe(photo);
+  });
+
   it('keeps bottom safe-area padding compact on the mobile composer action bar', () => {
     const { container } = render(<MessageInput onSend={vi.fn()} />);
 

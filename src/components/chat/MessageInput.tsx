@@ -124,6 +124,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   const editorRef = useRef<WysiwygEditorHandle>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
   const { activeFormats, giphyAPIKey, giphyEnabled } = useComposerToolbarState(editorRef);
   const isMobile = useIsMobile();
   const submitOnEnter = useSubmitOnEnter();
@@ -224,6 +225,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   const pickerOpenChange = useEventCallback(handleToolbarPickerOpenChange);
   const pasteFiles = useEventCallback(uploadFiles);
   const attach = useCallback(() => fileInputRef.current?.click(), []);
+  const takePhoto = useCallback(() => cameraInputRef.current?.click(), []);
   const editorChange = useEventCallback((md: string) => {
     handleEditorChange(md);
     emitTyping();
@@ -246,6 +248,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
       onOpenLinkDialog={linkDialog.openDialog}
       onPickerOpenChange={pickerOpenChange}
       onAttach={attach}
+      onTakePhoto={takePhoto}
       onSend={sendNow}
       onSchedule={onSchedule ? scheduleNow : undefined}
       onCancel={onCancel}
@@ -451,6 +454,18 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
         className="hidden"
         onChange={handleFileUpload}
         aria-label="File input"
+      />
+      {/* The camera, straight away: capture asks a phone for its camera
+          instead of its file or photo picker. Uploaded like any file. */}
+      <input
+        ref={cameraInputRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        className="hidden"
+        onChange={handleFileUpload}
+        aria-label="Camera input"
+        data-testid="composer-camera-input"
       />
       <ComposerLinkDialog dialog={linkDialog} isMobile={isMobile} />
     </div>

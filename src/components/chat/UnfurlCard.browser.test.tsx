@@ -212,10 +212,9 @@ describe('UnfurlCard browser behaviour', () => {
     await expect.element(screen.getByTestId('unfurl-card-image-placeholder')).toBeInTheDocument();
   });
 
-  // A link preview and a quoted message are the webhook card in grey: the
-  // page's own surface inside a hairline outline that starts grey and fades
-  // into the ordinary border (.card-outline paints both as background
-  // layers), with no side bar, no tinted fill and no status icon.
+  // A link preview and a quoted message are the plain card: the page's own
+  // surface inside the ordinary 2px border, with no corner mark, no side
+  // bar, no tinted fill and no status icon.
   function webCardStyle(screen: Awaited<ReturnType<typeof render>>) {
     const card = screen.getByTestId('unfurl-card').element() as HTMLElement;
     return getComputedStyle(card.querySelector('a') as HTMLElement);
@@ -232,18 +231,19 @@ describe('UnfurlCard browser behaviour', () => {
     const screen = await render(<UnfurlCard url="https://example.org" messageId="m-1" isAuthor={false} />);
     const s = webCardStyle(screen);
     for (const width of [s.borderLeftWidth, s.borderTopWidth, s.borderRightWidth, s.borderBottomWidth]) {
-      expect(width).toBe('1px');
+      expect(width).toBe('2px');
     }
-    // The outline is the second background layer: one gradient, corner to corner.
-    expect(s.backgroundImage.match(/linear-gradient/g)).toHaveLength(2);
-    expect(s.backgroundImage).toContain('135deg');
+    // The ordinary border all the way round, and no corner mark.
+    expect(s.backgroundImage).toBe('none');
+    expect(new Set([s.borderLeftColor, s.borderTopColor, s.borderRightColor, s.borderBottomColor]).size).toBe(1);
+    expect(s.borderTopColor).not.toBe('rgba(0, 0, 0, 0)');
   });
 
   it('fills the web card with the base background in light mode (#FCFCFB)', async () => {
     document.documentElement.classList.remove('dark');
     useUnfurlMock.mockReturnValue(WEB);
     const screen = await render(<UnfurlCard url="https://example.org" messageId="m-1" isAuthor={false} />);
-    expect(webCardStyle(screen).backgroundImage.startsWith('linear-gradient(rgb(252, 252, 251), rgb(252, 252, 251))')).toBe(true);
+    expect(webCardStyle(screen).backgroundColor).toBe('rgb(252, 252, 251)');
   });
 
   it('fills the web card with the base background in dark mode (#1A1A1A)', async () => {
@@ -251,26 +251,27 @@ describe('UnfurlCard browser behaviour', () => {
     try {
       useUnfurlMock.mockReturnValue(WEB);
       const screen = await render(<UnfurlCard url="https://example.org" messageId="m-2" isAuthor={false} />);
-      expect(webCardStyle(screen).backgroundImage.startsWith('linear-gradient(rgb(26, 26, 26), rgb(26, 26, 26))')).toBe(true);
+      expect(webCardStyle(screen).backgroundColor).toBe('rgb(26, 26, 26)');
     } finally {
       document.documentElement.classList.remove('dark');
     }
   });
 
-  it('draws a quoted message as the same grey card, with no side bar and no status icon', async () => {
+  it('draws a quoted message as the same plain card, with no side bar and no status icon', async () => {
     document.documentElement.classList.remove('dark');
     useUnfurlMock.mockReturnValue(WEB);
     const web = await render(<UnfurlCard url="https://example.org" messageId="m-1" isAuthor={false} />);
     const webStyle = webCardStyle(web);
-    const outline = webStyle.backgroundImage;
+    const outline = webStyle.borderTopColor;
     const radius = webStyle.borderRadius;
     await web.unmount();
 
     useUnfurlMock.mockReturnValue(QUOTE);
     const quote = await render(<UnfurlCard url="https://ex.test/channel/general#msg-1" messageId="m-3" isAuthor={false} />);
     const s = getComputedStyle(quote.getByTestId('unfurl-card').element());
-    expect(s.borderLeftWidth).toBe('1px');
-    expect(s.backgroundImage).toBe(outline);
+    expect(s.borderLeftWidth).toBe('2px');
+    expect(s.borderTopColor).toBe(outline);
+    expect(s.backgroundImage).toBe('none');
     expect(s.borderRadius).toBe(radius);
     expect(document.querySelector('[data-testid="card-status-icon"]')).toBeNull();
   });

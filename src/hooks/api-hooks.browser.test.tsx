@@ -258,7 +258,7 @@ describe('useUserState', () => {
     const probe = screen.getByTestId('probe').element();
     await expect
       .poll(() => JSON.parse(probe.getAttribute('data-data') ?? 'null'))
-      .toEqual({ threadNotifications: [], hiddenConversations: [], hiddenSkills: ['skill-1'] });
+      .toEqual({ threadNotifications: [], hiddenConversations: [], hiddenSkills: ['skill-1'], sidebarSorts: {} });
   });
 
   it('passes through populated fields and keeps no thread read times', async () => {
@@ -268,12 +268,13 @@ describe('useUserState', () => {
       threadNotifications: ['root-1'],
       hiddenConversations: ['conv-1'],
       hiddenSkills: ['skill-1'],
+      sidebarSorts: { __channels__: 'az' },
       threadSeen: { 't-1': '2026-01-01T00:00:00Z' },
     });
     const screen = await renderHook(() => useUserState());
     const probe = screen.getByTestId('probe').element();
     await expect
       .poll(() => JSON.parse(probe.getAttribute('data-data') ?? 'null'))
-      .toEqual({ threadNotifications: ['root-1'], hiddenConversations: ['conv-1'], hiddenSkills: ['skill-1'] });
+      .toEqual({ threadNotifications: ['root-1'], hiddenConversations: ['conv-1'], hiddenSkills: ['skill-1'], sidebarSorts: { __channels__: 'az' } });
   });
 });

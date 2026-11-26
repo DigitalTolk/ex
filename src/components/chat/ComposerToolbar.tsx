@@ -2,6 +2,7 @@ import { memo, type ReactNode, type RefObject } from 'react';
 import {
   Send,
   Paperclip,
+  Camera,
   Bold,
   Italic,
   Strikethrough,
@@ -42,6 +43,8 @@ interface ComposerToolbarProps {
   onOpenLinkDialog: () => void;
   onPickerOpenChange: (open: boolean) => void;
   onAttach: () => void;
+  // Opens the camera to take a photo for the message (touch devices).
+  onTakePhoto?: () => void;
   onSend: () => void;
   // Present when the message can be sent later instead.
   onSchedule?: (sendAt: Date) => Promise<void>;
@@ -68,6 +71,7 @@ export const ComposerToolbar = memo(function ComposerToolbar({
   onOpenLinkDialog,
   onPickerOpenChange,
   onAttach,
+  onTakePhoto,
   onSend,
   onSchedule,
   onCancel,
@@ -170,6 +174,23 @@ export const ComposerToolbar = memo(function ComposerToolbar({
       >
         <Paperclip className="h-3.5 w-3.5" />
       </button>
+      {onTakePhoto && (
+        // A phone or tablet opens its camera straight away; a desktop has no
+        // such picker (the browser would offer files), so the button shows
+        // only on touch screens. Not on the narrowest phones (under 360px),
+        // where it would push Send out of the toolbar; there the paperclip's
+        // own picker offers the camera.
+        <button
+          type="button"
+          onClick={onTakePhoto}
+          disabled={isUploading}
+          className="hidden h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50 touch:flex touch:max-[359px]:hidden mobile:h-9 mobile:w-9"
+          aria-label="Take photo"
+          data-testid="composer-take-photo"
+        >
+          <Camera className="h-3.5 w-3.5" />
+        </button>
+      )}
       {showSend && (
         <>
           <span className="ml-auto" aria-hidden />

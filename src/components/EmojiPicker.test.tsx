@@ -243,7 +243,7 @@ describe('EmojiPicker', () => {
     expect(tabs[0].textContent).toBe('');
     expect(tabs[tabs.length - 1]).toHaveAttribute('data-category', 'custom');
     expect(screen.getByRole('tablist', { name: /emoji categories/i }).className).toContain('justify-center');
-    expect(screen.getByRole('list', { name: /standard emojis/i }).className).toContain('grid-cols-[repeat(10,2.5rem)]');
+    expect(screen.getByRole('list', { name: /standard emojis/i }).className).toContain('grid-cols-[repeat(10,minmax(0,2.5rem))]');
   });
 
   it('uses larger emoji tap targets on touch', async () => {

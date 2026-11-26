@@ -21,6 +21,9 @@ vi.mock('@/lib/panel-width', () => ({
 const showToast = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/toast', () => ({ showToast }));
 
+const preloadThemeReveal = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/theme-transition', () => ({ preloadThemeReveal }));
+
 describe('AppearanceSettings', () => {
   beforeEach(() => {
     themeRef.value = 'system';
@@ -29,6 +32,7 @@ describe('AppearanceSettings', () => {
     panel.reset.mockClear();
     setTheme.mockClear();
     showToast.mockClear();
+    preloadThemeReveal.mockClear();
   });
   afterEach(() => cleanup());
 
@@ -40,14 +44,16 @@ describe('AppearanceSettings', () => {
     }
   });
 
-  it('picking a theme card sets the theme', async () => {
+  it('picking a theme card sets the theme, with the dancing-gopher reveal', async () => {
     const screen = await render(<AppearanceSettings />);
+    // The gopher is fetched as the page opens, so the switch doesn't wait.
+    expect(preloadThemeReveal).toHaveBeenCalled();
     await screen.getByRole('radio', { name: 'Dark theme' }).click();
-    expect(setTheme).toHaveBeenCalledWith('dark');
+    expect(setTheme).toHaveBeenCalledWith('dark', true);
     await screen.getByRole('radio', { name: 'Light theme' }).click();
-    expect(setTheme).toHaveBeenCalledWith('light');
+    expect(setTheme).toHaveBeenCalledWith('light', true);
     await screen.getByRole('radio', { name: 'Match system theme' }).click();
-    expect(setTheme).toHaveBeenCalledWith('system');
+    expect(setTheme).toHaveBeenCalledWith('system', true);
   });
 
   it('resets panel widths, then disables the button and confirms', async () => {

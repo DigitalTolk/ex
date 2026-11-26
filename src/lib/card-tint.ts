@@ -39,12 +39,10 @@ export function cardTint(color?: string): RichColor | null {
   return 'purple';
 }
 
-// Every webhook card, classic or rich, is one card: the page's own surface
-// with a hairline outline that starts in the card's hue at its top-left
-// corner and fades into the ordinary border (.card-outline in index.css
-// reads --card-hue). No fill and no side bar: the hue is a hint, and the
-// card's status icon carries the meaning for anyone who can't tell the hues
-// apart.
+// A card with a colour marks the top-left corner of its border in that hue
+// (.card-outline in index.css reads --card-hue). No fill and no side bar:
+// the hue is a hint, and the card's status icon carries the meaning for
+// anyone who can't tell the hues apart.
 const HUE: Record<RichColor, string> = {
   gray: '[--card-hue:var(--color-rt-gray)]',
   brown: '[--card-hue:var(--color-rt-brown)]',
@@ -68,13 +66,16 @@ export const HUE_TEXT: Record<RichColor, string> = {
   red: 'text-rt-red',
 };
 
+// The card every chat card starts from: the page's surface in a 2px border.
+const PLAIN_CARD = 'border-2 border-border bg-background';
+
 // cardClass is the surface and outline a card with this `color` takes; one
 // with no colour ex can read gets the plain bordered card.
 export function cardClass(color?: string): string {
   const tint = cardTint(color);
-  return tint ? `card-outline ${HUE[tint]}` : 'border border-border bg-background';
+  return tint ? `card-outline ${HUE[tint]}` : PLAIN_CARD;
 }
 
-// A quoted message and a link preview are the same card in grey: they carry
-// no status, so no hue and no icon.
-export const QUOTE_CARD = `card-outline ${HUE.gray}`;
+// A quoted message and a link preview are the plain card: they carry no
+// status, so no corner mark and no icon.
+export const QUOTE_CARD = PLAIN_CARD;

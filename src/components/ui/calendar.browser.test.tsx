@@ -23,4 +23,16 @@ describe('Calendar', () => {
     await userEvent.click(document.querySelector('button[aria-label*="Previous"]') as HTMLButtonElement);
     await vi.waitFor(() => expect(day(10)).not.toBeNull());
   });
+
+  it('starts each week on Monday', async () => {
+    // November 2026 opens on a Sunday, so a Sunday-first grid would differ.
+    await render(<Calendar mode="single" month={new Date(2026, 10, 1)} />);
+    const weekdays = Array.from(document.querySelectorAll('.rdp-weekday')).map((cell) => cell.getAttribute('aria-label') ?? cell.textContent);
+    expect(weekdays[0]).toMatch(/^Mo/);
+    expect(weekdays[6]).toMatch(/^Su/);
+    // The 1st, a Sunday, ends the first row.
+    const firstRow = document.querySelector('.rdp-week');
+    const lastDay = firstRow?.querySelectorAll('[data-day]');
+    expect(lastDay?.[lastDay.length - 1]?.getAttribute('data-day')).toBe(new Date(2026, 10, 1).toLocaleDateString());
+  });
 });

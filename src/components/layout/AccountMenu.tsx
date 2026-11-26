@@ -34,6 +34,7 @@ import { MobilePauseNotifications, PausedMark } from './DoNotDisturbButton';
 import { CustomEmojiDialog } from '@/components/emoji/CustomEmojiDialog';
 import { UserStatusDialog } from '@/components/UserStatusDialog';
 import { UserStatusIndicator } from '@/components/UserStatusIndicator';
+import type { UserStatus } from '@/types';
 import { PresenceDot } from '@/components/PresenceDot';
 import { presenceNotchStyle } from '@/lib/presence';
 import { activeStatus, formatStatusUntilShort } from '@/lib/user-status';
@@ -252,7 +253,7 @@ export function AccountMenu({ variant = 'footer' }: AccountMenuProps) {
         <AvatarImage src={user?.avatarURL} alt="" />
         <AvatarFallback className="bg-foreground/10 text-foreground text-xs">{initials}</AvatarFallback>
       </Avatar>
-      <PresenceDot online={userOnline} size={10} inset={0} />
+      {status ? <StatusMark status={status} ring="bg-sidebar-rail" tooltip /> : <PresenceDot online={userOnline} size={10} inset={0} />}
     </span>
   );
 
@@ -270,7 +271,7 @@ export function AccountMenu({ variant = 'footer' }: AccountMenuProps) {
             <AvatarImage src={user?.avatarURL} alt="" />
             <AvatarFallback className="bg-foreground/10 text-foreground text-xs">{initials}</AvatarFallback>
           </Avatar>
-          <PresenceDot online={userOnline} size={8} inset={0} />
+          {status ? <StatusMark status={status} ring="bg-sidebar" tooltip={false} /> : <PresenceDot online={userOnline} size={8} inset={0} />}
           <PausedMark />
         </span>
         <span>You</span>
@@ -470,5 +471,20 @@ export function AccountMenu({ variant = 'footer' }: AccountMenuProps) {
         testIDPrefix="change-server"
       />
     </>
+  );
+}
+
+// StatusMark is your status emoji in place of the presence dot on your avatar,
+// in the rail and on the phone's You tab, where your name (and the status
+// beside it) isn't shown. Hovering it shows the status card, as beside a name
+// in chat. Its ring is the surface it sits on, so it reads as cut out.
+function StatusMark({ status, ring, tooltip }: { status: UserStatus; ring: string; tooltip: boolean }) {
+  return (
+    <span
+      className={`absolute -bottom-1 -right-1 inline-flex h-5 w-5 items-center justify-center rounded-full ${ring}`}
+      data-testid="account-status-mark"
+    >
+      <UserStatusIndicator status={status} inlineTrigger tooltip={tooltip} />
+    </span>
   );
 }

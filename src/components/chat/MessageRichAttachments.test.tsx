@@ -55,7 +55,7 @@ describe('MessageRichAttachments', () => {
 
     const cards = screen.getAllByTestId('message-rich-attachment');
     expect(cards).toHaveLength(2);
-    expect(cards[0]).toHaveClass('border', 'bg-background');
+    expect(cards[0]).toHaveClass('border-2', 'bg-background');
     expect(screen.getByText('Build Bot')).toBeInTheDocument();
     expect(screen.getByText('Plain title')).toBeInTheDocument();
     expect(screen.getByText('Short')).toBeInTheDocument();
@@ -204,7 +204,7 @@ describe('MessageRichAttachments looks', () => {
     const [titled, bare] = screen.getAllByTestId('message-rich-attachment');
     expect(screen.queryByTestId('card-status-icon')).toBeNull();
     for (const card of [titled, bare]) {
-      expect(card).toHaveClass('border', 'border-border', 'bg-background');
+      expect(card).toHaveClass('border-2', 'border-border', 'bg-background');
       expect(card).not.toHaveClass('card-outline', 'flex');
     }
   });

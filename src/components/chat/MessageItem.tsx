@@ -1103,7 +1103,8 @@ function MessageItemImpl({
           )}
           {message.pinned && (
             <span
-              className="inline-flex items-center gap-0.5 text-xs text-pinned"
+              // The warning hue, as the row's corner mark (.pinned-outline).
+              className="inline-flex items-center gap-0.5 text-xs text-rt-yellow"
               aria-label="Pinned"
             >
               <Pin className="h-3 w-3" />

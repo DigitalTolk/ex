@@ -132,6 +132,10 @@ function EmojiPreview({ store, customMap }: { store: PreviewStore; customMap: Re
 // The frequently-used shelf shows two rows; column counts match the grid
 // below (10 on desktop, 7 on mobile) so the rows line up visually.
 const FREQUENT_ROWS = 2;
+// Ten columns of up to 40px. They give way to fit (each tile stays square)
+// where a scrollbar takes its own width: Windows, Linux, and a Mac set to
+// always show scroll bars. A fixed 40px overflowed there, cutting off the
+// last column and scrolling sideways.
 const DESKTOP_COLS = 10;
 const MOBILE_COLS = 7;
 // Over-fetch the frequent list well past the two visible rows so that after
@@ -423,7 +427,7 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
                 Frequently used
               </div>
               <div
-                className="grid grid-cols-[repeat(10,2.5rem)] content-start justify-center gap-0.5 touch:grid-cols-[repeat(7,2.75rem)]"
+                className="grid grid-cols-[repeat(10,minmax(0,2.5rem))] content-start justify-center gap-0.5 touch:grid-cols-[repeat(7,2.75rem)]"
                 role="list"
                 aria-label="Frequently used emojis"
                 data-testid="emoji-frequent-grid"
@@ -435,7 +439,7 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
                     role="listitem"
                     data-testid="emoji-frequent-tile"
                     onClick={() => handlePick(shortcode)}
-                    className="flex h-10 w-10 items-center justify-center rounded hover:bg-muted touch:h-11 touch:w-11"
+                    className="flex aspect-square w-full items-center justify-center rounded hover:bg-muted touch:h-11 touch:w-11"
                     aria-label={`React with ${shortcode}`}
                     data-emoji-name={shortcode}
                   >
@@ -456,7 +460,7 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
                 Getting Work Done
               </div>
               <div
-                className="grid grid-cols-[repeat(10,2.5rem)] content-start justify-center gap-0.5 touch:grid-cols-[repeat(7,2.75rem)]"
+                className="grid grid-cols-[repeat(10,minmax(0,2.5rem))] content-start justify-center gap-0.5 touch:grid-cols-[repeat(7,2.75rem)]"
                 role="list"
                 aria-label="Getting Work Done emojis"
                 data-testid="emoji-workpack-grid"
@@ -468,7 +472,7 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
                     role="listitem"
                     data-testid="emoji-workpack-tile"
                     onClick={() => handlePick(`:${e.name}:`)}
-                    className="flex h-10 w-10 items-center justify-center rounded hover:bg-muted touch:h-11 touch:w-11"
+                    className="flex aspect-square w-full items-center justify-center rounded hover:bg-muted touch:h-11 touch:w-11"
                     aria-label={`React with :${e.name}:`}
                     data-emoji-name={`:${e.name}:`}
                   >
@@ -491,7 +495,7 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
                 : standardCategoryLabel}
           </div>
           <div
-            className="grid grid-cols-[repeat(10,2.5rem)] content-start justify-center gap-0.5 touch:grid-cols-[repeat(7,2.75rem)]"
+            className="grid grid-cols-[repeat(10,minmax(0,2.5rem))] content-start justify-center gap-0.5 touch:grid-cols-[repeat(7,2.75rem)]"
             role="list"
             aria-label={activeCategory === CUSTOM_CATEGORY_SLUG && !query.trim() ? 'Custom emojis' : 'Standard emojis'}
           >
@@ -502,7 +506,7 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
                 role="listitem"
                 data-testid="emoji-picker-tile"
                 onClick={() => handlePick(`:${e.name}:`)}
-                className="flex h-10 w-10 items-center justify-center rounded hover:bg-muted touch:h-11 touch:w-11"
+                className="flex aspect-square w-full items-center justify-center rounded hover:bg-muted touch:h-11 touch:w-11"
                 aria-label={`React with :${e.name}:`}
                 data-emoji-name={`:${e.name}:`}
               >
@@ -524,7 +528,7 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
                   role="listitem"
                   data-testid="emoji-picker-tile"
                   onClick={() => handlePick(shortcode)}
-                  className="flex h-10 w-10 items-center justify-center rounded hover:bg-muted touch:h-11 touch:w-11"
+                  className="flex aspect-square w-full items-center justify-center rounded hover:bg-muted touch:h-11 touch:w-11"
                   aria-label={`React with ${shortcode}`}
                   data-emoji-name={shortcode}
                   data-emoji-glyph={supportsEmojiSkinTone(e.unicode) ? tonedEmoji : e.unicode}

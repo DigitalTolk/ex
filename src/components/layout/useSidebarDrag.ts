@@ -79,8 +79,14 @@ function useNavigationSuppression() {
 // DM into a section, or a category into the category order — to the server.
 //
 // sections and categories are the ones rendered: a drop resolves against
-// exactly what the user saw.
-export function useSidebarDrag(sections: SidebarSection[], categories: SidebarCategory[]) {
+// exactly what the user saw. onOrderChosen runs with a section's key when a
+// row is dragged to a new slot within that section — the user picked an order
+// by hand, so a "Recent activity" sort gives way to it.
+export function useSidebarDrag(
+  sections: SidebarSection[],
+  categories: SidebarCategory[],
+  onOrderChosen?: (sectionKey: string) => void,
+) {
   const reorderSidebar = useReorderSidebar();
   const reorderCategories = useReorderCategories();
   const activeDragRef = useRef<DragPayload | null>(null);
@@ -178,7 +184,11 @@ export function useSidebarDrag(sections: SidebarSection[], categories: SidebarCa
         /* v8 ignore next -- a resolved channel drop never targets the DM section (resolveDropPayload only yields channel-accepting sections); defensive guard */
         /* istanbul ignore next -- a resolved channel drop never targets the DM section (resolveDropPayload only yields channel-accepting sections); this guard is dead defensive code */
         if (drop.sectionKey === SidebarSectionKeys.DirectMessages) return;
-        persistReorder(section.items, { id: drag.channel.channelID, kind: 'channel' }, drop.index, sectionDropTarget(drop.sectionKey));
+        const draggedID = drag.channel.channelID;
+        if (section.items.some((item) => item.kind === 'channel' && item.channel.channelID === draggedID)) {
+          onOrderChosen?.(drop.sectionKey);
+        }
+        persistReorder(section.items, { id: draggedID, kind: 'channel' }, drop.index, sectionDropTarget(drop.sectionKey));
         return;
       }
       /* v8 ignore start -- a channel-kind drop only originates from a channel or conversation drag, and a conversation drag only resolves onto Favorites; after the channel branch returns, both guards are defensive */
@@ -187,6 +197,9 @@ export function useSidebarDrag(sections: SidebarSection[], categories: SidebarCa
       /* istanbul ignore next -- a conversation drag only resolves onto Favorites; the non-Favorites guard is dead defensive code */
       if (drop.sectionKey !== SidebarSectionKeys.Favorites) return;
       /* v8 ignore stop */
+      // Only a favorite is a conversation drag source, so this is always a
+      // new slot within Favorites.
+      onOrderChosen?.(drop.sectionKey);
       persistReorder(
         section.items,
         { id: drag.conversation.conversationID, kind: 'conversation' },

@@ -32,15 +32,15 @@ describe('cardTint', () => {
   });
 
   it("outlines a coloured card from its own hue, and the plain card in the theme's border", () => {
-    // No fill and no side bar: .card-outline reads the hue from --card-hue.
+    // No fill and no side bar: .card-outline marks a corner in --card-hue.
     expect(cardClass('danger')).toBe('card-outline [--card-hue:var(--color-rt-red)]');
     expect(cardClass('#0a0')).toBe('card-outline [--card-hue:var(--color-rt-green)]');
-    expect(cardClass()).toBe('border border-border bg-background');
-    expect(cardClass('not-a-color')).toBe('border border-border bg-background');
+    expect(cardClass()).toBe('border-2 border-border bg-background');
+    expect(cardClass('not-a-color')).toBe('border-2 border-border bg-background');
   });
 
-  it('gives a quoted message and a link preview the same card in grey', () => {
-    expect(QUOTE_CARD).toBe(cardClass('gray'));
+  it('gives a quoted message and a link preview the plain card, with no corner mark', () => {
+    expect(QUOTE_CARD).toBe(cardClass());
   });
 
   it("colours a card's status icon in the card's hue", () => {
