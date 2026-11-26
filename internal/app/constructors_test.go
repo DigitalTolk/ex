@@ -42,10 +42,18 @@ func TestNewServerEngine(t *testing.T) {
 		BedrockRegion:          "eu-north-1",
 		BedrockAccessKeyID:     "AKIDEXAMPLE",
 		BedrockSecretAccessKey: "secret",
+		BedrockInferenceProfiles: config.InferenceProfiles{
+			"eu.example.model-v1:0": "arn:aws:bedrock:eu-north-1:111122223333:application-inference-profile/abc123",
+		},
 	}
 	e := newServerEngine(cfg, nil, nil)
 	if e == nil {
 		t.Fatal("bedrock configured: engine = nil")
+	}
+	// A profile map that never reached the engine would leave every call
+	// untagged with nothing to show for it.
+	if n := e.InferenceProfileCount(); n != 1 {
+		t.Fatalf("inference profiles on the engine = %d, want 1", n)
 	}
 	// The bridged workspace tools call this process over loopback.
 	if err := e.Wired(); err != nil {

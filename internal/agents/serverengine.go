@@ -65,9 +65,26 @@ type ServerEngine struct {
 	// runAPIHTTP is the bridged tools' client (runAPIClient), not the
 	// connector one: the connector guard refuses loopback.
 	runAPIHTTP *http.Client
+	// inferenceProfiles is the application inference profile each model is
+	// called through (model id → profile ARN); a model with no entry is
+	// called by its own id.
+	inferenceProfiles map[string]string
 	// afterRun is a test seam observing run completion (nil in production).
 	afterRun func(runID string)
 }
+
+// SetInferenceProfiles names the application inference profile to call each
+// model through (model id → profile ARN). The profile is what attributes a
+// call's cost to this deployment. A model with no entry is called by its own
+// id: whether calls outside a profile are allowed is the AWS account's policy
+// to decide, not this server's.
+func (e *ServerEngine) SetInferenceProfiles(profiles map[string]string) {
+	e.inferenceProfiles = profiles
+}
+
+// InferenceProfileCount reports how many models are called through an
+// inference profile; 0 means model ids go to Bedrock as given.
+func (e *ServerEngine) InferenceProfileCount() int { return len(e.inferenceProfiles) }
 
 // SetRunAPIBase wires the loopback address of the server's own run-tool API
 // (e.g. "http://127.0.0.1:8080"); empty leaves the bridged tools off.
@@ -161,12 +178,13 @@ func (e *ServerEngine) execute(runID string) {
 	files, filesNote := e.loadAttachments(ctx, run, asg.Attachments)
 	turns := bedrock.TurnBudget(run.Limits.TurnsFor(run.Mode))
 	finalText, usage, loopErr := bedrock.Run(runCtx, e.client, bedrock.Config{
-		ModelID:     asg.Model,
-		System:      serverSystemRules(asg, toolsDesc, turns),
-		Prompt:      asg.Prompt + "\n\n" + asg.ContextBundle + filesNote,
-		Attachments: files,
-		MaxIters:    turns,
-		Tools:       tools,
+		ModelID:             asg.Model,
+		InferenceProfileARN: e.inferenceProfiles[asg.Model],
+		System:              serverSystemRules(asg, toolsDesc, turns),
+		Prompt:              asg.Prompt + "\n\n" + asg.ContextBundle + filesNote,
+		Attachments:         files,
+		MaxIters:            turns,
+		Tools:               tools,
 		OnEvent: func(kind string, payload map[string]any) {
 			switch kind {
 			case "turn":

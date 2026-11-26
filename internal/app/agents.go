@@ -155,6 +155,7 @@ func newServerEngine(cfg *config.Config, orch *agents.Orchestrator, connectors *
 	// this process's own run-tool HTTP API over loopback, with the run's
 	// token — full parity with a desktop runner's tool surface.
 	engine.SetRunAPIBase("http://127.0.0.1:" + cfg.Port)
-	slog.Info("bedrock server engine enabled", "region", cfg.BedrockRegion)
+	engine.SetInferenceProfiles(cfg.BedrockInferenceProfiles)
+	slog.Info("bedrock server engine enabled", "region", cfg.BedrockRegion, "inferenceProfiles", engine.InferenceProfileCount())
 	return engine
 }

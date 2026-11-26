@@ -298,6 +298,25 @@ func TestRun_ToolCallInputPreviewClipped(t *testing.T) {
 	}
 }
 
+// An application inference profile replaces the model id on the wire, and the
+// model id still decides prompt caching: a profile ARN names no model family.
+func TestRun_CallsThroughInferenceProfile(t *testing.T) {
+	const arn = "arn:aws:bedrock:eu-north-1:111122223333:application-inference-profile/abc123"
+	c := &fakeClient{outs: []*bedrockruntime.ConverseOutput{textOut(types.StopReasonEndTurn, "done", 5, 2)}}
+
+	if _, _, err := Run(context.Background(), c, Config{
+		ModelID: "eu.anthropic.claude-opus-5", InferenceProfileARN: arn, System: "s", Prompt: "p",
+	}); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if got := aws.ToString(c.calls[0].ModelId); got != arn {
+		t.Fatalf("Converse model id = %q, want the profile ARN", got)
+	}
+	if n := len(c.calls[0].System); n != 2 {
+		t.Fatalf("system blocks = %d, want text + cachePoint: caching follows the model id, not the ARN", n)
+	}
+}
+
 // Claude models get prompt-cache checkpoints: one fixed after system, one
 // request-scoped on the last message — and cache reads never count as fresh
 // input, while cache writes do.
