@@ -327,20 +327,45 @@ func TestMessageLink_Preview_AccessibleButUnavailableMessage(t *testing.T) {
 func TestMessageLink_Preview_NotInternal(t *testing.T) {
 	svc := newTestMessageLinkService()
 	cases := []string{
-		"https://other.example/channel/general#msg-m1", // wrong host
-		"https://ex.test/channel/general",              // no message fragment
-		"https://ex.test/channel/general#frag",         // wrong fragment form
-		"https://ex.test/channel/general#msg-",         // empty message id
-		"https://ex.test/admin#msg-m1",                 // not a channel/conversation path (1 segment)
-		"https://ex.test/foo/bar#msg-m1",               // 2 segments but unknown path prefix
-		"https://ex.test/channel/general/extra#msg-m1", // too many path segments
-		"https://ex.test/channel/#msg-m1",              // empty slug
+		"https://other.example/channel/general#msg-m1", // another host
 		"://bad",                                       // unparseable
 	}
 	for _, u := range cases {
 		if p, internal := svc.Preview(context.Background(), "viewer", u); internal || p != nil {
 			t.Errorf("%q: expected (nil,false), got internal=%v p=%v", u, internal, p)
 		}
+	}
+}
+
+// A link to this workspace that is no message (a channel, a DM, a page of the
+// app) is still ours: no preview, and never handed on to be web-fetched. It
+// was, and the card showed the app's own page: a box saying only "ex".
+func TestMessageLink_Preview_OwnHostButNoMessage(t *testing.T) {
+	svc := newTestMessageLinkService()
+	cases := []string{
+		"https://ex.test/channel/general",              // a channel
+		"https://EX.TEST/channel/general",              // the host in any case
+		"https://ex.test/conversation/conv-1",          // a DM
+		"https://ex.test/channel/general#frag",         // wrong fragment form
+		"https://ex.test/channel/general#msg-",         // empty message id
+		"https://ex.test/admin#msg-m1",                 // not a channel/conversation path (1 segment)
+		"https://ex.test/foo/bar#msg-m1",               // 2 segments but unknown path prefix
+		"https://ex.test/channel/general/extra#msg-m1", // too many path segments
+		"https://ex.test/channel/#msg-m1",              // empty slug
+		"https://ex.test/",                             // the app itself
+	}
+	for _, u := range cases {
+		if p, internal := svc.Preview(context.Background(), "viewer", u); !internal || p != nil {
+			t.Errorf("%q: expected (nil,true), got internal=%v p=%v", u, internal, p)
+		}
+	}
+}
+
+// With no base URL the service knows no host of its own, so nothing is ours.
+func TestMessageLink_Preview_NoOwnHost(t *testing.T) {
+	svc := NewMessageLinkService("", nil, nil, nil, nil, nil, nil)
+	if p, internal := svc.Preview(context.Background(), "viewer", "https://ex.test/channel/general"); internal || p != nil {
+		t.Fatalf("expected (nil,false), got internal=%v p=%v", internal, p)
 	}
 }
 

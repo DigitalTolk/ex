@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { inAppRouteTarget } from './in-app-link';
+import { inAppRouteTarget, previewsAsLinkCard } from './in-app-link';
 
 const ORIGIN = 'https://ex.digitaltolk.net';
 
@@ -36,5 +36,24 @@ describe('inAppRouteTarget', () => {
 
   it('returns null for unparseable hrefs', () => {
     expect(inAppRouteTarget('http://[bad', ORIGIN)).toBeNull();
+  });
+});
+
+describe('previewsAsLinkCard', () => {
+  it('previews a link to a message of this app, and any link elsewhere', () => {
+    expect(previewsAsLinkCard(`${ORIGIN}/channel/eng#msg-01KV8DRDNYPP`, ORIGIN)).toBe(true);
+    expect(previewsAsLinkCard(`${ORIGIN}/conversation/c-1?thread=r#msg-r`, ORIGIN)).toBe(true);
+    expect(previewsAsLinkCard('https://github.com/x', ORIGIN)).toBe(true);
+  });
+
+  it('previews no channel, DM or page of this app', () => {
+    expect(previewsAsLinkCard(`${ORIGIN}/channel/inc-0048-af657`, ORIGIN)).toBe(false);
+    expect(previewsAsLinkCard(`${ORIGIN}/conversation/c-1`, ORIGIN)).toBe(false);
+    expect(previewsAsLinkCard(`${ORIGIN}/threads`, ORIGIN)).toBe(false);
+    expect(previewsAsLinkCard(`${ORIGIN}/channel/eng#frag`, ORIGIN)).toBe(false);
+  });
+
+  it('leaves an unparseable link to the server to judge', () => {
+    expect(previewsAsLinkCard('http://[bad', ORIGIN)).toBe(true);
   });
 });

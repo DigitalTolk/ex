@@ -26,6 +26,7 @@ import { NotSentMark } from '@/components/chat/MessageSendState';
 import { useMessageRowData, useProvidedMessageRowData, type MessageRowData } from '@/hooks/useMessageRowData';
 import { EmojiPicker } from '@/components/EmojiPicker';
 import { UserHoverCard } from '@/components/UserHoverCard';
+import { previewsAsLinkCard } from '@/lib/in-app-link';
 import { UserGroupMentionCard } from '@/components/UserGroupMentionCard';
 import { UserAvatar } from '@/components/UserAvatar';
 import { useEditMessage, useToggleReaction } from '@/hooks/useMessages';
@@ -1228,9 +1229,9 @@ function MessageItemImpl({
                   {(() => {
                     if (message.noUnfurl || current.blocks?.length) return null;
                     // First URL in the body (skipping code) that isn't a SharePoint
-                    // file gets a preview card. Capped at one to keep messages
-                    // compact.
-                    const url = bodyURLs.find((u) => !isSharePointURL(u, sharePointHosts));
+                    // file or a link to a channel, DM or page of this app gets a
+                    // preview card. Capped at one to keep messages compact.
+                    const url = bodyURLs.find((u) => !isSharePointURL(u, sharePointHosts) && previewsAsLinkCard(u, window.location.origin));
                     return url ? (
                       <UnfurlCard
                         url={url}
