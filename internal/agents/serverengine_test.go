@@ -205,6 +205,57 @@ func TestServerEngine_LoopFailureFailsRun(t *testing.T) {
 	}
 }
 
+// With inference profiles configured, Bedrock is called with the profile of
+// the run's model, which is what tags the call for cost allocation.
+func TestServerEngine_CallsThroughInferenceProfile(t *testing.T) {
+	fx := newOrchFixture(t)
+	run := fx.startRun(t)
+	const arn = "arn:aws:bedrock:eu-north-1:111122223333:application-inference-profile/abc123"
+
+	fb := &fakeBedrock{outs: []*bedrockruntime.ConverseOutput{bedrockText("done")}}
+	e := NewServerEngine(fx.orch, nil, fb)
+	if e.InferenceProfileCount() != 0 {
+		t.Fatalf("a new engine routes %d models through a profile, want none", e.InferenceProfileCount())
+	}
+	e.SetInferenceProfiles(map[string]string{run.Model: arn})
+	if e.InferenceProfileCount() != 1 {
+		t.Fatalf("profile count = %d, want 1", e.InferenceProfileCount())
+	}
+	dispatchAndWait(t, e, run.ID)
+
+	got, _ := fx.runs.GetRun(context.Background(), run.ID)
+	if got.State != model.RunStateCompleted {
+		t.Fatalf("state: %s (fail=%q)", got.State, got.FailReason)
+	}
+	if id := aws.ToString(fb.calls[0].ModelId); id != arn {
+		t.Fatalf("Converse model id = %q, want the profile ARN", id)
+	}
+}
+
+// A model with no profile is still called, by its own id. Whether a call
+// outside a profile is allowed is the AWS account's policy to decide, so a
+// deployment with a partial map, and no such policy, keeps working.
+func TestServerEngine_ModelWithoutInferenceProfileCallsModelID(t *testing.T) {
+	fx := newOrchFixture(t)
+	run := fx.startRun(t)
+
+	fb := &fakeBedrock{outs: []*bedrockruntime.ConverseOutput{bedrockText("done")}}
+	e := NewServerEngine(fx.orch, nil, fb)
+	e.SetInferenceProfiles(map[string]string{"eu.example.other-model": "arn:aws:bedrock:eu-north-1:111122223333:application-inference-profile/abc123"})
+	dispatchAndWait(t, e, run.ID)
+
+	got, _ := fx.runs.GetRun(context.Background(), run.ID)
+	if got.State != model.RunStateCompleted {
+		t.Fatalf("state: %s (fail=%q)", got.State, got.FailReason)
+	}
+	if len(fb.calls) != 1 {
+		t.Fatalf("Bedrock was called %d times, want 1", len(fb.calls))
+	}
+	if id := aws.ToString(fb.calls[0].ModelId); id != run.Model {
+		t.Fatalf("Converse model id = %q, want the model's own id %q", id, run.Model)
+	}
+}
+
 // A model that keeps calling tools through its final turn ran out of steps;
 // Bedrock itself was fine, so the run must not be reported as bedrock_error.
 // The model is told its real budget up front.
