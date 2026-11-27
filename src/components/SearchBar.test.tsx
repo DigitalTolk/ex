@@ -429,7 +429,7 @@ describe('SearchBar', () => {
     });
   });
 
-  describe('⌘K / Ctrl+K', () => {
+  describe('⌘K / Ctrl+K and ⌘F / Ctrl+F', () => {
     it('opens on Ctrl+K on non-Apple platforms (the ambient jsdom default)', () => {
       renderBar();
       const input = screen.getByTestId('searchbar-input') as HTMLInputElement;
@@ -438,6 +438,44 @@ describe('SearchBar', () => {
         fireEvent.keyDown(document, { key: 'K', ctrlKey: true });
       });
       expect(input).toHaveFocus();
+    });
+
+    it('opens on Ctrl+F too, and takes the key from the browser so its own find bar stays shut', () => {
+      renderBar();
+      const input = screen.getByTestId('searchbar-input') as HTMLInputElement;
+      let notPrevented = true;
+      act(() => {
+        notPrevented = fireEvent.keyDown(document, { key: 'f', ctrlKey: true });
+      });
+      expect(input).toHaveFocus();
+      expect(notPrevented).toBe(false);
+    });
+
+    it('opens on Meta+F on Apple platforms and ignores bare Ctrl+F there (forward-char must survive)', () => {
+      const restore = stubUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)');
+      try {
+        renderBar();
+        const input = screen.getByTestId('searchbar-input') as HTMLInputElement;
+        act(() => {
+          fireEvent.keyDown(document, { key: 'f', ctrlKey: true });
+        });
+        expect(input).not.toHaveFocus();
+        act(() => {
+          fireEvent.keyDown(document, { key: 'f', metaKey: true });
+        });
+        expect(input).toHaveFocus();
+      } finally {
+        restore();
+      }
+    });
+
+    it('leaves other chords with F alone (Ctrl+Shift+F)', () => {
+      renderBar();
+      const input = screen.getByTestId('searchbar-input') as HTMLInputElement;
+      act(() => {
+        fireEvent.keyDown(document, { key: 'F', ctrlKey: true, shiftKey: true });
+      });
+      expect(input).not.toHaveFocus();
     });
 
     it('ignores Meta+K on non-Apple platforms', () => {

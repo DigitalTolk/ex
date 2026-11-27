@@ -28,14 +28,15 @@ func NewUserStateService(store UserStateStore, publisher Publisher) *UserStateSe
 // activity items. Optional.
 func (s *UserStateService) SetActivityTracker(t ActivityReadTracker) { s.activity = t }
 
-// List returns userID's always-loaded state: unread-thread markers and hidden
-// conversations and skills, one small query per kind. Thread seen rows are
+// List returns userID's always-loaded state: unread-thread markers, hidden
+// conversations and skills, and sidebar sorts, one small query per kind. Thread seen rows are
 // read one thread at a time (ThreadRead).
 func (s *UserStateService) List(ctx context.Context, userID string) (*model.UserState, error) {
 	state := &model.UserState{
 		ThreadNotifications: []string{},
 		HiddenConversations: []string{},
 		HiddenSkills:        []string{},
+		SidebarSorts:        map[string]model.SidebarSort{},
 	}
 	if s.store == nil || userID == "" {
 		return state, nil
@@ -56,6 +57,13 @@ func (s *UserStateService) List(ctx context.Context, userID string) (*model.User
 			*part.into = append(*part.into, item.TargetID)
 		}
 		sort.Strings(*part.into)
+	}
+	sorts, err := s.store.ListUserState(ctx, userID, model.UserStateSidebarSort)
+	if err != nil {
+		return nil, fmt.Errorf("user state: list: %w", err)
+	}
+	for _, item := range sorts {
+		state.SidebarSorts[item.TargetID] = item.Sort
 	}
 	return state, nil
 }
@@ -163,6 +171,18 @@ func (s *UserStateService) HideSkill(ctx context.Context, userID, skillID string
 
 func (s *UserStateService) UnhideSkill(ctx context.Context, userID, skillID string) error {
 	return s.delete(ctx, userID, model.UserStateHiddenSkill, skillID)
+}
+
+// SetSidebarSort remembers how one sidebar section orders its rows for this
+// user, so every device opens it that way.
+func (s *UserStateService) SetSidebarSort(ctx context.Context, userID, section string, sort model.SidebarSort) error {
+	return s.set(ctx, &model.UserStateItem{
+		UserID:    userID,
+		Kind:      model.UserStateSidebarSort,
+		TargetID:  section,
+		Sort:      sort,
+		UpdatedAt: time.Now(),
+	})
 }
 
 // HiddenSkillSet is the orchestrator's view: the set of skill ids userID has

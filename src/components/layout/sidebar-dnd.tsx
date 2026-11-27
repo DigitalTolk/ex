@@ -217,12 +217,15 @@ export function PragmaticCategoryDropHitbox({
 
 export function PragmaticChannelRow({
   sectionKey,
-  index,
+  slotOf,
   channel,
   children,
 }: {
   sectionKey: string;
-  index: number;
+  // The row's drop slot (sidebar-drop-resolution's dropSlots), asked for when
+  // a drag reaches it: a stable lookup, not a number prop, so a row moving
+  // in the list doesn't renumber, re-render and re-register every row below.
+  slotOf: (sectionKey: string, id: string) => number;
   channel: UserChannel;
   children: (args: {
     dragRef?: (node: HTMLElement | null) => void;
@@ -256,7 +259,7 @@ export function PragmaticChannelRow({
         getIsSticky: () => true,
         getData: ({ input, element }) =>
           attachClosestEdge(
-            { type: 'channel-target', sectionKey, index, area: 'row' } satisfies DropPayload,
+            { type: 'channel-target', sectionKey, index: slotOf(sectionKey, channel.channelID), area: 'row' } satisfies DropPayload,
             {
               input,
               element,
@@ -265,7 +268,7 @@ export function PragmaticChannelRow({
           ),
       }),
     );
-  }, [channel, index, sectionKey]);
+  }, [channel, sectionKey, slotOf]);
 
   const setElementRef = useCallback((node: HTMLElement | null) => {
     elementRef.current = node;
@@ -284,12 +287,15 @@ export function PragmaticChannelRow({
 
 export function PragmaticConversationRow({
   sectionKey,
-  index,
+  slotOf,
   conversation,
   children,
 }: {
   sectionKey: string;
-  index: number;
+  // The row's drop slot (sidebar-drop-resolution's dropSlots), asked for when
+  // a drag reaches it: a stable lookup, not a number prop, so a row moving
+  // in the list doesn't renumber, re-render and re-register every row below.
+  slotOf: (sectionKey: string, id: string) => number;
   conversation: UserConversation;
   children: (args: {
     dragRef?: (node: HTMLElement | null) => void;
@@ -323,7 +329,7 @@ export function PragmaticConversationRow({
         getIsSticky: () => true,
         getData: ({ input, element }) =>
           attachClosestEdge(
-            { type: 'channel-target', sectionKey, index, area: 'row' } satisfies DropPayload,
+            { type: 'channel-target', sectionKey, index: slotOf(sectionKey, conversation.conversationID), area: 'row' } satisfies DropPayload,
             {
               input,
               element,
@@ -332,7 +338,7 @@ export function PragmaticConversationRow({
           ),
       }),
     );
-  }, [conversation, index, sectionKey]);
+  }, [conversation, sectionKey, slotOf]);
 
   const setElementRef = useCallback((node: HTMLElement | null) => {
     elementRef.current = node;

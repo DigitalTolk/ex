@@ -82,6 +82,12 @@ type messageLinkRef struct {
 	messageID  string
 }
 
+// isOwnHost reports whether rawURL points at this workspace.
+func (s *MessageLinkService) isOwnHost(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	return s.host != "" && err == nil && strings.EqualFold(u.Host, s.host)
+}
+
 // parseMessageLink returns the ref when rawURL is a deep link to a message on
 // this host (`/channel/<slug>#msg-<id>` or `/conversation/<id>#msg-<id>`, with
 // an optional `?thread=` query). ok=false for any other URL.
@@ -110,14 +116,16 @@ func (s *MessageLinkService) parseMessageLink(rawURL string) (messageLinkRef, bo
 	return messageLinkRef{}, false
 }
 
-// Preview resolves rawURL. The bool reports whether rawURL is an internal
-// message link at all; when true and the preview is nil, the link points
-// somewhere the viewer can't see (the caller must NOT then web-fetch our own
-// host). (nil, false) means rawURL isn't one of our message links.
+// Preview resolves rawURL. The bool reports whether rawURL is on this host at
+// all; when true and the preview is nil, the link is no message the viewer can
+// see (a channel, a DM, a page of the app, or a message out of their reach),
+// and the caller must NOT then web-fetch our own host: that previewed the
+// app's own page, a card saying only "ex". (nil, false) means rawURL is
+// somewhere else.
 func (s *MessageLinkService) Preview(ctx context.Context, viewerID, rawURL string) (*UnfurlPreview, bool) {
 	ref, ok := s.parseMessageLink(rawURL)
 	if !ok {
-		return nil, false
+		return nil, s.isOwnHost(rawURL)
 	}
 
 	var parentID, label string

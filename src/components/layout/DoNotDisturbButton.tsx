@@ -33,6 +33,7 @@ export const DoNotDisturbButton = memo(function DoNotDisturbButton() {
         title={state}
         data-testid="dnd-trigger"
         data-paused={paused ? 'true' : 'false'}
+        data-rail-tile="true"
         className={`relative flex h-9 w-9 shrink-0 items-center justify-center rounded-lg outline-none transition-colors focus-visible:ring-2 focus-visible:ring-sidebar-ring ${
           paused
             ? 'bg-brand/15 text-brand hover:bg-brand/25'

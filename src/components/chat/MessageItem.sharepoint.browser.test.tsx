@@ -105,6 +105,24 @@ describe('MessageItem SharePoint links', () => {
     expect(sharePointCalls()[0][0]).toContain('/api/v1/sharepoint/link?parentType=channel&parentID=ch-1');
   });
 
+  // A link to a channel of this app is the ~channel pill, never a preview:
+  // previewing it showed the app's own page, a card saying only "ex". The
+  // preview goes to the next link; a link to a message still previews.
+  it('previews no channel link of this app, and the next link instead', async () => {
+    const channelLink = `${window.location.origin}/channel/inc-0048-af657`;
+    const screen = await renderRow(`discussion at ${channelLink} and https://github.com/x`, { hosts: [] });
+    const text = (testId: string) => screen.container.querySelector(`[data-testid="${testId}"]`)?.textContent;
+    await expect.poll(() => text('unfurl-card')).toBe('Preview of https://github.com/x');
+    expect(unfurled).not.toHaveBeenCalledWith(channelLink);
+  });
+
+  it('still previews a link to a message of this app', async () => {
+    const messageLink = `${window.location.origin}/channel/general#msg-01KV8DRDNYPP`;
+    const screen = await renderRow(`see ${messageLink}`, { hosts: [] });
+    const text = (testId: string) => screen.container.querySelector(`[data-testid="${testId}"]`)?.textContent;
+    await expect.poll(() => text('unfurl-card')).toBe(`Preview of ${messageLink}`);
+  });
+
   it('opens the file in the lightbox as it is, with Edit beside it', async () => {
     const screen = await renderRow(`plan ${LINK}`, { hosts: ['*.sharepoint.com'] });
     const text = (testId: string) => document.querySelector(`[data-testid="${testId}"]`)?.textContent;

@@ -26,6 +26,7 @@ import { NotSentMark } from '@/components/chat/MessageSendState';
 import { useMessageRowData, useProvidedMessageRowData, type MessageRowData } from '@/hooks/useMessageRowData';
 import { EmojiPicker } from '@/components/EmojiPicker';
 import { UserHoverCard } from '@/components/UserHoverCard';
+import { previewsAsLinkCard } from '@/lib/in-app-link';
 import { UserGroupMentionCard } from '@/components/UserGroupMentionCard';
 import { UserAvatar } from '@/components/UserAvatar';
 import { useEditMessage, useToggleReaction } from '@/hooks/useMessages';
@@ -942,7 +943,8 @@ function MessageItemImpl({
       // same distance apart, and every new author the same distance from
       // the lines before, however many there were.
       className={`group relative flex items-start gap-3 rounded-md px-3 mobile:gap-2 mobile:px-2 ${firstInGroup ? 'pt-3 pb-0.5' : 'py-0.5'} hover:bg-chat-hover ${
-        message.pinned ? 'border-l-2 border-pinned pl-2.5' : ''
+        // A pinned message is outlined like a card, in the pin's colour.
+        message.pinned ? 'pinned-outline' : ''
       } ${highlighted ? 'ring-1 ring-inset ring-amber-400/50 rounded-md' : ''} touch:select-none touch:touch-pan-y touch:[-webkit-touch-callout:none] touch:[-webkit-user-select:none]`}
       data-pending={pendingState}
     >
@@ -1102,7 +1104,8 @@ function MessageItemImpl({
           )}
           {message.pinned && (
             <span
-              className="inline-flex items-center gap-0.5 text-xs text-pinned"
+              // The warning hue, as the row's corner mark (.pinned-outline).
+              className="inline-flex items-center gap-0.5 text-xs text-rt-yellow"
               aria-label="Pinned"
             >
               <Pin className="h-3 w-3" />
@@ -1226,9 +1229,9 @@ function MessageItemImpl({
                   {(() => {
                     if (message.noUnfurl || current.blocks?.length) return null;
                     // First URL in the body (skipping code) that isn't a SharePoint
-                    // file gets a preview card. Capped at one to keep messages
-                    // compact.
-                    const url = bodyURLs.find((u) => !isSharePointURL(u, sharePointHosts));
+                    // file or a link to a channel, DM or page of this app gets a
+                    // preview card. Capped at one to keep messages compact.
+                    const url = bodyURLs.find((u) => !isSharePointURL(u, sharePointHosts) && previewsAsLinkCard(u, window.location.origin));
                     return url ? (
                       <UnfurlCard
                         url={url}

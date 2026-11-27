@@ -18,8 +18,8 @@ type unfurlService interface {
 
 // messageLinkResolver turns a deep link to a message inside this workspace into
 // a rich preview, gated by the viewer's access. Optional — wired via
-// SetMessageLinks. The bool reports whether the URL is one of our message
-// links at all (so the handler doesn't web-scrape our own host).
+// SetMessageLinks. The bool reports whether the URL is on our own host at all
+// (so the handler never web-scrapes our own pages).
 type messageLinkResolver interface {
 	Preview(ctx context.Context, viewerID, rawURL string) (*service.UnfurlPreview, bool)
 }
@@ -54,8 +54,8 @@ func (h *UnfurlHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// A link to another message in this workspace unfurls as a rich, access-
-	// gated message card — and never gets web-scraped, even if the viewer
-	// can't see it (preview is nil → 204).
+	// gated message card. No link to this workspace is ever web-scraped: a
+	// channel, a DM, or a message the viewer can't see gets no preview (204).
 	if h.msgLinks != nil {
 		if preview, internal := h.msgLinks.Preview(r.Context(), middleware.UserIDFromContext(r.Context()), raw); internal {
 			if preview == nil {

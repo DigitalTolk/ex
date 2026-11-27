@@ -20,12 +20,14 @@ import {
   MoreVertical,
   Trash2,
   ArrowDownAZ,
+  Check,
   Clock3,
 } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -37,7 +39,7 @@ import { usePointerDevice } from '@/hooks/usePointerDevice';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useEventCallback } from '@/hooks/useEventCallback';
 import { useSidebarViewPreferences } from '@/hooks/useSidebarViewPreferences';
-import { SidebarSectionKeys, type SidebarItem, type SidebarSection } from '@/lib/sidebar-groups';
+import { SidebarSectionKeys, sidebarItemID, type SectionSort, type SidebarItem, type SidebarSection } from '@/lib/sidebar-groups';
 import type { UserChannel, UserConversation, UserStatus } from '@/types';
 import { SidebarUnreadControls } from '@/components/layout/SidebarUnreadControls';
 import { ChannelRow } from './ChannelRow';
@@ -68,6 +70,44 @@ function SidebarSectionsSkeleton() {
   );
 }
 
+// SortCheck marks the sort a section is using in its sort menu.
+function SortCheck({ active }: { active: boolean }) {
+  if (!active) return null;
+  return <Check className="ml-auto h-4 w-4" aria-label="Selected" data-testid="sidebar-sort-selected" />;
+}
+
+// SectionSortItems is a section's two sort choices, for its header menu.
+function SectionSortItems({
+  sort,
+  onSort,
+  testID,
+}: {
+  sort: SectionSort;
+  onSort: (sort: SectionSort) => void;
+  testID: string;
+}) {
+  return (
+    <>
+      <DropdownMenuItem onClick={() => onSort('recent')} data-testid={`${testID}-recent`}>
+        <Clock3 className="mr-2 h-4 w-4" />
+        Recent activity
+        <SortCheck active={sort === 'recent'} />
+      </DropdownMenuItem>
+      <DropdownMenuItem onClick={() => onSort('az')} data-testid={`${testID}-az`}>
+        <ArrowDownAZ className="mr-2 h-4 w-4" />
+        A-Z
+        <SortCheck active={sort === 'az'} />
+      </DropdownMenuItem>
+    </>
+  );
+}
+
+// The hover-revealed sort menu trigger in a built-in section's header: desktop
+// only, like the rest of the sort menus (mobile:hidden, so it also leaves the
+// header's flex layout on a phone).
+const SECTION_SORT_TRIGGER_CLASS =
+  'h-5 w-5 flex items-center justify-center rounded text-gray-400 opacity-0 group-hover/sec:opacity-100 hover:bg-white/20 hover:text-white touch:h-7 touch:w-7 touch:opacity-100 mobile:hidden';
+
 // The quiet "+ Add …" row that ends a default section.
 const SECTION_ADD_ROW_CLASS =
   'mt-1 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-gray-400 outline-none hover:bg-white/10 hover:text-white focus-visible:ring-2 focus-visible:ring-sidebar-ring mobile:hidden';
@@ -82,6 +122,8 @@ export function Sidebar({ onClose }: SidebarProps) {
   const { isDraggingCategory, dropIndicator, suppressedNavigationID, clearSuppressedNavigation } = useSidebarDrag(
     sidebarSections,
     categories,
+    // A hand-placed row only shows in the user's own order.
+    (sectionKey) => view.setSectionSort(sectionKey, 'az'),
   );
   const navigate = useNavigate();
   const location = useLocation();
@@ -92,6 +134,27 @@ export function Sidebar({ onClose }: SidebarProps) {
     navigate(to, { replace: to === location.pathname + location.search + location.hash }),
   );
   const close = useEventCallback(onClose);
+  // What each section lists (a folded one keeps its unread and open rows) and
+  // each row's drop slot. Rows look their slot up when a drag reaches them
+  // (slotOf) rather than taking it as a prop: a row moving — a "Recent
+  // activity" sort, a chat joining Unread — would otherwise renumber, and so
+  // re-render, every row below it.
+  const listed = useMemo(
+    () =>
+      new Map(
+        sidebarSections.map((section) => {
+          const items = collapsedSections[section.key] ? foldedSectionItems(section.items, activeItemID) : section.items;
+          return [section.key, { items, slots: dropSlots(section.key, items), ids: items.map(sidebarItemID) }];
+        }),
+      ),
+    [sidebarSections, collapsedSections, activeItemID],
+  );
+  const slotOf = useEventCallback((sectionKey: string, id: string) => {
+    const section = listed.get(sectionKey);
+    /* istanbul ignore next -- a row only asks about the section it is rendered in */
+    if (!section) return -1;
+    return section.slots[section.ids.indexOf(id)];
+  });
   // Drag-to-reorder needs a mouse or trackpad. Without one — a phone, or an
   // iPad on its own — a hold on a row opens its menu (useRowLongPressMenu) and
   // iPadOS would start a native drag lift from that same hold. There the
@@ -124,7 +187,7 @@ export function Sidebar({ onClose }: SidebarProps) {
   // A section's heading: its fold toggle and, by kind, the create, new DM or
   // category actions.
   const sectionHeader = (section: SidebarSection) => {
-    const { isFavorites, isChannelsDefault, isDMsDefault, isUserCategory } = sectionRoles(section.key);
+    const { isUnreadSection, isFavorites, isChannelsDefault, isDMsDefault, isUserCategory } = sectionRoles(section.key);
     const acceptsDrops = !dragDisabled && (isFavorites || isUserCategory || isChannelsDefault);
     const collapsed = !!collapsedSections[section.key];
     return (
@@ -164,16 +227,77 @@ export function Sidebar({ onClose }: SidebarProps) {
         </div>
         {/* Hover-revealed actions per section type; always shown
             (and finger-sized) on touch devices, which have no hover. */}
-        {isChannelsDefault && !isGuest(user?.systemRole) && (
-          <button
-            onClick={() => setCreateChannelOpen(true)}
-            aria-label="Create channel"
-            title="Create channel"
-            data-testid="sidebar-create-channel"
-            className="absolute right-1 top-1/2 -translate-y-1/2 h-5 w-5 flex items-center justify-center rounded text-gray-400 opacity-0 group-hover/sec:opacity-100 hover:bg-white/20 hover:text-white touch:h-7 touch:w-7 touch:opacity-100 mobile:h-10 mobile:w-10"
-          >
-            <Plus className="h-3.5 w-3.5" />
-          </button>
+        {isUnreadSection && (
+          <div className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5">
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                aria-label="Sort unread"
+                data-testid="sidebar-unread-sort-menu"
+                className={SECTION_SORT_TRIGGER_CLASS}
+              >
+                <MoreVertical className="h-3.5 w-3.5" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-52">
+                <SectionSortItems
+                  sort={view.sectionSort(section.key)}
+                  onSort={(sort) => view.setSectionSort(section.key, sort)}
+                  testID="sidebar-unread-sort"
+                />
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        )}
+        {isFavorites && (
+          <div className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5">
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                aria-label="Sort favorites"
+                data-testid="sidebar-favorites-sort-menu"
+                className={SECTION_SORT_TRIGGER_CLASS}
+              >
+                <MoreVertical className="h-3.5 w-3.5" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-52">
+                <SectionSortItems
+                  sort={view.sectionSort(section.key)}
+                  onSort={(sort) => view.setSectionSort(section.key, sort)}
+                  testID="sidebar-favorites-sort"
+                />
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        )}
+        {isChannelsDefault && (
+          <div className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5">
+            {!isGuest(user?.systemRole) && (
+              <button
+                onClick={() => setCreateChannelOpen(true)}
+                aria-label="Create channel"
+                title="Create channel"
+                data-testid="sidebar-create-channel"
+                className="h-5 w-5 flex items-center justify-center rounded text-gray-400 opacity-0 group-hover/sec:opacity-100 hover:bg-white/20 hover:text-white touch:h-7 touch:w-7 touch:opacity-100 mobile:h-10 mobile:w-10"
+              >
+                <Plus className="h-3.5 w-3.5" />
+              </button>
+            )}
+            {/* Desktop hover-only, like the DM sort menu below. */}
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                aria-label="Sort channels"
+                data-testid="sidebar-channel-sort-menu"
+                className={SECTION_SORT_TRIGGER_CLASS}
+              >
+                <MoreVertical className="h-3.5 w-3.5" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-52">
+                <SectionSortItems
+                  sort={view.sectionSort(section.key)}
+                  onSort={(sort) => view.setSectionSort(section.key, sort)}
+                  testID="sidebar-channel-sort"
+                />
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         )}
         {isDMsDefault && (
           <div className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5">
@@ -204,19 +328,16 @@ export function Sidebar({ onClose }: SidebarProps) {
               <DropdownMenuTrigger
                 aria-label="Sort direct messages"
                 data-testid="sidebar-dm-sort-menu"
-                className="h-5 w-5 flex items-center justify-center rounded text-gray-400 opacity-0 group-hover/sec:opacity-100 hover:bg-white/20 hover:text-white touch:h-7 touch:w-7 touch:opacity-100 mobile:hidden"
+                className={SECTION_SORT_TRIGGER_CLASS}
               >
                 <MoreVertical className="h-3.5 w-3.5" />
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-52">
-                <DropdownMenuItem onClick={() => view.setConversationSort('recent')}>
-                  <Clock3 className="mr-2 h-4 w-4" />
-                  Recent activity
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => view.setConversationSort('az')}>
-                  <ArrowDownAZ className="mr-2 h-4 w-4" />
-                  A-Z
-                </DropdownMenuItem>
+                <SectionSortItems
+                  sort={view.sectionSort(section.key)}
+                  onSort={(sort) => view.setSectionSort(section.key, sort)}
+                  testID="sidebar-dm-sort"
+                />
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
@@ -230,7 +351,13 @@ export function Sidebar({ onClose }: SidebarProps) {
             >
               <MoreVertical className="h-3.5 w-3.5" />
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-44">
+            <DropdownMenuContent align="end" className="w-52">
+              <SectionSortItems
+                sort={view.sectionSort(section.key)}
+                onSort={(sort) => view.setSectionSort(section.key, sort)}
+                testID={`sidebar-category-sort-${section.key}`}
+              />
+              <DropdownMenuSeparator />
               <DropdownMenuItem
                 onClick={() => setCategoryToDelete({ id: section.key, title: section.title })}
                 data-testid={`sidebar-category-delete-${section.key}`}
@@ -246,14 +373,15 @@ export function Sidebar({ onClose }: SidebarProps) {
     );
   };
 
-  // One row of a section; `slot` is its place in the section's drop order.
-  const sectionRow = (section: SidebarSection, item: SidebarItem, slot: number) => {
+  // One row of a section. A draggable row looks up its drop slot (slotOf)
+  // only when a drag reaches it.
+  const sectionRow = (section: SidebarSection, item: SidebarItem) => {
     const { isUnreadSection, isFavorites } = sectionRoles(section.key);
     if (item.kind === 'channel') {
       return (
         <SidebarChannelItem
           sectionKey={section.key}
-          index={slot}
+          slotOf={slotOf}
           channel={item.channel}
           // Rows in the Unread section belong to other sections, so they
           // aren't reordered from here.
@@ -272,7 +400,7 @@ export function Sidebar({ onClose }: SidebarProps) {
     return (
       <SidebarConversationItem
         sectionKey={section.key}
-        index={slot}
+        slotOf={slotOf}
         conversation={conv}
         // Only Favorites reorders conversations.
         dragDisabled={!isFavorites || dragDisabled}
@@ -392,7 +520,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                           return <div className={gap}>{sectionHeader(entry.section)}</div>;
                         }
                         if (entry.kind === 'end') return <div className={entry.empty ? 'h-3' : 'h-2'} />;
-                        return <div className="pt-1">{sectionRow(entry.section, entry.item, entry.slot)}</div>;
+                        return <div className="pt-1">{sectionRow(entry.section, entry.item)}</div>;
                       }}
                     />
                   </div>
@@ -403,13 +531,11 @@ export function Sidebar({ onClose }: SidebarProps) {
               // Favorites, the categories and Channels take dropped rows and
               // mark the slots of the category order.
               const acceptsDrops = !dragDisabled && (isFavorites || isUserCategory || isChannelsDefault);
-              const collapsed = !!collapsedSections[section.key];
               // An open section stands apart: a wide gap above its heading
               // and above the next heading. Collapsed headings in a row pack
               // tight, like a menu.
               const spaced = spacedSections.has(section.key);
-              const visibleItems = collapsed ? foldedSectionItems(section.items, activeItemID) : section.items;
-              const slots = dropSlots(section.key, visibleItems);
+              const { items: visibleItems, slots, ids } = listed.get(section.key)!;
 
               // The live channel/DM drop target that falls in THIS section (null
               // otherwise) — drives the push-aside gap below.
@@ -444,7 +570,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                   )}
                   {sectionHeader(section)}
                   <div className="mt-1 space-y-1">
-                    {inRowBlocks(visibleItems.map((item, index) => {
+                    {inRowBlocks(ids, visibleItems.map((item, index) => {
                       const slot = slots[index];
                       // Open the push-aside gap just above this row when the
                       // live drop target resolves to its slot (not the tail).
@@ -456,7 +582,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                         // pick-up (margin included).
                         <Fragment key={rowKey(item)}>
                           {showGap && <SidebarDropGap sectionKey={section.key} />}
-                          {sectionRow(section, item, slot)}
+                          {sectionRow(section, item)}
                         </Fragment>
                       );
                     }))}
@@ -526,7 +652,7 @@ export function Sidebar({ onClose }: SidebarProps) {
 // changes.
 const SidebarChannelItem = memo(function SidebarChannelItem({
   sectionKey,
-  index,
+  slotOf,
   channel,
   dragDisabled,
   active,
@@ -536,7 +662,7 @@ const SidebarChannelItem = memo(function SidebarChannelItem({
   onClose,
 }: {
   sectionKey: string;
-  index: number;
+  slotOf: (sectionKey: string, id: string) => number;
   channel: UserChannel;
   dragDisabled: boolean;
   active: boolean;
@@ -555,7 +681,7 @@ const SidebarChannelItem = memo(function SidebarChannelItem({
   };
   if (dragDisabled) return <ChannelRow {...row} />;
   return (
-    <PragmaticChannelRow sectionKey={sectionKey} index={index} channel={channel}>
+    <PragmaticChannelRow sectionKey={sectionKey} slotOf={slotOf} channel={channel}>
       {(dragProps) => (
         <ChannelRow
           {...row}
@@ -573,7 +699,7 @@ const SidebarChannelItem = memo(function SidebarChannelItem({
 // conversation is a drag source.
 const SidebarConversationItem = memo(function SidebarConversationItem({
   sectionKey,
-  index,
+  slotOf,
   conversation,
   dragDisabled,
   active,
@@ -587,7 +713,7 @@ const SidebarConversationItem = memo(function SidebarConversationItem({
   onHide,
 }: {
   sectionKey: string;
-  index: number;
+  slotOf: (sectionKey: string, id: string) => number;
   conversation: UserConversation;
   dragDisabled: boolean;
   active: boolean;
@@ -614,7 +740,7 @@ const SidebarConversationItem = memo(function SidebarConversationItem({
   };
   if (dragDisabled) return <ConversationRow {...row} />;
   return (
-    <PragmaticConversationRow sectionKey={sectionKey} index={index} conversation={conversation}>
+    <PragmaticConversationRow sectionKey={sectionKey} slotOf={slotOf} conversation={conversation}>
       {(dragProps) => (
         <ConversationRow
           {...row}
@@ -639,16 +765,45 @@ const SidebarConversationItem = memo(function SidebarConversationItem({
 // the drag collapse. It clips what it paints to its box, which is why the
 // row link's focus ring sits inside (SidebarRowLink). A section that fits in
 // one block renders its rows as they are.
+//
+// The rows themselves decide where a block starts (startsRowBlock), about
+// one in ROW_BLOCK of them, and a block is keyed by that row; the rows above
+// the first one form the head block. A row that moves — to the top of a
+// "Recent activity" sort, into Unread — then leaves every other block as it
+// was. Blocks cut every ROW_BLOCK rows would each pass a row on to the next,
+// and React remounts a row that changes parents: a dozen components for each
+// of the ~40 blocks it crossed. A run longer than MAX_ROW_BLOCK is cut into
+// pieces keyed by their place in the run.
 const ROW_BLOCK = 40;
+const MAX_ROW_BLOCK = 2 * ROW_BLOCK;
 
-function inRowBlocks(rows: ReactNode[]): ReactNode {
+const startsBlock = new Map<string, boolean>();
+// startsRowBlock is a fixed pick of about one row in ROW_BLOCK, by a hash of
+// the row's ID (FNV-1a), remembered so a regroup doesn't hash every row again.
+function startsRowBlock(id: string): boolean {
+  let starts = startsBlock.get(id);
+  if (starts === undefined) {
+    let hash = 0x811c9dc5;
+    for (let i = 0; i < id.length; i++) hash = Math.imul(hash ^ id.charCodeAt(i), 0x01000193);
+    starts = (hash >>> 0) % ROW_BLOCK === 0;
+    startsBlock.set(id, starts);
+  }
+  return starts;
+}
+
+function inRowBlocks(ids: string[], rows: ReactNode[]): ReactNode {
   if (rows.length <= ROW_BLOCK) return rows;
   const blocks: ReactNode[] = [];
-  for (let start = 0; start < rows.length; start += ROW_BLOCK) {
-    const block = rows.slice(start, start + ROW_BLOCK);
+  let run = 'head';
+  let piece = 0;
+  let start = 0;
+  for (let end = 1; end <= rows.length; end++) {
+    const startsRun = end < rows.length && startsRowBlock(ids[end]);
+    if (end < rows.length && !startsRun && end - start < MAX_ROW_BLOCK) continue;
+    const block = rows.slice(start, end);
     blocks.push(
       <div
-        key={start}
+        key={`${run}:${piece}`}
         className="space-y-1 [content-visibility:auto] [contain-intrinsic-size:auto_calc(var(--rows)*2.25rem-0.25rem)] mobile:[contain-intrinsic-size:auto_calc(var(--rows)*3.25rem-0.25rem)]"
         style={{ '--rows': block.length } as CSSProperties}
         data-testid="sidebar-row-block"
@@ -656,6 +811,13 @@ function inRowBlocks(rows: ReactNode[]): ReactNode {
         {block}
       </div>,
     );
+    if (startsRun) {
+      run = ids[end];
+      piece = 0;
+    } else {
+      piece++;
+    }
+    start = end;
   }
   return blocks;
 }
@@ -681,7 +843,7 @@ const INITIAL_VIRTUAL_ENTRIES = 30;
 
 type VirtualEntry =
   | { kind: 'header'; key: string; section: SidebarSection; spaced: boolean }
-  | { kind: 'row'; key: string; section: SidebarSection; item: SidebarItem; slot: number }
+  | { kind: 'row'; key: string; section: SidebarSection; item: SidebarItem }
   // The space under a section; under one with no rows showing it also takes
   // the gap the empty row list leaves in the full sidebar.
   | { kind: 'end'; key: string; empty: boolean };
@@ -701,10 +863,9 @@ function virtualEntries(
     if (isSectionHidden(section, unreadOnly)) continue;
     entries.push({ kind: 'header', key: `head-${section.key}`, section, spaced: spaced.has(section.key) });
     const items = collapsed[section.key] ? foldedSectionItems(section.items, activeID) : section.items;
-    const slots = dropSlots(section.key, items);
-    items.forEach((item, index) => {
-      entries.push({ kind: 'row', key: `${section.key}:${rowKey(item)}`, section, item, slot: slots[index] });
-    });
+    for (const item of items) {
+      entries.push({ kind: 'row', key: `${section.key}:${rowKey(item)}`, section, item });
+    }
     entries.push({ kind: 'end', key: `end-${section.key}`, empty: items.length === 0 });
   }
   return entries;

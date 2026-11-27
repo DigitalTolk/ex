@@ -64,10 +64,16 @@ describe('MarkdownEditor (CM6) — Phase 1 core', () => {
     expect(scroller.scrollHeight).toBeGreaterThan(scroller.clientHeight);
 
     await seenOnScreen(content);
-    scroller.scrollTop = scroller.scrollHeight;
     // The last line must be reachable in the rendered DOM after scrolling —
     // waited for, not a fixed two frames: a busy machine re-renders later.
-    await expect.poll(() => content.textContent).toContain('line-199');
+    // Scrolled on every try: on a busy machine CM's first measure can land
+    // after the scroll and bring the cursor (line 0) back into view.
+    await expect
+      .poll(() => {
+        scroller.scrollTop = scroller.scrollHeight;
+        return content.textContent;
+      })
+      .toContain('line-199');
   });
 
   it('fires onChange with the full markdown when the document changes', async () => {

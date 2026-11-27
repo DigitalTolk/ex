@@ -13,6 +13,8 @@ function Calendar({
   className,
   classNames,
   showOutsideDays = true,
+  // Weeks start on Monday, as the calendars people here use do.
+  weekStartsOn = 1,
   buttonVariant = "ghost",
   components,
   ...props
@@ -24,6 +26,7 @@ function Calendar({
   return (
     <DayPicker
       showOutsideDays={showOutsideDays}
+      weekStartsOn={weekStartsOn}
       className={cn(
         "group/calendar bg-background p-2 [--cell-radius:var(--radius-md)] [--cell-size:--spacing(7)]",
         className

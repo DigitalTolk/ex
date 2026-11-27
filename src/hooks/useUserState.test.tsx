@@ -26,7 +26,7 @@ describe('useUserState', () => {
     const { result } = renderHook(() => useUserState(), { wrapper });
 
     await waitFor(() => expect(result.current.data?.threadNotifications).toEqual(['root-1']));
-    expect(result.current.data).toEqual({ threadNotifications: ['root-1'], hiddenConversations: [], hiddenSkills: [] });
+    expect(result.current.data).toEqual({ threadNotifications: ['root-1'], hiddenConversations: [], hiddenSkills: [], sidebarSorts: {} });
   });
 
   it('marks channel and conversation threads seen', async () => {

@@ -236,7 +236,7 @@ If a new value is genuinely required, add it to `index.css` first and reference 
 | CTA disabled | n/a (use `disabled:opacity-50`) | `#A7A5A6` |  |
 | Brand / badges | `--color-brand` / `bg-brand`, `Badge variant="brand"` | `#DE5D83` | Unread pill, mention dot — pink in both themes |
 | Online / presence | `--color-online` / `bg-online` | `#10B981` | Presence dots/labels. The one green accent — use the token, never raw `emerald-*`. |
-| Pinned affordance | `--color-pinned` / `border-pinned`, `text-pinned` | `#D97706` | Pinned-message accent bar + "Pinned" label. Use the token, never raw `amber-*`. |
+| Attention amber | `--color-pinned` / `border-pinned`, `text-pinned` | `#D97706` | "Stale" and similar attention marks. Use the token, never raw `amber-*`. A pinned message itself (its corner mark and "Pinned" label) uses the warning hue `--color-rt-yellow`, as a warning card does. |
 | File-type tiles | `--color-file-document` / `-spreadsheet` / `-presentation` / `-pdf`, glyph `--color-file-foreground` | `#2563EB` / `#16A34A` / `#EA580C` / `#DC2626`, `#FFFFFF` | `FileTypeIcon` only (SharePoint files). Same in both themes. |
 
 #### Dark theme (`html.dark`)
@@ -262,7 +262,7 @@ If a new value is genuinely required, add it to `index.css` first and reference 
 | CTA disabled | n/a (use `disabled:opacity-50`) |  |
 | Brand / badges | `#DE5D83` | Same pink as light theme |
 | Online / presence | `#34D399` | Presence green, brighter than light for the dark surface (`--color-online`). |
-| Pinned affordance | `#FBBF24` | Pinned amber, brighter gold for dark (`--color-pinned`). |
+| Attention amber | `#FBBF24` | Brighter gold for dark (`--color-pinned`). |
 
 The `--color-primary` **token** is the **neutral** accent colour and stays neutral in both themes — near-black in light, white in dark. The token itself is **never** pink. Per the design spec, the primary CTA **button** (`Button variant="default"`) is near-black in light and **pink in dark** — that pink comes from `dark:bg-brand` on the button variant, not from the token. The `Badge variant="brand"` stays pink in both modes.
 

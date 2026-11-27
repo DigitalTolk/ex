@@ -103,6 +103,29 @@ func TestUnfurlHandler_NonInternalLinkFallsThroughToWeb(t *testing.T) {
 	}
 }
 
+// A link to our own host that is no message (a channel) gets no preview and
+// is never web-fetched: fetching it previewed the app's own page.
+func TestUnfurlHandler_OwnHostChannelLinkIsNeverFetched(t *testing.T) {
+	svc := &recordingUnfurlSvc{}
+	h := &UnfurlHandler{svc: svc, msgLinks: fakeMsgLinks{internal: true}}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/unfurl?url=https://ex.test/channel/inc-0048", nil)
+	rec := httptest.NewRecorder()
+	h.Get(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("want 204, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if svc.calls != 0 {
+		t.Fatalf("our own page was fetched %d times", svc.calls)
+	}
+}
+
+type recordingUnfurlSvc struct{ calls int }
+
+func (r *recordingUnfurlSvc) Unfurl(context.Context, string) (*service.UnfurlPreview, error) {
+	r.calls++
+	return &service.UnfurlPreview{Title: "ex"}, nil
+}
+
 func TestUnfurlHandler_SetMessageLinksWiresResolver(t *testing.T) {
 	h := &UnfurlHandler{svc: fakeUnfurlSvc{err: errors.New("should not be called")}}
 	h.SetMessageLinks(fakeMsgLinks{preview: &service.UnfurlPreview{Kind: "message"}, internal: true})
