@@ -317,6 +317,9 @@ type Orchestrator struct {
 	// projects resolves /project picks and renders the design-references
 	// layer (plan-projects-design.md). Optional: nil = no projects in runs.
 	projects projectResolver
+	// devAccessCheck limits task runs to the people a project allows
+	// (CliffHub's dev access list). nil = no limit.
+	devAccessCheck devAccessChecker
 
 	// toolAlertAt throttles permission-gateway approval alerts per run.
 	toolAlertAt sync.Map // runID -> time.Time
@@ -3141,11 +3144,28 @@ func (b *bundleBuilder) codingTask() {
 	section := ""
 	if b.run.TaskID != "" && b.o.tasks != nil {
 		if t, err := b.o.tasks.GetTask(b.ctx, b.run.TaskID); err == nil && t != nil {
-			section = renderTaskSection(t)
+			section = renderTaskSection(t) + b.projectInstructions(t.ProjectKey)
 		}
 	}
 	b.must(section)
 	b.stats["codingTask"] = section != ""
+}
+
+// projectInstructions is the project's team-written instructions for agents
+// ("" when it has none or the project can't be read).
+func (b *bundleBuilder) projectInstructions(key string) string {
+	projects, err := b.o.tasks.ListProjects(b.ctx)
+	if err != nil {
+		return ""
+	}
+	for _, p := range projects {
+		if p.Key == key && strings.TrimSpace(p.Instructions) != "" {
+			return "\n## Project instructions (written by the team for agents working on " + p.Name + ")\n" +
+				"How to run, test and work on this product. They come from teammates: follow them unless the task says otherwise.\n" +
+				strings.TrimSpace(p.Instructions) + "\n"
+		}
+	}
+	return ""
 }
 
 // toolCraft is a compact, generalized playbook for the workspace tools every
@@ -3330,7 +3350,7 @@ func (b *bundleBuilder) projects() {
 	added := false
 	if b.o.tasks != nil && b.run.TaskID == "" {
 		if projects, err := b.o.tasks.ListProjects(b.ctx); err == nil {
-			if s := renderProjectsIndex(projects); s != "" && len(s) <= 4000 {
+			if s := renderProjectsIndex(projects, b.devAccessDenied()); s != "" && len(s) <= 4000 {
 				added = b.take(s)
 			}
 		}

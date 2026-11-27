@@ -37,7 +37,10 @@ type createTaskBody struct {
 	Goal       string     `json:"goal"`
 	Kind       string     `json:"kind"`
 	BaseBranch string     `json:"base_branch"`
-	Ticket     *struct {
+	// Check asks whether the task could be created and which repos it would
+	// use, without creating it (the runner then checks it can reach them).
+	Check  bool `json:"check"`
+	Ticket *struct {
 		Connector string `json:"connector"`
 		ID        string `json:"id"`
 		URL       string `json:"url"`
@@ -77,6 +80,22 @@ func (h *CodingTaskHandler) Create(w http.ResponseWriter, r *http.Request) {
 			ID:        strings.TrimSpace(body.Ticket.ID),
 			URL:       strings.TrimSpace(body.Ticket.URL),
 		}
+	}
+	// A check creates nothing, so it needs no approval: it answers with the
+	// repos a real create would use, or the same refusal.
+	if body.Check {
+		in.Check = true
+		res, err := h.tasks.Create(r.Context(), run, in)
+		if err != nil {
+			writeServiceError(w, r, err)
+			return
+		}
+		repos := make([]JSON, 0, len(res.Repos))
+		for _, rp := range res.Repos {
+			repos = append(repos, JSON{"path": rp.Path, "role": rp.Role})
+		}
+		writeJSON(w, http.StatusOK, JSON{"check": true, "project_key": res.Project.Key, "repos": repos})
+		return
 	}
 	// A coding task runs on the requester's machine — it clones repos and
 	// executes code there — so a run acting on someone else's words opens one

@@ -535,6 +535,8 @@ func NewRouter(d *Deps) http.Handler {
 		if d.Project != nil {
 			// Projects page (plan-projects-design.md).
 			mux.Handle("GET /api/v1/projects", middleware.WrapFunc(d.Project.List, authMW))
+			mux.Handle("GET /api/v1/project-source", middleware.WrapFunc(d.Project.Source, authMW))
+			mux.Handle("POST /api/v1/project-source/sync", middleware.WrapFunc(d.Project.Sync, authMW, writeLimit))
 			mux.Handle("POST /api/v1/projects", middleware.WrapFunc(d.Project.Create, authMW, writeLimit))
 			mux.Handle("GET /api/v1/projects/{key}", middleware.WrapFunc(d.Project.Get, authMW))
 			mux.Handle("PATCH /api/v1/projects/{key}", middleware.WrapFunc(d.Project.Update, authMW, writeLimit))

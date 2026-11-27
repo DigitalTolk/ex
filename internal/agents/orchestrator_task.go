@@ -25,6 +25,9 @@ const taskConnectorSlug = "gitlab"
 // came from someone else, threaded under the task card, with an explicit
 // prompt. Used for the kickoff after create_coding_task and the sign-off run.
 func (o *Orchestrator) StartTaskRun(ctx context.Context, task *model.CodingTask, requester *model.User, msg *model.Message, prompt string) error {
+	if err := o.devAccess(ctx, task, requester); err != nil {
+		return err
+	}
 	agent, err := o.users.GetUser(ctx, task.AgentID)
 	if err != nil {
 		return fmt.Errorf("orchestrator: task agent: %w", err)
@@ -95,6 +98,14 @@ func (o *Orchestrator) dispatchTask(ctx context.Context, msg *model.Message, par
 		invoker = requester
 	}
 	invoked[agent.ID] = true
+	// Both the person asking and the requester (whose machine runs it) must
+	// still be allowed: taking someone off the list stops their next run.
+	for _, u := range []*model.User{author, invoker} {
+		if err := o.devAccess(ctx, task, u); err != nil {
+			o.postDevAccessRefusal(ctx, agent, invoker, msg, parentType, err)
+			return
+		}
+	}
 	bind := &taskBind{task: task}
 	if routed {
 		bind.prompt = fmt.Sprintf("[steering from ~%s, posted top-level by %s] %s", task.ProjectKey, author.DisplayName, service.PlainMentions(msg.Body))
@@ -114,6 +125,45 @@ func (o *Orchestrator) dispatchTask(ctx context.Context, msg *model.Message, par
 	}
 	if err != nil {
 		o.postInvokeFailure(ctx, agent, invoker, msg, parentType, err)
+	}
+}
+
+// devAccessChecker says whether someone may have dev agents work on a
+// project (CliffHubProjects). Optional: nil = no restriction.
+type devAccessChecker interface {
+	CheckDevAccess(p *model.CodingProject, u *model.User) error
+}
+
+// SetDevAccess wires the dev-agent access list check.
+func (o *Orchestrator) SetDevAccess(c devAccessChecker) { o.devAccessCheck = c }
+
+// devAccess refuses a task run for someone not allowed to use dev agents on
+// the task's project.
+func (o *Orchestrator) devAccess(ctx context.Context, task *model.CodingTask, u *model.User) error {
+	if o.devAccessCheck == nil || o.tasks == nil {
+		return nil
+	}
+	projects, err := o.tasks.ListProjects(ctx)
+	if err != nil {
+		return fmt.Errorf("orchestrator: project lookup: %w", err)
+	}
+	for _, p := range projects {
+		if p.Key == task.ProjectKey {
+			return o.devAccessCheck.CheckDevAccess(p, u)
+		}
+	}
+	return nil
+}
+
+// postDevAccessRefusal tells the thread why the dev agent will not work.
+func (o *Orchestrator) postDevAccessRefusal(ctx context.Context, agent, invoker *model.User, msg *model.Message, parentType string, cause error) {
+	threadRoot := msg.ParentMessageID
+	if threadRoot == "" {
+		threadRoot = msg.ID
+	}
+	body := "⛔ " + strings.TrimPrefix(cause.Error(), ErrNoDevAccess.Error()+": ")
+	if _, err := o.messages.SendAsAgentRun(ctx, agent.ID, invoker.ID, msg.ParentID, parentType, body, threadRoot, ""); err != nil {
+		slog.WarnContext(ctx, "dev access refusal post failed", "agentID", agent.ID, "error", err)
 	}
 }
 
@@ -326,7 +376,7 @@ func mrSuffix(r model.TaskRepo) string {
 // and their repos) so an intake run can hand a "finish CS-7 in CliffHub" ask
 // straight to create_coding_task with the right project, and knows when to
 // ask the requester instead.
-func renderProjectsIndex(projects []*model.CodingProject) string {
+func renderProjectsIndex(projects []*model.CodingProject, denied func(*model.CodingProject) bool) string {
 	if len(projects) == 0 {
 		return ""
 	}
@@ -335,11 +385,35 @@ func renderProjectsIndex(projects []*model.CodingProject) string {
 	b.WriteString("Use the PRODUCT name as create_coding_task's project. A product not listed here needs its " +
 		"repos (frontend/backend/…) from the requester — ask, never guess a single repo for a full-stack change.\n")
 	for _, p := range projects {
+		if p.Archived {
+			continue
+		}
 		var repos []string
 		for _, r := range p.Repos {
 			repos = append(repos, r.Path+" ("+r.Role+")")
 		}
-		fmt.Fprintf(&b, "- %s: %s\n", p.Name, strings.Join(repos, ", "))
+		line := fmt.Sprintf("- %s: %s", p.Name, strings.Join(repos, ", "))
+		if denied != nil && denied(p) {
+			line += " | NO ACCESS: the requester is not on this project's access list, so the dev agent " +
+				"can't work on it for them. Don't call create_coding_task for it: tell them they're not on the " +
+				"project's access list and that whoever manages the project can add them."
+		}
+		b.WriteString(line + "\n")
 	}
 	return b.String()
+}
+
+// devAccessDenied reports, per project, whether this run's requester may not
+// have dev agents work on it (nil when there is no access list to check).
+func (b *bundleBuilder) devAccessDenied() func(*model.CodingProject) bool {
+	if b.o.devAccessCheck == nil {
+		return nil
+	}
+	invoker, err := b.o.users.GetUser(b.ctx, b.run.InvokerID)
+	if err != nil {
+		return nil
+	}
+	return func(p *model.CodingProject) bool {
+		return b.o.devAccessCheck.CheckDevAccess(p, invoker) != nil
+	}
 }

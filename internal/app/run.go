@@ -68,6 +68,10 @@ func (a *App) startBackground() {
 	if ag.connectors.ProviderConfigured() {
 		go a.track(func() { ag.connectors.RunProviderSync(ctx, time.Minute) })()
 	}
+	// Projects from CliffHub: a full pull at boot, then an ETag-gated poll.
+	if ag.cliffhubProjects != nil {
+		go a.track(func() { ag.cliffhubProjects.RunSync(ctx, a.cfg.CliffHubSyncInterval) })()
+	}
 	// Directory re-sync (phone + manager from MS Graph): first sweep at boot
 	// doubles as the workspace backfill.
 	// Account standing (disabled or deleted in Entra → deactivated) on a

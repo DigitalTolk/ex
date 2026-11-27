@@ -97,8 +97,9 @@ export default function ProjectDetailPage() {
 }
 
 function HeaderActions({ detail }: { detail: ProjectDetail }) {
-  const { project, canManage } = detail;
+  const { project, canManage, editURL } = detail;
   const del = useDeleteProject();
+  const editHref = externalHref(editURL);
   const navigate = useNavigate();
   const [confirming, setConfirming] = useState(false);
   return (
@@ -114,7 +115,20 @@ function HeaderActions({ detail }: { detail: ProjectDetail }) {
           Open app
         </a>
       )}
-      {canManage && (
+      {editHref && (
+        <a
+          href={editHref}
+          target="_blank"
+          rel="noreferrer noopener"
+          className={buttonVariants({ variant: 'ghost', size: 'sm' })}
+          data-testid="project-open-cliffhub"
+        >
+          <ExternalLink aria-hidden="true" />
+          Open in CliffHub
+        </a>
+      )}
+      {/* A project linked to CliffHub is archived there, not deleted here. */}
+      {canManage && !editHref && (
         <>
           <TooltipIconButton label="Delete project" onClick={() => setConfirming(true)} testId="project-delete">
             <Trash2 className="h-4 w-4" />
@@ -155,7 +169,52 @@ function SaveRow({ pending, dirty, onSave, error }: { pending: boolean; dirty: b
   );
 }
 
+// ManagedInCliffHub heads a tab whose fields CliffHub owns: a linked
+// project's details are edited there, and ex shows them read-only.
+function ManagedInCliffHub({ href, what }: { href: string; what: string }) {
+  return (
+    <div
+      className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border/60 bg-card px-4 py-3 text-sm"
+      data-testid="project-managed-in-cliffhub"
+    >
+      <p className="text-muted-foreground">{what} are edited in CliffHub and sync here within a minute.</p>
+      <a href={href} target="_blank" rel="noreferrer noopener" className={buttonVariants({ variant: 'outline', size: 'sm' })}>
+        <ExternalLink aria-hidden="true" />
+        Edit in CliffHub
+      </a>
+    </div>
+  );
+}
+
+// ReadOnlyField is one CliffHub-owned value, shown as text.
+function ReadOnlyField({ label, value, mono }: { label: string; value?: string; mono?: boolean }) {
+  return (
+    <div>
+      <p className="text-sm font-medium">{label}</p>
+      <p className={`mt-0.5 text-sm whitespace-pre-wrap ${mono ? 'font-mono' : ''} ${value ? '' : 'text-muted-foreground'}`}>
+        {value || 'Not set'}
+      </p>
+    </div>
+  );
+}
+
 function NotesTab({ detail }: { detail: ProjectDetail }) {
+  const editHref = externalHref(detail.editURL);
+  if (editHref) {
+    const { project } = detail;
+    return (
+      <div className="space-y-4">
+        <ManagedInCliffHub href={editHref} what="Design notes and the UI library" />
+        <ThemeCard detail={detail} />
+        <ReadOnlyField label="UI library" value={project.uiLibrary} />
+        <ReadOnlyField label="Design notes" value={project.designNotes} mono />
+      </div>
+    );
+  }
+  return <EditableNotesTab detail={detail} />;
+}
+
+function EditableNotesTab({ detail }: { detail: ProjectDetail }) {
   const { project } = detail;
   const update = useUpdateProject(project.key);
   const saved = project.designNotes ?? '';
@@ -189,20 +248,55 @@ function NotesTab({ detail }: { detail: ProjectDetail }) {
 }
 
 function OverviewTab({ detail }: { detail: ProjectDetail }) {
+  const editHref = externalHref(detail.editURL);
+  if (editHref) {
+    const { project } = detail;
+    return (
+      <div className="max-w-2xl space-y-4">
+        <ManagedInCliffHub href={editHref} what="A project's name, app link, description, links and instructions" />
+        <ReadOnlyField label="Product name" value={project.name} />
+        <ReadOnlyField label="App link" value={project.appURL} />
+        <ReadOnlyField label="What it is and who uses it" value={project.description} />
+        <div>
+          <p className="text-sm font-medium">Links</p>
+          {(project.links ?? []).length === 0 ? (
+            <p className="mt-0.5 text-sm text-muted-foreground">Not set</p>
+          ) : (
+            <ul className="mt-0.5 space-y-0.5 text-sm">
+              {(project.links ?? []).map((l) => (
+                <li key={l.url}>
+                  <a className="underline" href={externalHref(l.url)} target="_blank" rel="noreferrer noopener">
+                    {l.label || l.url}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+        <ReadOnlyField label="Instructions for agents" value={project.instructions} />
+      </div>
+    );
+  }
+  return <EditableOverviewTab detail={detail} />;
+}
+
+function EditableOverviewTab({ detail }: { detail: ProjectDetail }) {
   const { project, canManage } = detail;
   const update = useUpdateProject(project.key);
   const [name, setName] = useState(project.name);
   const [appURL, setAppURL] = useState(project.appURL ?? '');
   const [description, setDescription] = useState(project.description ?? '');
   const [links, setLinks] = useState<ProjectLink[]>(project.links ?? []);
+  const [instructions, setInstructions] = useState(project.instructions ?? '');
   const dirty =
     name !== project.name ||
     appURL !== (project.appURL ?? '') ||
     description !== (project.description ?? '') ||
+    instructions !== (project.instructions ?? '') ||
     JSON.stringify(links) !== JSON.stringify(project.links ?? []);
 
   const save = () => {
-    const patch = { appURL, description, links: links.filter((l) => l.url.trim()) };
+    const patch = { appURL, description, instructions, links: links.filter((l) => l.url.trim()) };
     update.mutate(canManage && name !== project.name ? { ...patch, name } : patch, {
       onSuccess: () => showToast('Project saved', 'success'),
     });
@@ -243,6 +337,20 @@ function OverviewTab({ detail }: { detail: ProjectDetail }) {
           maxLength={2000}
           onChange={(e) => setDescription(e.target.value)}
         />
+      </div>
+      <div>
+        <Label htmlFor="overview-instructions">Instructions for agents</Label>
+        <textarea
+          id="overview-instructions"
+          className="mt-1 min-h-32 w-full rounded-md border bg-transparent p-2 font-mono text-sm"
+          value={instructions}
+          maxLength={8000}
+          placeholder={'Run locally:\nRun tests:\nConventions:\nDon\'t touch:'}
+          onChange={(e) => setInstructions(e.target.value)}
+        />
+        <p className="mt-0.5 text-sm text-muted-foreground">
+          How to run and test it, conventions, things to avoid. Every coding and design run on this project reads them.
+        </p>
       </div>
       <fieldset className="space-y-2">
         <legend className="text-sm font-medium">Links (Figma, style guide, Storybook…)</legend>
@@ -286,13 +394,18 @@ function ReposTab({ detail }: { detail: ProjectDetail }) {
   const update = useUpdateProject(project.key);
   const [repos, setRepos] = useState<ProjectRepo[]>(project.repos ?? []);
   const dirty = JSON.stringify(repos) !== JSON.stringify(project.repos ?? []);
+  const editHref = externalHref(detail.editURL);
 
-  if (!canManage) {
+  if (!canManage || editHref) {
     return (
       <div className="space-y-2">
-        <p className="text-sm text-muted-foreground">
-          The GitLab repos coding tasks use for this product. Only the project&apos;s creator or an admin can change them.
-        </p>
+        {editHref ? (
+          <ManagedInCliffHub href={editHref} what="Repos" />
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            The GitLab repos coding tasks use for this product. Only the project&apos;s creator or an admin can change them.
+          </p>
+        )}
         {repos.length === 0 ? (
           <p className="text-sm text-muted-foreground">No repos yet — the dev agent adds them on the first coding task.</p>
         ) : (
@@ -300,7 +413,10 @@ function ReposTab({ detail }: { detail: ProjectDetail }) {
             {repos.map((r) => (
               <li key={r.path} className="flex items-center justify-between px-4 py-2 text-sm">
                 <span className="font-mono">{r.path}</span>
-                <span className="text-muted-foreground">{r.role}</span>
+                <span className="text-muted-foreground">
+                  {r.role}
+                  {r.defaultBranch ? ` · ${r.defaultBranch}` : ''}
+                </span>
               </li>
             ))}
           </ul>

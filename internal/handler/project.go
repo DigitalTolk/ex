@@ -41,6 +41,29 @@ func (h *ProjectHandler) List(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, JSON{"projects": projects})
 }
 
+// Source says where projects come from: {"source": null} when they live in
+// ex alone, else CliffHub's status.
+// GET /api/v1/project-source
+func (h *ProjectHandler) Source(w http.ResponseWriter, r *http.Request) {
+	src, err := h.projects.Source(projectCaller(r))
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, JSON{"source": src})
+}
+
+// Sync refreshes projects from CliffHub at once.
+// POST /api/v1/project-source/sync
+func (h *ProjectHandler) Sync(w http.ResponseWriter, r *http.Request) {
+	res, err := h.projects.SyncNow(r.Context(), projectCaller(r))
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, JSON{"result": res})
+}
+
 // Get returns one project with its screens.
 // GET /api/v1/projects/{key}
 func (h *ProjectHandler) Get(w http.ResponseWriter, r *http.Request) {

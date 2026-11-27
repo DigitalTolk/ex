@@ -10,6 +10,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 
 	"github.com/DigitalTolk/ex/internal/agents"
+	"github.com/DigitalTolk/ex/internal/cliffhub"
 	"github.com/DigitalTolk/ex/internal/config"
 	"github.com/DigitalTolk/ex/internal/storage"
 	"github.com/DigitalTolk/ex/internal/store"
@@ -28,6 +29,8 @@ type agentSystem struct {
 	engine      *agents.ServerEngine
 	codingTasks *agents.CodingTaskService
 	projects    *agents.ProjectService
+	// cliffhubProjects is nil unless projects come from CliffHub.
+	cliffhubProjects *agents.CliffHubProjects
 }
 
 // loadBedrockConfig is a seam over the AWS config load so its failure arm is
@@ -123,6 +126,22 @@ func (a *App) buildAgents(ctx context.Context) error {
 	ag.projects = agents.NewProjectService(tasks, c.attachments)
 	ag.projects.SetPublisher(in.pubsub)
 	ag.orch.SetProjects(ag.projects)
+	// Projects from CliffHub: its systems are the source of truth, these rows
+	// a cached copy. Ex writes go to CliffHub first; the sync loop starts
+	// with the other background workers.
+	switch {
+	case cfg.CliffHubEnabled():
+		ag.cliffhubProjects = agents.NewCliffHubProjects(cliffhub.New(cfg.CliffHubURL, cfg.CliffHubAPIKey),
+			tasks, in.users, c.attachments, cfg.AgentGitHost, cfg.CliffHubWebURL)
+		ag.cliffhubProjects.SetOnChange(ag.projects.NotifyChanged)
+		ag.cliffhubProjects.SetFallbackActor(cfg.CliffHubFallbackActor)
+		ag.cliffhubProjects.SetEmailMap(cfg.CliffHubEmailMap)
+		ag.projects.SetUpstream(ag.cliffhubProjects)
+		ag.codingTasks.SetProjectUpstream(ag.cliffhubProjects)
+		ag.orch.SetDevAccess(ag.cliffhubProjects)
+	case cfg.CliffHubURL != "":
+		slog.WarnContext(ctx, "CLIFFHUB_URL is set but CLIFFHUB_API_KEY is missing or a placeholder: projects stay in ex")
+	}
 	return nil
 }
 

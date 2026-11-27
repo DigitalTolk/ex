@@ -1827,6 +1827,24 @@ export interface CodingProject {
    */
   uiLibrary?: string;
   /**
+   * Instructions are what agents should know to work on the product: how
+   * to run and test it, conventions, things to avoid. Teammates write them
+   * (in CliffHub); every coding and design run on the project reads them.
+   */
+  instructions?: string;
+  /**
+   * SystemID links the project to its CliffHub system, the source of truth
+   * for everything above: ex keeps this row as a cached copy, refreshed by
+   * the project sync. Empty for a project ex has not linked yet.
+   */
+  systemID?: string;
+  /**
+   * Archived is set when the linked system is archived or deleted in
+   * CliffHub. The row stays (tasks and screens still point at it) but the
+   * Projects page no longer lists it.
+   */
+  archived?: boolean;
+  /**
    * No channel here on purpose: a project has one channel PER REQUESTER,
    * derived from (project key, requester id) — see service.ProjectChannelID.
    * Rows written before 2026-09-21 carry a channelID attribute for the old
@@ -1883,6 +1901,10 @@ export const ScreenImageMaxBytes = 8 << 20;
  */
 export const ProjectUILibraryMaxLen = 300;
 /**
+ * ProjectInstructionsMaxLen caps the agent instructions.
+ */
+export const ProjectInstructionsMaxLen = 8000;
+/**
  * ProjectThemeMaxBytes caps an uploaded theme stylesheet (globals.css).
  */
 export const ProjectThemeMaxBytes = 256 << 10;
@@ -1937,6 +1959,12 @@ export interface ProjectRepo {
    * DefaultBranch, when known (learned by the runner from origin/HEAD).
    */
   defaultBranch?: string;
+  /**
+   * URL and Label are the repo link as CliffHub holds it, kept so a write
+   * back to CliffHub returns the same link and label it read.
+   */
+  url?: string;
+  label?: string;
 }
 /**
  * Repo roles.

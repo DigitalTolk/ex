@@ -31,8 +31,24 @@ type ProjectService struct {
 	store       projectStore
 	attachments projectAttachments
 	publisher   service.Publisher
+	upstream    projectUpstream
 	now         func() time.Time
 	newID       func() string
+}
+
+// projectUpstream is where projects really live when it is enabled
+// (CliffHubProjects): creates and edits go there first, as the caller.
+type projectUpstream interface {
+	Enabled() bool
+	Create(ctx context.Context, actorID string, p *model.CodingProject) error
+	Save(ctx context.Context, actorID string, p *model.CodingProject) error
+	EditURL(p *model.CodingProject) string
+	Status() ProjectSourceStatus
+	Sync(ctx context.Context, force bool) (*ProjectSyncResult, error)
+	SaveScreen(ctx context.Context, actorID string, p *model.CodingProject, sc *model.ProjectScreen, isNew, imageChanged bool) error
+	DeleteScreenUpstream(ctx context.Context, actorID string, p *model.CodingProject, sc *model.ProjectScreen) error
+	SaveTheme(ctx context.Context, actorID string, p *model.CodingProject, css, filename string) error
+	CheckDevAccess(p *model.CodingProject, u *model.User) error
 }
 
 type projectStore interface {
@@ -66,9 +82,51 @@ func NewProjectService(s projectStore, a projectAttachments) *ProjectService {
 	return &ProjectService{store: s, attachments: a, now: time.Now, newID: store.NewID}
 }
 
+// SetUpstream makes projects come from CliffHub. Optional (nil = projects
+// live in ex alone).
+func (s *ProjectService) SetUpstream(u projectUpstream) { s.upstream = u }
+
+func (s *ProjectService) upstreamOn() bool { return s.upstream != nil && s.upstream.Enabled() }
+
+// editURL is where the project is edited upstream ("" when it is not).
+func (s *ProjectService) editURL(p *model.CodingProject) string {
+	if !s.upstreamOn() {
+		return ""
+	}
+	return s.upstream.EditURL(p)
+}
+
+// Source describes where projects come from; nil when they live in ex alone.
+func (s *ProjectService) Source(caller ProjectCaller) (*ProjectSourceStatus, error) {
+	if err := caller.member(); err != nil {
+		return nil, err
+	}
+	if !s.upstreamOn() {
+		return nil, nil
+	}
+	st := s.upstream.Status()
+	return &st, nil
+}
+
+// SyncNow refreshes projects from CliffHub at once (any member: it only
+// reads what CliffHub already holds).
+func (s *ProjectService) SyncNow(ctx context.Context, caller ProjectCaller) (*ProjectSyncResult, error) {
+	if err := caller.member(); err != nil {
+		return nil, err
+	}
+	if !s.upstreamOn() {
+		return nil, fmt.Errorf("projects do not come from CliffHub here: %w", service.ErrValidation)
+	}
+	return s.upstream.Sync(ctx, true)
+}
+
 // SetPublisher wires the real-time nudge: every change publishes
 // project.changed so open Projects pages refetch. Optional (nil = silent).
 func (s *ProjectService) SetPublisher(p service.Publisher) { s.publisher = p }
+
+// NotifyChanged tells every client projects changed (the CliffHub sync
+// calls it after changing the cache).
+func (s *ProjectService) NotifyChanged(ctx context.Context) { s.changed(ctx) }
 
 // changed tells every client a project or its references changed. Data-less
 // on purpose: the global channel reaches guests too, who may not read
@@ -105,7 +163,9 @@ func (c ProjectCaller) canManage(p *model.CodingProject) bool {
 // ProjectSummary is one row of the Projects list.
 type ProjectSummary struct {
 	*model.CodingProject
-	ScreenCount int `json:"screenCount"`
+	// EditURL opens the project in CliffHub, where it is edited.
+	EditURL     string `json:"editURL,omitempty"`
+	ScreenCount int    `json:"screenCount"`
 	// OldestScreenAt drives the list's freshness hint; nil when no screens.
 	OldestScreenAt *time.Time `json:"oldestScreenAt,omitempty"`
 }
@@ -124,6 +184,8 @@ type ProjectDetail struct {
 	Project   *model.CodingProject `json:"project"`
 	Screens   []*ScreenView        `json:"screens"`
 	CanManage bool                 `json:"canManage"`
+	// EditURL opens the project in CliffHub ("" when it lives in ex alone).
+	EditURL string `json:"editURL,omitempty"`
 	// Theme is the uploaded stylesheet as the agent sees it (never the raw
 	// file); nil when none was uploaded.
 	Theme *ThemeView `json:"theme,omitempty"`
@@ -150,7 +212,10 @@ func (s *ProjectService) List(ctx context.Context, caller ProjectCaller) ([]*Pro
 	}
 	out := make([]*ProjectSummary, 0, len(projects))
 	for _, p := range projects {
-		sum := &ProjectSummary{CodingProject: p}
+		if p.Archived {
+			continue
+		}
+		sum := &ProjectSummary{CodingProject: p, EditURL: s.editURL(p)}
 		screens, err := s.store.ListScreens(ctx, p.Key)
 		if err != nil {
 			return nil, err
@@ -197,7 +262,7 @@ func (s *ProjectService) Get(ctx context.Context, caller ProjectCaller, key stri
 		}
 		views = append(views, v)
 	}
-	detail := &ProjectDetail{Project: p, Screens: views, CanManage: caller.canManage(p)}
+	detail := &ProjectDetail{Project: p, Screens: views, CanManage: caller.canManage(p), EditURL: s.editURL(p)}
 	theme, err := s.store.GetProjectTheme(ctx, key)
 	switch {
 	case err == nil:
@@ -243,6 +308,8 @@ type ProjectInput struct {
 	Links       *[]model.ProjectLink `json:"links"`
 	Repos       *[]model.ProjectRepo `json:"repos"`
 	UILibrary   *string              `json:"uiLibrary"`
+	// Instructions for agents working on the product.
+	Instructions *string `json:"instructions"`
 	// ThemeCSS sets the project's main stylesheet ("" removes it);
 	// ThemeFilename names it for display.
 	ThemeCSS      *string `json:"themeCSS"`
@@ -268,6 +335,17 @@ func (s *ProjectService) Create(ctx context.Context, caller ProjectCaller, in Pr
 	if p.Key == "" {
 		return nil, fmt.Errorf("project: name needs at least one letter or digit: %w", service.ErrValidation)
 	}
+	if s.upstreamOn() {
+		// Refuse a taken key before CliffHub gets a system it would orphan.
+		if _, err := s.store.GetProject(ctx, p.Key); err == nil {
+			return nil, fmt.Errorf("project %q already exists: %w", p.Key, service.ErrAlreadyExists)
+		} else if !errors.Is(err, store.ErrNotFound) {
+			return nil, err
+		}
+		if err := s.upstream.Create(ctx, caller.ID, p); err != nil {
+			return nil, err
+		}
+	}
 	if err := s.store.CreateProject(ctx, p); err != nil {
 		if errors.Is(err, store.ErrAlreadyExists) {
 			return nil, fmt.Errorf("project %q already exists: %w", p.Key, service.ErrAlreadyExists)
@@ -291,10 +369,23 @@ func (s *ProjectService) Update(ctx context.Context, caller ProjectCaller, key s
 	if (in.Name != nil || in.Repos != nil) && !caller.canManage(p) {
 		return nil, apperr.Forbidden("only the project's creator or an admin can rename it or change its repos")
 	}
+	before := *p
 	if err := applyProjectInput(p, in, caller.canManage(p)); err != nil {
 		return nil, err
 	}
-	if err := s.applyTheme(ctx, caller, key, in); err != nil {
+	// A linked project's name, repos, links and notes are CliffHub's: they
+	// are edited there (ex only ever adds to CliffHub, never overwrites).
+	// The theme still goes through below. A project not linked yet is moved
+	// into CliffHub by this save.
+	if s.upstreamOn() && !sameSyncedFields(&before, p) {
+		if before.SystemID != "" {
+			return nil, fmt.Errorf("project %q is edited in CliffHub: open it there to change its details: %w", key, service.ErrValidation)
+		}
+		if err := s.upstream.Save(ctx, caller.ID, p); err != nil {
+			return nil, err
+		}
+	}
+	if err := s.applyTheme(ctx, caller, p, in); err != nil {
 		return nil, err
 	}
 	p.UpdatedBy, p.UpdatedAt = caller.ID, s.now()
@@ -317,6 +408,9 @@ func (s *ProjectService) Delete(ctx context.Context, caller ProjectCaller, key s
 	}
 	if !caller.canManage(p) {
 		return apperr.Forbidden("only the project's creator or an admin can delete it")
+	}
+	if s.upstreamOn() && p.SystemID != "" {
+		return fmt.Errorf("project %q lives in CliffHub: archive its system there: %w", key, service.ErrValidation)
 	}
 	screens, err := s.store.ListScreens(ctx, key)
 	if err != nil {
@@ -375,6 +469,13 @@ func applyProjectInput(p *model.CodingProject, in ProjectInput, manage bool) err
 		}
 		p.UILibrary = lib
 	}
+	if in.Instructions != nil {
+		ins := strings.TrimSpace(*in.Instructions)
+		if len(ins) > model.ProjectInstructionsMaxLen {
+			return fmt.Errorf("project: instructions are limited to %d characters: %w", model.ProjectInstructionsMaxLen, service.ErrValidation)
+		}
+		p.Instructions = ins
+	}
 	if in.Links != nil {
 		links, err := cleanProjectLinks(*in.Links)
 		if err != nil {
@@ -395,12 +496,18 @@ func applyProjectInput(p *model.CodingProject, in ProjectInput, manage bool) err
 // applyTheme saves or removes the project's theme stylesheet when the input
 // carries one. A stylesheet that defines no CSS variables is refused — it
 // would give the agent nothing (usually the wrong file was picked).
-func (s *ProjectService) applyTheme(ctx context.Context, caller ProjectCaller, key string, in ProjectInput) error {
+func (s *ProjectService) applyTheme(ctx context.Context, caller ProjectCaller, p *model.CodingProject, in ProjectInput) error {
 	if in.ThemeCSS == nil {
 		return nil
 	}
+	key := p.Key
 	css := *in.ThemeCSS
 	if strings.TrimSpace(css) == "" {
+		if s.upstreamOn() {
+			if err := s.upstream.SaveTheme(ctx, caller.ID, p, "", ""); err != nil {
+				return err
+			}
+		}
 		return s.store.DeleteProjectTheme(ctx, key)
 	}
 	if len(css) > model.ProjectThemeMaxBytes {
@@ -415,6 +522,11 @@ func (s *ProjectService) applyTheme(ctx context.Context, caller ProjectCaller, k
 	}
 	if len(name) > model.ScreenFieldMaxLen {
 		return fmt.Errorf("project: theme file name too long: %w", service.ErrValidation)
+	}
+	if s.upstreamOn() {
+		if err := s.upstream.SaveTheme(ctx, caller.ID, p, css, name); err != nil {
+			return err
+		}
 	}
 	return s.store.PutProjectTheme(ctx, &model.ProjectTheme{ProjectKey: key, Filename: name, CSS: css, UpdatedBy: caller.ID, UpdatedAt: s.now()})
 }
@@ -494,7 +606,8 @@ func (s *ProjectService) AddScreen(ctx context.Context, caller ProjectCaller, ke
 	if err := caller.member(); err != nil {
 		return nil, err
 	}
-	if _, err := s.store.GetProject(ctx, key); err != nil {
+	p, err := s.store.GetProject(ctx, key)
+	if err != nil {
 		return nil, err
 	}
 	if in.Page == nil || in.Description == nil || in.AttachmentID == nil {
@@ -512,7 +625,16 @@ func (s *ProjectService) AddScreen(ctx context.Context, caller ProjectCaller, ke
 	if err := applyScreenInput(sc, in); err != nil {
 		return nil, err
 	}
-	if err := s.claimImage(ctx, caller, sc.ID, sc.AttachmentID); err != nil {
+	if err := s.checkImage(ctx, caller, sc.AttachmentID); err != nil {
+		return nil, err
+	}
+	// CliffHub first: it holds the screen, and picks its ID.
+	if s.upstreamOn() {
+		if err := s.upstream.SaveScreen(ctx, caller.ID, p, sc, true, true); err != nil {
+			return nil, err
+		}
+	}
+	if err := s.attachments.AddRef(ctx, sc.AttachmentID, model.ScreenAttachmentRef(sc.ID)); err != nil {
 		return nil, err
 	}
 	if err := s.store.PutScreen(ctx, sc); err != nil {
@@ -533,6 +655,10 @@ func (s *ProjectService) UpdateScreen(ctx context.Context, caller ProjectCaller,
 	if err != nil {
 		return nil, err
 	}
+	p, err := s.store.GetProject(ctx, key)
+	if err != nil {
+		return nil, err
+	}
 	oldImage := sc.AttachmentID
 	if err := applyScreenInput(sc, in); err != nil {
 		return nil, err
@@ -540,7 +666,17 @@ func (s *ProjectService) UpdateScreen(ctx context.Context, caller ProjectCaller,
 	sc.UpdatedAt = s.now()
 	replaced := sc.AttachmentID != oldImage
 	if replaced {
-		if err := s.claimImage(ctx, caller, sc.ID, sc.AttachmentID); err != nil {
+		if err := s.checkImage(ctx, caller, sc.AttachmentID); err != nil {
+			return nil, err
+		}
+	}
+	if s.upstreamOn() {
+		if err := s.upstream.SaveScreen(ctx, caller.ID, p, sc, false, replaced); err != nil {
+			return nil, err
+		}
+	}
+	if replaced {
+		if err := s.attachments.AddRef(ctx, sc.AttachmentID, model.ScreenAttachmentRef(sc.ID)); err != nil {
 			return nil, err
 		}
 		sc.UploadedBy = caller.ID
@@ -564,6 +700,15 @@ func (s *ProjectService) DeleteScreen(ctx context.Context, caller ProjectCaller,
 	if err != nil {
 		return err
 	}
+	if s.upstreamOn() {
+		p, err := s.store.GetProject(ctx, key)
+		if err != nil {
+			return err
+		}
+		if err := s.upstream.DeleteScreenUpstream(ctx, caller.ID, p, sc); err != nil {
+			return err
+		}
+	}
 	if err := s.removeScreen(ctx, sc); err != nil {
 		return err
 	}
@@ -581,9 +726,9 @@ func (s *ProjectService) removeScreen(ctx context.Context, sc *model.ProjectScre
 	return nil
 }
 
-// claimImage checks the upload is an image the caller uploaded and within
-// bounds, then takes the screen's reference on it.
-func (s *ProjectService) claimImage(ctx context.Context, caller ProjectCaller, screenID, attachmentID string) error {
+// checkImage checks the upload is a finished image the caller uploaded and
+// within bounds. The caller then takes the screen's reference on it.
+func (s *ProjectService) checkImage(ctx context.Context, caller ProjectCaller, attachmentID string) error {
 	a, err := s.attachments.Get(ctx, attachmentID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -605,7 +750,7 @@ func (s *ProjectService) claimImage(ctx context.Context, caller ProjectCaller, s
 	if err := s.attachments.ValidateForUse(ctx, attachmentID); err != nil {
 		return fmt.Errorf("screen: image upload is not finished: %w", service.ErrValidation)
 	}
-	return s.attachments.AddRef(ctx, attachmentID, model.ScreenAttachmentRef(screenID))
+	return nil
 }
 
 func applyScreenInput(sc *model.ProjectScreen, in ScreenInput) error {
