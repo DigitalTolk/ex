@@ -192,6 +192,30 @@ describe('SearchBar number shortcuts', () => {
     await expect.poll(() => (screen.getByTestId('loc').element() as HTMLElement).dataset.path).toBe('/channel/general');
   });
 
+  it('picks a row with Ctrl and its number on a non-Apple platform', async () => {
+    // Every project runs on an Apple UA on a Mac: force the Windows arm so
+    // both sides of the platform chord are driven wherever the suite runs.
+    Object.defineProperty(navigator, 'userAgent', {
+      configurable: true,
+      get: () => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+    });
+    try {
+      const screen = await renderWithLocation();
+      await screen.getByTestId('searchbar-input').fill('al');
+      await expect.element(screen.getByTestId('searchbar-channel-ch-1')).toBeVisible();
+      expect(hint('searchbar-channel-ch-1')).toBe('"Ctrl 1"');
+      // The Apple chord picks nothing here, nor do both modifiers at once.
+      expect(press('keydown', '1', { metaKey: true })).toBe(true);
+      expect(press('keydown', '1', { ctrlKey: true, metaKey: true })).toBe(true);
+      expect((screen.getByTestId('loc').element() as HTMLElement).dataset.path).toBe('/');
+
+      press('keydown', '1', { ctrlKey: true });
+      await expect.poll(() => (screen.getByTestId('loc').element() as HTMLElement).dataset.path).toBe('/channel/general');
+    } finally {
+      delete (navigator as { userAgent?: unknown }).userAgent;
+    }
+  });
+
   it('opens the person the number names', async () => {
     const screen = await renderWithLocation();
     await screen.getByTestId('searchbar-input').fill('al');

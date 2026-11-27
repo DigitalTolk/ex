@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"image"
@@ -42,6 +43,32 @@ func TestInspectContent_Branches(t *testing.T) {
 func newAttachmentSvc(signer AttachmentSigner) (*AttachmentService, *mockAttachmentStore) {
 	store := newMockAttachmentStore()
 	return NewAttachmentService(store, signer, newMockPublisher()), store
+}
+
+// bmpOf is a w×h 24-bit BMP, written out by hand: a test that imported a BMP
+// package would register its decoder for the test binary alone.
+func bmpOf(w, h int) []byte {
+	row := (w*3 + 3) &^ 3
+	var b bytes.Buffer
+	b.WriteString("BM")
+	for _, v := range []any{
+		uint32(54 + row*h), uint32(0), uint32(54), // file header: size, reserved, pixel offset
+		uint32(40), int32(w), int32(h), uint16(1), uint16(24), // info header: size, width, height, planes, bits
+		uint32(0), uint32(row * h), int32(2835), int32(2835), uint32(0), uint32(0),
+	} {
+		_ = binary.Write(&b, binary.LittleEndian, v)
+	}
+	b.Write(make([]byte, row*h))
+	return b.Bytes()
+}
+
+// BMP is not an image format ex reads, however well formed the file (a
+// library that registered a decoder once made it one by the way).
+func TestInspectContent_RefusesBMP(t *testing.T) {
+	a := &model.Attachment{ContentType: "image/bmp", Width: 12, Height: 8}
+	if _, err := inspectBytes(a, "image/bmp", bmpOf(12, 8)); err == nil || !strings.Contains(err.Error(), "invalid image") {
+		t.Fatalf("err = %v, want the BMP refused as an invalid image", err)
+	}
 }
 
 func TestValidateForUse_EarlyErrors(t *testing.T) {

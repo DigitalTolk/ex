@@ -10,8 +10,8 @@ import { showToast } from '@/lib/toast';
 const raf = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 let pointerId = 500;
 
-function pointer(type: string, x: number, y: number, id: number) {
-  return new PointerEvent(type, {
+function pointer(type: string, x: number, y: number, id: number, timeStamp?: number) {
+  const event = new PointerEvent(type, {
     bubbles: true,
     cancelable: true,
     pointerId: id,
@@ -22,18 +22,27 @@ function pointer(type: string, x: number, y: number, id: number) {
     clientX: x,
     clientY: y,
   });
+  return timeStamp === undefined ? event : Object.defineProperty(event, 'timeStamp', { value: timeStamp });
 }
+
+// A finger reports where it is a frame apart, and how fast it lifted comes
+// from those times. A drag's events are stamped at that pace, not with when
+// they happen to be dispatched: a loaded browser running two frames back to
+// back once stamped two moves a millisecond apart, and a slow 30px drag read
+// as a fling that put the banner away.
+const FRAME_MS = 16;
 
 async function drag(el: Element, dx: number, dy: number, steps = 6) {
   const box = el.getBoundingClientRect();
   const from = { x: box.left + box.width / 2, y: box.top + box.height / 2 };
   const id = pointerId++;
-  el.dispatchEvent(pointer('pointerdown', from.x, from.y, id));
+  const start = performance.now();
+  el.dispatchEvent(pointer('pointerdown', from.x, from.y, id, start));
   for (let i = 1; i <= steps; i++) {
-    window.dispatchEvent(pointer('pointermove', from.x + (dx * i) / steps, from.y + (dy * i) / steps, id));
+    window.dispatchEvent(pointer('pointermove', from.x + (dx * i) / steps, from.y + (dy * i) / steps, id, start + i * FRAME_MS));
     await raf();
   }
-  window.dispatchEvent(pointer('pointerup', from.x + dx, from.y + dy, id));
+  window.dispatchEvent(pointer('pointerup', from.x + dx, from.y + dy, id, start + (steps + 1) * FRAME_MS));
 }
 
 const banner = () => document.querySelector<HTMLElement>('[data-testid="toast"]');

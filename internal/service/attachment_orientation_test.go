@@ -145,15 +145,11 @@ func TestEncodeWebPThumbnail_ShowsEveryOrientationUpright(t *testing.T) {
 	}
 }
 
-// Auto-orientation copies a JPEG's pixels once more to turn them, so the
-// decode budget reserves that copy up front: the orientation is only known
-// once decoding has started.
-func TestImageDecodeCostFor_ReservesARotationForJPEG(t *testing.T) {
-	if got, want := imageDecodeCostFor("jpeg", 10, 20), int64(10*20*(decodeBytesPerPixel+4)); got != want {
-		t.Errorf("jpeg cost = %d, want %d", got, want)
-	}
-	if got, want := imageDecodeCostFor("png", 10, 20), imageDecodeCost(10, 20); got != want {
-		t.Errorf("png cost = %d, want %d", got, want)
+// An avatar or emoji is shrunk from an RGBA copy of its decoded pixels, so
+// its decode budget reserves that copy up front, whatever its format.
+func TestShrinkDecodeCost_ReservesTheResizersCopy(t *testing.T) {
+	if got, want := shrinkDecodeCost(image.Config{Width: 10, Height: 20}), int64(10*20*(decodeBytesPerPixel+4)); got != want {
+		t.Errorf("cost = %d, want %d", got, want)
 	}
 }
 

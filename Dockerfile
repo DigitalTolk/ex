@@ -15,7 +15,7 @@
 # the guaranteed-fresh rebuild stays fast.
 
 # Stage 1: Build frontend
-FROM node:24-trixie@sha256:770709aad57b8fdddbad76e76ce88139b9f8411eff7339bb0d923558498550b4 AS frontend
+FROM node:26-trixie@sha256:f8e5d4bb28fa55c74f1345166a082a10b7c68f22304350c1ce0d18358ae94996 AS frontend
 WORKDIR /app/frontend
 COPY package.json package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci

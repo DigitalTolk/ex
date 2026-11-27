@@ -16,6 +16,7 @@ import (
 	"github.com/gen2brain/h265/heic"
 
 	"github.com/DigitalTolk/ex/internal/model"
+	"github.com/DigitalTolk/ex/internal/picture"
 )
 
 // The fixtures are 32×24 photos in four solid quarters (top left red, top
@@ -48,7 +49,7 @@ func TestHeifOrientation_MatchesTheDecoder(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			got := upright(stored.(*image.NRGBA), o)
+			got := picture.Upright(stored.(*image.NRGBA), o)
 			if got.Bounds() != want.Bounds() || !bytes.Equal(got.Pix, want.(*image.NRGBA).Pix) {
 				t.Fatalf("turned %v differs from the decoder's %v", got.Bounds(), want.Bounds())
 			}
@@ -154,7 +155,9 @@ func TestDecodeCost(t *testing.T) {
 	}{
 		{"heic", color.NRGBAModel, base},
 		{"heic", color.NRGBA64Model, base + base/2},
-		{"png", color.NRGBA64Model, base},
+		{"png", color.NRGBAModel, base},
+		{"png", color.NRGBA64Model, base + 100*50*4},
+		{"png", color.RGBA64Model, base + 100*50*4},
 	} {
 		if got := decodeCost(tc.format, image.Config{Width: 100, Height: 50, ColorModel: tc.model}); got != tc.want {
 			t.Errorf("decodeCost(%s, %v) = %d, want %d", tc.format, tc.model, got, tc.want)
