@@ -583,6 +583,10 @@ func (s *InteractionService) replaceOriginal(ctx context.Context, wh *model.Inco
 		if err := versionConflict(resp, stored); err != nil {
 			return nil, err
 		}
+		if attempt == 1 {
+			// Stored like a post's: typed group handles become mentions.
+			body = s.messages.canonicalizeMachineContent(ctx, stored.AuthorID, body, blocks, attachments)
+		}
 		msg := withOwnTallies(stored)
 		msg.Body, msg.Blocks, msg.MessageAttachments = body, blocks, attachments
 		msg.AppButtons = true

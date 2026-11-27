@@ -105,3 +105,48 @@ func TestCanonicalizeMentions_BoundsLookupsAndLength(t *testing.T) {
 		t.Error("conversion pushed the body past the length cap")
 	}
 }
+
+func TestCanonicalizeMentionsMany_OneLookupAcrossTexts(t *testing.T) {
+	f := newUserGroupFixture()
+	ctx := context.Background()
+	oncall := f.create(t, "oncall", "u-1")
+	sre := f.create(t, "sre", "u-2")
+	tok := func(g string, id string) string { return "@[" + id + "|" + g + "]" }
+
+	got := f.svc.CanonicalizeMentionsMany(ctx, "u-1", []string{"@oncall body", "no handles", "@sre and @oncall", "`@sre`"})
+	want := []string{tok("oncall", oncall.ID) + " body", "no handles", tok("sre", sre.ID) + " and " + tok("oncall", oncall.ID), "`@sre`"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("text %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+	if f.people.calls != 1 {
+		t.Fatalf("looked up the author %d times, want once for the whole message", f.people.calls)
+	}
+	if got := f.svc.CanonicalizeMentionsMany(ctx, "u-1", nil); len(got) != 0 {
+		t.Fatalf("no texts = %v", got)
+	}
+	if got := f.svc.CanonicalizeMentionsMany(ctx, "u-guest", []string{"@oncall"}); got[0] != "@oncall" {
+		t.Fatalf("guest text = %q, want it as typed", got[0])
+	}
+}
+
+// The lookup budget is shared by the whole message, and the first text's
+// handles come first: blocks can't use up the budget the body needs.
+func TestCanonicalizeMentionsMany_SharesTheLookupBudgetBodyFirst(t *testing.T) {
+	f := newUserGroupFixture()
+	ctx := context.Background()
+	oncall := f.create(t, "oncall", "u-1")
+	var filler strings.Builder
+	for i := range maxTypedHandleLookups {
+		filler.WriteString("@h" + strings.Repeat("x", i+1) + " ")
+	}
+	got := f.svc.CanonicalizeMentionsMany(ctx, "u-1", []string{"@oncall body", filler.String(), "@oncall late"})
+	if !strings.Contains(got[0], oncall.ID) || !strings.Contains(got[2], oncall.ID) {
+		t.Fatalf("got %q / %q, want the body's handle converted everywhere", got[0], got[2])
+	}
+	got = f.svc.CanonicalizeMentionsMany(ctx, "u-1", []string{filler.String(), "@oncall past the budget"})
+	if strings.Contains(got[1], oncall.ID) {
+		t.Fatalf("a handle past the shared budget was converted: %q", got[1])
+	}
+}

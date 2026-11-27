@@ -478,6 +478,60 @@ func checkStoredBlocksSize(blocks model.Blocks, attachments []model.MessageAttac
 	return nil
 }
 
+// markdownTexts points at every text of a message's blocks and cards that is
+// read as markdown — the texts the webhook's @user rewrite reaches — in
+// document order: section text and fields and context text, nested blocks
+// included, then each card's pretext, text, field values and blocks. Plain
+// text, rich text and labels are not among them.
+func markdownTexts(blocks model.Blocks, cards []model.MessageAttachment) []*string {
+	var out []*string
+	var walk func(bs model.Blocks)
+	walk = func(bs model.Blocks) {
+		for i := range bs {
+			b := &bs[i]
+			if b.Text != nil && b.Text.Type == model.TextMarkdown {
+				out = append(out, &b.Text.Text)
+			}
+			for j := range b.Fields {
+				if b.Fields[j].Type == model.TextMarkdown {
+					out = append(out, &b.Fields[j].Text)
+				}
+			}
+			for j := range b.Elements {
+				if b.Elements[j].Type == model.TextMarkdown {
+					out = append(out, &b.Elements[j].Content)
+				}
+			}
+			walk(b.Blocks)
+		}
+	}
+	walk(blocks)
+	for i := range cards {
+		c := &cards[i]
+		out = append(out, &c.Pretext, &c.Text)
+		for j := range c.Fields {
+			out = append(out, &c.Fields[j].Value)
+		}
+		walk(c.Blocks)
+	}
+	return out
+}
+
+// storedContentBytes is the stored size of a message's blocks and cards
+// together, card text included.
+func storedContentBytes(blocks model.Blocks, cards []model.MessageAttachment) int {
+	size := 0
+	if len(blocks) > 0 {
+		raw, _ := json.Marshal(blocks)
+		size += len(raw)
+	}
+	if len(cards) > 0 {
+		raw, _ := json.Marshal(cards)
+		size += len(raw)
+	}
+	return size
+}
+
 // blocksFallbackText is the plain text a message with blocks but no text
 // stands on: its headers, sections and context, one per line, cut to the
 // body limit. Notifications, search and clients without blocks use it.

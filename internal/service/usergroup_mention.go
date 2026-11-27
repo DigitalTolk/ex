@@ -84,35 +84,52 @@ func typedHandles(body string) []typedHandle {
 }
 
 // CanonicalizeMentions rewrites every bare "@handle" in body that names an
-// enabled group into the group's mention token. Guests' messages are left
-// alone (guests can't mention groups), and so is a body the tokens would push
-// past the length cap. A failed lookup leaves the body as typed: the message
-// still sends.
+// enabled group into the group's mention token (see CanonicalizeMentionsMany).
+// A body the tokens would push past the length cap is left as typed.
 func (s *UserGroupService) CanonicalizeMentions(ctx context.Context, authorID, body string) string {
-	candidates := typedHandles(body)
-	if len(candidates) == 0 {
+	out := s.CanonicalizeMentionsMany(ctx, authorID, []string{body})[0]
+	if utf8.RuneCountInString(out) > limits.MaxMessageBodyChars {
 		return body
 	}
+	return out
+}
+
+// CanonicalizeMentionsMany rewrites the typed group handles in every text of
+// one message — a machine post's body, block markdown and card text — with
+// one lookup: at most maxTypedHandleLookups distinct handles across all of
+// them, taken in order, so the first text's handles come first. Guests'
+// texts are left alone (guests can't mention groups), and a failed lookup
+// leaves every text as typed: the message still sends.
+func (s *UserGroupService) CanonicalizeMentionsMany(ctx context.Context, authorID string, texts []string) []string {
+	out := slices.Clone(texts)
+	candidates := make([][]typedHandle, len(texts))
 	var handles []string
-	for _, c := range candidates {
-		if !slices.Contains(handles, c.handle) && len(handles) < maxTypedHandleLookups {
-			handles = append(handles, c.handle)
+	for i, text := range texts {
+		candidates[i] = typedHandles(text)
+		for _, c := range candidates[i] {
+			if !slices.Contains(handles, c.handle) && len(handles) < maxTypedHandleLookups {
+				handles = append(handles, c.handle)
+			}
 		}
+	}
+	if len(handles) == 0 {
+		return out
 	}
 	if guest, err := s.isGuest(ctx, authorID); err != nil || guest {
 		if err != nil {
 			slog.WarnContext(ctx, "user group: typed handles left as text", "error", err)
 		}
-		return body
+		return out
 	}
 	groups, err := s.handleGroups(ctx, handles)
 	if err != nil {
 		slog.WarnContext(ctx, "user group: typed handles left as text", "error", err)
-		return body
+		return out
 	}
-	out := rewriteTypedHandles(body, candidates, groups)
-	if utf8.RuneCountInString(out) > limits.MaxMessageBodyChars {
-		return body
+	for i, c := range candidates {
+		if len(c) > 0 {
+			out[i] = rewriteTypedHandles(texts[i], c, groups)
+		}
 	}
 	return out
 }

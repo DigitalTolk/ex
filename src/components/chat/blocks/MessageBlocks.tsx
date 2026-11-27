@@ -15,6 +15,7 @@ import { BlockPicker } from './BlockPickers';
 import { noteReceipt, useActionReceipts } from '@/stores/action-receipts';
 import { Callout, RichText, Spans, TableBlock } from './RichText';
 import { Chart } from './Chart';
+import { useMentionRenderOpts } from '@/components/chat/mention-render-opts';
 
 type NameLookup = NonNullable<BlockScopeValue['userMap']>;
 
@@ -328,18 +329,30 @@ function ImageBlock({ block }: { block: Extract<Block, { type: 'image' }> }) {
   );
 }
 
-// Text renders like a webhook card's: memoized on its source, since the row
-// re-renders for hover, presence and reactions while the text stays put.
+// useBlockMarkdown renders block markdown with a message's mentions — the
+// reader's own highlighted, a person's profile, a group's members — parsed
+// once per source and reader, since the row re-renders for hover, presence,
+// reactions and tallies while the text stays put. Outside a message (the
+// builder's preview) the pills are plain.
+function useBlockMarkdown(source: string, markdown: boolean): ReactNode {
+  const scope = useBlockScope();
+  const mentions = useMentionRenderOpts(scope?.currentUserId, scope?.idPrefix ?? '');
+  const opts = scope ? mentions : undefined;
+  return useMemo(() => (markdown ? renderMarkdown(source, opts) : null), [source, markdown, opts]);
+}
+
 const BlockTextView = memo(function BlockTextView({ text }: { text: BlockText }) {
   const source = expandDateTokens(text.text);
-  if (text.type === 'markdown') return <div className="prose-message text-sm">{renderMarkdown(source)}</div>;
+  const rendered = useBlockMarkdown(source, text.type === 'markdown');
+  if (text.type === 'markdown') return <div className="prose-message text-sm">{rendered}</div>;
   return <div className="text-sm whitespace-pre-wrap break-words">{source}</div>;
 });
 
 const ContextText = memo(function ContextText({ element }: { element: TextElement }) {
   const source = expandDateTokens(element.text);
+  const rendered = useBlockMarkdown(source, element.type === 'markdown');
   if (element.type === 'markdown') {
-    return <div className="prose-message min-w-0 text-xs [&_p]:my-0">{renderMarkdown(source)}</div>;
+    return <div className="prose-message min-w-0 text-xs [&_p]:my-0">{rendered}</div>;
   }
   return <span className="min-w-0 break-words">{source}</span>;
 });

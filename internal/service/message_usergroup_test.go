@@ -23,6 +23,15 @@ func (s *stubUserGroupMentions) CanonicalizeMentions(_ context.Context, authorID
 	return strings.ReplaceAll(body, "@oncall", "@[group-oncall|oncall]")
 }
 
+func (s *stubUserGroupMentions) CanonicalizeMentionsMany(_ context.Context, authorID string, texts []string) []string {
+	s.canonicalize = append(s.canonicalize, authorID)
+	out := make([]string, len(texts))
+	for i, text := range texts {
+		out[i] = strings.ReplaceAll(text, "@oncall", "@[group-oncall|oncall]")
+	}
+	return out
+}
+
 func (s *stubUserGroupMentions) MentionedMembers(_ context.Context, _ string, ids []string) (map[string][]string, error) {
 	if s.err != nil {
 		return nil, s.err

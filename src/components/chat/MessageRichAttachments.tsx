@@ -8,6 +8,7 @@ import { CircleCheck, CircleDot, CircleX, Info, TriangleAlert, type LucideIcon }
 import type { RichColor } from '@/types';
 import { cardClass, cardTint, HUE_TEXT } from '@/lib/card-tint';
 import { cn } from '@/lib/utils';
+import { useMentionRenderOpts, type MentionRenderOpts } from '@/components/chat/mention-render-opts';
 
 // Image src must be a real fetchable URL — http(s) only. isSafeUrl also admits
 // mailto (fine for links, not images), so narrow it here. The backend already
@@ -21,8 +22,8 @@ function safeImg(url?: string): string | undefined {
 // One markdown field of a webhook card. Memoized on its text: the message row
 // re-renders for hover, reactions and presence, and re-parsing every field of
 // every card on each of those was pure waste — the text did not change.
-const MarkdownField = memo(function MarkdownField({ text, className }: { text: string; className: string }) {
-  return <div className={className}>{renderMarkdown(text)}</div>;
+const MarkdownField = memo(function MarkdownField({ text, className, mentions }: { text: string; className: string; mentions?: MentionRenderOpts }) {
+  return <div className={className}>{renderMarkdown(text, mentions)}</div>;
 });
 
 // The meaning of a card's colour as a shape, so it never rests on colour
@@ -63,7 +64,19 @@ function CardLead({ att }: { att: MessageAttachment }) {
   return <Icon className={`h-[18px] w-[18px] shrink-0 ${HUE_TEXT[tint]}`} role="img" aria-label={STATUS_LABEL[tint]} data-testid="card-status-icon" />;
 }
 
-export function MessageRichAttachments({ attachments, onContentHeightChange }: { attachments?: MessageAttachment[]; onContentHeightChange?: () => void }) {
+export function MessageRichAttachments({
+  attachments,
+  currentUserId,
+  onContentHeightChange,
+}: {
+  attachments?: MessageAttachment[];
+  // The reader, in a message: card text draws mentions as the body does.
+  // Without one (the builder's preview) the pills are plain.
+  currentUserId?: string;
+  onContentHeightChange?: () => void;
+}) {
+  const reader = useMentionRenderOpts(currentUserId, '');
+  const mentions = currentUserId ? reader : undefined;
   if (!attachments?.length) return null;
   return (
     // Capped so a card reads as one card on a wide screen, not a banner.
@@ -71,7 +84,7 @@ export function MessageRichAttachments({ attachments, onContentHeightChange }: {
       {attachments.map((att, index) => (
         <div key={index} className="space-y-1.5">
           {/* Pretext is the line above the card, as in Slack. */}
-          {att.pretext && <MarkdownField className="text-sm prose-message" text={att.pretext} />}
+          {att.pretext && <MarkdownField className="text-sm prose-message" text={att.pretext} mentions={mentions} />}
           <div
             data-testid="message-rich-attachment"
             // One card for every webhook, classic or rich: the page's surface,
@@ -102,7 +115,7 @@ export function MessageRichAttachments({ attachments, onContentHeightChange }: {
                   {externalHref(att.title_link) ? <a href={att.title_link} target="_blank" rel="noreferrer" className={LINK}>{att.title}</a> : att.title}
                 </div>
               )}
-              {att.text && <MarkdownField className="text-sm prose-message" text={att.text} />}
+              {att.text && <MarkdownField className="text-sm prose-message" text={att.text} mentions={mentions} />}
               {att.fields?.length ? (
                 <dl className="mt-3 grid grid-cols-1 gap-x-4 gap-y-2.5 sm:grid-cols-2">
                   {att.fields.map((field, fieldIndex) => (
@@ -110,7 +123,7 @@ export function MessageRichAttachments({ attachments, onContentHeightChange }: {
                       {field.title && <dt className="text-xs font-medium text-muted-foreground">{field.title}</dt>}
                       {field.value && (
                         <dd>
-                          <MarkdownField className="text-sm prose-message" text={field.value} />
+                          <MarkdownField className="text-sm prose-message" text={field.value} mentions={mentions} />
                         </dd>
                       )}
                     </div>
