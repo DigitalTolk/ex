@@ -7,7 +7,7 @@ import { RunnersInAppCard } from '@/components/admin/RunnersInAppCard';
 const mockApiFetch = vi.fn();
 vi.mock('@/lib/api', () => ({ apiFetch: (...args: unknown[]) => mockApiFetch(...args) }));
 
-const saved = { maxUploadBytes: 1024, allowedExtensions: ['png'], giphyAPIKey: 'k', giphyEnabled: true, runnersInApp: false };
+const saved = { maxUploadBytes: 1024, allowedExtensions: ['png'], ohmagifAPIKey: 'omg_0123456789abcdefABCDEF0123456789', runnersInApp: false };
 
 function mount() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
@@ -23,6 +23,8 @@ beforeEach(() => {
 });
 
 describe('RunnersInAppCard', () => {
+  // The GIF key stays out of the save: the server keeps a key a save leaves
+  // out, so the switch can never undo a key changed meanwhile.
   it('is off by default and turns on, carrying the other settings over', async () => {
     const user = userEvent.setup();
     mockApiFetch.mockImplementation((_path: string, init?: RequestInit) =>
@@ -35,7 +37,7 @@ describe('RunnersInAppCard', () => {
     await waitFor(() =>
       expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/admin/settings', {
         method: 'PUT',
-        body: JSON.stringify({ maxUploadBytes: 1024, allowedExtensions: ['png'], giphyAPIKey: 'k', runnersInApp: true }),
+        body: JSON.stringify({ maxUploadBytes: 1024, allowedExtensions: ['png'], runnersInApp: true }),
       }),
     );
     await waitFor(() => expect(screen.getByRole('switch', { name: 'Runners in the app' })).toBeChecked());

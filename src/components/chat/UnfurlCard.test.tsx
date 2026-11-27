@@ -132,6 +132,64 @@ describe('UnfurlCard', () => {
     expect(container.firstChild).toBeNull();
   });
 
+  describe('linked image', () => {
+    // 498×522 scales into the 320×288 thumbnail box as 275×288.
+    function imagePreview(overrides: Partial<UnfurlPreview> = {}): UnfurlPreview {
+      return {
+        url: 'https://i.example/g/full.avif',
+        kind: 'image',
+        image: 'https://s3.example/unfurl/abc.avif',
+        imageWidth: 498,
+        imageHeight: 522,
+        ...overrides,
+      };
+    }
+
+    it('shows the image at its measured size, linking to the original', () => {
+      mockUseUnfurl.mockReturnValue({ data: imagePreview(), isLoading: false });
+      renderCard({ url: 'https://i.example/g/full.avif' });
+      const img = screen.getByTestId('unfurl-card-image') as HTMLImageElement;
+      expect(img.src).toBe('https://s3.example/unfurl/abc.avif');
+      expect(img.getAttribute('width')).toBe('275');
+      expect(img.getAttribute('height')).toBe('288');
+      const link = screen.getByRole('link', { name: 'Open image' });
+      expect(link.getAttribute('href')).toBe('https://i.example/g/full.avif');
+      expect(link.getAttribute('target')).toBe('_blank');
+      // No card text: the image is the preview.
+      expect(screen.getByTestId('unfurl-card').textContent).toBe('');
+    });
+
+    it('keeps the box when the image fails to load', () => {
+      mockUseUnfurl.mockReturnValue({ data: imagePreview(), isLoading: false });
+      renderCard();
+      fireEvent.error(screen.getByTestId('unfurl-card-image'));
+      expect(screen.queryByTestId('unfurl-card-image')).toBeNull();
+      const placeholder = screen.getByTestId('unfurl-card-image-placeholder');
+      expect(placeholder.style.width).toBe('275px');
+      expect(placeholder.style.aspectRatio).toBe('275 / 288');
+    });
+
+    it('lets the author remove it', () => {
+      mockUseUnfurl.mockReturnValue({ data: imagePreview(), isLoading: false });
+      renderCard({ isAuthor: true });
+      expect(screen.getByTestId('unfurl-card-dismiss')).toBeInTheDocument();
+    });
+
+    it('renders nothing without a size or a safe image', () => {
+      for (const preview of [
+        imagePreview({ imageWidth: undefined }),
+        imagePreview({ imageHeight: 0 }),
+        imagePreview({ image: undefined }),
+        imagePreview({ image: 'javascript:alert(1)' }),
+      ]) {
+        mockUseUnfurl.mockReturnValue({ data: preview, isLoading: false });
+        const view = renderCard();
+        expect(view.container.firstChild).toBeNull();
+        view.unmount();
+      }
+    });
+  });
+
   describe('internal message-link preview', () => {
     function messagePreview(overrides: Partial<UnfurlPreview> = {}): UnfurlPreview {
       return {

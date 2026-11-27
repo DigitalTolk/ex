@@ -383,11 +383,24 @@ body > :not(#root) {
   --ex-keyboard-background: var(--color-sidebar);
 }
 
-/* Mobile bottom-sheet popovers (emoji / GIPHY pickers) sit on the popover
+/* Mobile bottom-sheet popovers (emoji / GIF pickers) sit on the popover
  * surface — keep the keyboard strip matching while their search field is
  * focused. */
 [data-mobile-sheet='true'] {
   --ex-keyboard-background: var(--color-popover);
+}
+
+/* ohmagif's GIFs and grid (@ohmagif/js/react) draw with these custom
+ * properties: the app's tokens, set on the components' own elements so
+ * they resolve in whichever theme scope the GIF sits. */
+.ohmagif-gif,
+.ohmagif-grid {
+  --ohmagif-card: var(--color-card);
+  --ohmagif-border: var(--color-border);
+  --ohmagif-muted: var(--color-muted-foreground);
+  --ohmagif-link: var(--color-link);
+  --ohmagif-placeholder: var(--color-muted);
+  --ohmagif-radius: var(--radius-md);
 }
 
 @utility pt-safe-top {

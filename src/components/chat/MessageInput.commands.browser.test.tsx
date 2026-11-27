@@ -26,7 +26,7 @@ vi.mock('@/lib/api', () => ({
 }));
 
 vi.mock('@/hooks/useSettings', () => ({
-  useWorkspaceSettings: () => ({ data: { maxUploadBytes: 0, allowedExtensions: [], giphyEnabled: false, giphyAPIKey: '' } }),
+  useWorkspaceSettings: () => ({ data: { maxUploadBytes: 0, allowedExtensions: [] } }),
   useUpdateWorkspaceSettings: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 

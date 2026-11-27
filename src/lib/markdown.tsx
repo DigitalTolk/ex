@@ -37,10 +37,6 @@ export interface RenderOpts {
   // the tag-search side panel. Without it, hashtags render as plain text.
   onTagClick?: (tag: string) => void;
   onMediaLoad?: () => void;
-  // Browser key for resolving persisted `giphy:<id>` references. The
-  // saved message stores only the GIPHY ID; media URLs are fetched
-  // directly from GIPHY on render.
-  giphyAPIKey?: string;
   // largeEmoji renders emoji at double size ("jumbomoji") — set when the
   // whole message is nothing but emoji, à la Slack.
   largeEmoji?: boolean;
@@ -66,7 +62,7 @@ export interface RenderOpts {
 //      descriptions, search hits).
 //
 // Per-viewer behaviour (self-mention pill, hashtag click handler,
-// renderUserMention wrapper, custom emoji map, GIPHY API key) is
+// renderUserMention wrapper, custom emoji map) is
 // applied at the React-component level in BOTH cases — the tree holds
 // viewer-agnostic ex-* sentinel tags and the components map closes
 // over `opts` to render them.

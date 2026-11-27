@@ -3,23 +3,19 @@ import { Input } from '@/components/ui/input';
 import { PopoverPortal } from '@/components/PopoverPortal';
 import { useAutoFocusTextInput } from '@/hooks/useHardwareKeyboard';
 
-// The grid is the only part that touches the Giphy SDK; lazy-loading it
-// keeps the ~1MB @giphy vendor chunk out of the main bundle until a user
-// actually opens the GIF picker.
-const GiphyGrid = lazy(() => import('@/components/GiphyGrid'));
+// The grid needs @ohmagif/js, which loads when the picker first opens.
+const GifGrid = lazy(() => import('@/components/GifGrid'));
 
-// PickedGIF is the shape we hand back to the composer: just the fields
-// the message body needs. The Grid's onGifClick gives us a full IGif;
-// we narrow it here so the composer doesn't pull Giphy types into its
-// own surface.
+// PickedGIF is what the composer keeps of a picked GIF: its id and the
+// size of its file. Its files' addresses come from the id.
 export interface PickedGIF {
   id: string;
-  title: string;
-  width?: number;
-  height?: number;
+  width: number;
+  height: number;
 }
 
-interface GiphyPickerProps {
+interface GifPickerProps {
+  // The workspace's ohmagif key (ohmagifKey accepted it).
   apiKey: string;
   onSelect: (gif: PickedGIF) => void;
   trigger: React.ReactNode;
@@ -33,21 +29,23 @@ const POPOVER_HEIGHT = 380;
 const POPOVER_MARGIN = 8;
 const POPOVER_PADDING_X = 16;
 
-// SEARCH_DEBOUNCE_MS keeps us under the per-key Giphy rate limits and
-// avoids the Grid restarting from scratch on every keystroke.
+// SEARCH_DEBOUNCE_MS keeps a request per word rather than per keystroke:
+// the grid starts over from the top for every new search.
 const SEARCH_DEBOUNCE_MS = 250;
 
 function computeGridWidth() {
-  /* istanbul ignore next -- SSR guard: this app is browser-only, so window is always defined in tests */
-  if (typeof window === 'undefined') return MAX_GRID_WIDTH;
   const available = window.innerWidth - POPOVER_MARGIN * 2 - POPOVER_PADDING_X;
   if (window.innerWidth <= 767) return Math.max(MIN_GRID_WIDTH, available);
   return Math.max(MIN_GRID_WIDTH, Math.min(MAX_GRID_WIDTH, available));
 }
 
-// GiphyPicker opens a popover with a search box and the lazily-loaded
-// GiphyGrid (the Giphy SDK's `<Grid>` behind React.lazy).
-export function GiphyPicker({ apiKey, onSelect, trigger, ariaLabel = 'Giphy picker', onOpenChange }: GiphyPickerProps) {
+function GridLoading() {
+  return <p className="py-3 text-center text-xs text-muted-foreground">Loading…</p>;
+}
+
+// GifPicker opens a popover with a search box over ohmagif's GIF grid:
+// trending GIFs until something is typed, then the search's.
+export function GifPicker({ apiKey, onSelect, trigger, ariaLabel = 'GIF picker', onOpenChange }: GifPickerProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
@@ -74,12 +72,8 @@ export function GiphyPicker({ apiKey, onSelect, trigger, ariaLabel = 'Giphy pick
     };
   }, [open]);
 
-  // Debounce the query so the Grid doesn't reset its scroller on
-  // every keystroke. The Grid keys off the fetchGifs identity, so a
-  // fresh callback (built from `debouncedQuery`) is what triggers a
-  // re-fetch.
   useEffect(() => {
-    const t = window.setTimeout(() => setDebouncedQuery(query), SEARCH_DEBOUNCE_MS);
+    const t = window.setTimeout(() => setDebouncedQuery(query.trim()), SEARCH_DEBOUNCE_MS);
     return () => window.clearTimeout(t);
   }, [query]);
 
@@ -132,42 +126,31 @@ export function GiphyPicker({ apiKey, onSelect, trigger, ariaLabel = 'Giphy pick
           ref={inputRef}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search GIFs..."
+          placeholder="Search GIFs"
           aria-label="Search GIFs"
           // No text-sm override — keep 16px on mobile (iOS zoom-on-focus).
           className="mb-2 h-9 touch:h-11 shrink-0"
-          data-testid="giphy-search"
+          data-testid="gif-search"
         />
         <div
           className="min-h-0 flex-1 overflow-y-auto"
           style={{ width: gridWidth, maxWidth: '100%' }}
-          data-testid="giphy-grid"
+          data-testid="gif-grid"
           data-swipe-scroll="true"
         >
           {open && (
-            <Suspense
-              fallback={
-                <p className="py-3 text-center text-xs text-muted-foreground">Loading…</p>
-              }
-            >
-              <GiphyGrid
+            <Suspense fallback={<GridLoading />}>
+              <GifGrid
                 apiKey={apiKey}
                 query={debouncedQuery}
                 width={gridWidth}
                 columns={gridColumns}
+                loader={GridLoading}
                 onPick={handlePick}
               />
             </Suspense>
           )}
         </div>
-        <a
-          href="https://giphy.com/"
-          target="_blank"
-          rel="noreferrer"
-          className="mt-2 shrink-0 self-end text-xs font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground"
-        >
-          Powered by GIPHY
-        </a>
       </PopoverPortal>
     </>
   );

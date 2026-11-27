@@ -93,7 +93,7 @@ function installFetch(): () => void {
     }
     if (url.includes('/api/v1/threads')) return json([]);
     if (url.includes('/api/v1/emojis')) return json([]);
-    if (url.includes('/api/v1/admin/settings')) return json({ maxUploadBytes: 0, allowedExtensions: [], giphyEnabled: false });
+    if (url.includes('/api/v1/admin/settings')) return json({ maxUploadBytes: 0, allowedExtensions: [] });
     if (url.includes('/api/v1/presence')) return json({ online: [ALICE_ID] });
     if (/\/conversations\/[^/?]+\/read$/.test(url)) return new Response(null, { status: 204 });
     if (/\/conversations\/[^/?]+\/(pinned|files)$/.test(url)) return json([]);

@@ -7,17 +7,19 @@ import type { HastNode } from '@/types';
 
 // Regression: scroll-induced parent re-renders MUST NOT unmount the
 // custom-tag components inside a rendered message body. If they
-// unmount, every <video> inside a GIPHY embed gets a fresh DOM node
-// and the browser re-fetches the .mp4 (the user-reported symptom:
-// "every pixel of scroll reloads all elements").
+// unmount, every GIF's <img> gets a fresh DOM node and the browser
+// loads and decodes it again (the user-reported symptom: "every pixel
+// of scroll reloads all elements").
 //
 // The check is structural: render the same tree twice via a key-
 // invalidation harness, count how many times the leaf component
 // mounts. Stable identity → mount count stays at 1 across N parent
 // re-renders.
 
-vi.mock('@/hooks/useSettings', () => ({
-  useWorkspaceSettings: () => ({ data: { giphyAPIKey: '' }, isLoading: false }),
+// The GIF's file comes from src/test/fixtures/ohmagif, never from ohmagif.
+vi.mock('@/lib/ohmagif-client', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/ohmagif-client')>()),
+  OHMAGIF_MEDIA_URL: `${window.location.origin}/src/test/fixtures/ohmagif`,
 }));
 
 const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -25,7 +27,7 @@ function wrap(children: React.ReactNode) {
   return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
 }
 
-const giphyTree: HastNode = {
+const gifTree: HastNode = {
   type: 'root',
   children: [
     {
@@ -34,8 +36,8 @@ const giphyTree: HastNode = {
       children: [
         {
           type: 'element',
-          tagName: 'ex-giphy',
-          properties: { 'data-id': 'cat-gif', 'data-width': '320', 'data-height': '240' },
+          tagName: 'ex-ohmagif',
+          properties: { 'data-id': 'eTxuLnWv7C', 'data-width': '320', 'data-height': '240' },
         },
       ],
     },
@@ -89,15 +91,15 @@ function Harness({ tree, opts }: { tree: HastNode; opts?: Parameters<typeof rend
 }
 
 describe('renderHastTree — render identity', () => {
-  it('does NOT remount an ex-giphy <video> when the parent re-renders with the same tree', async () => {
-    const screen = await render(wrap(<Harness tree={giphyTree} opts={{ giphyAPIKey: '' }} />));
+  it("does NOT remount a GIF's <img> when the parent re-renders with the same tree", async () => {
+    const screen = await render(wrap(<Harness tree={gifTree} />));
 
-    // GiphyEmbed with no apiKey renders the "GIPHY unavailable"
-    // placeholder, which is a stable <span> inside <ex-giphy>. Tag
-    // it once via a data attribute and watch for the SAME DOM node
-    // across re-renders (a remount would replace it).
-    const beforeProbe = await screen.getByText('GIPHY unavailable').element();
-    (beforeProbe as HTMLElement).setAttribute('data-stability-marker', 'original');
+    // Tag the GIF's picture once via a data attribute and watch for the
+    // SAME DOM node across re-renders (a remount would replace it).
+    await expect.element(screen.getByRole('link', { name: 'GIF' })).toBeVisible();
+    const beforeProbe = document.querySelector('[data-testid="gif-embed"] img') as HTMLImageElement;
+    await vi.waitFor(() => expect(beforeProbe.complete && beforeProbe.naturalWidth).toBe(24));
+    beforeProbe.setAttribute('data-stability-marker', 'original');
 
     // Trigger several parent re-renders.
     const bump = screen.getByTestId('bump').element() as HTMLButtonElement;
@@ -106,12 +108,11 @@ describe('renderHastTree — render identity', () => {
     bump.click();
     await new Promise((r) => setTimeout(r, 50));
 
-    const afterProbe = document.querySelector('[data-stability-marker="original"]');
-    expect(afterProbe).not.toBeNull();
-    // If GiphyEmbed had unmounted, the new <video>/<span> would NOT
-    // carry our data-stability-marker — it's a tag we wrote onto the
-    // original DOM node only.
-    expect(afterProbe?.textContent).toBe('GIPHY unavailable');
+    // If GifEmbed had unmounted, the new <img> would NOT carry our
+    // data-stability-marker — it's a tag we wrote onto the original DOM
+    // node only.
+    expect(document.querySelector('[data-testid="gif-embed"] img')).toBe(beforeProbe);
+    expect(beforeProbe.getAttribute('data-stability-marker')).toBe('original');
   });
 
   it('does NOT remount the user-mention pill across parent re-renders', async () => {
@@ -149,8 +150,8 @@ describe('renderHastTree — render identity', () => {
     // elements whose component type at each position is identical
     // (===). We probe that here via direct inspection of the React
     // element tree the function returns.
-    const a = renderHastTree(giphyTree, { giphyAPIKey: '' });
-    const b = renderHastTree(giphyTree, { giphyAPIKey: '' });
+    const a = renderHastTree(gifTree);
+    const b = renderHastTree(gifTree);
     // Both calls are wrapped in a RenderOptsContext.Provider — drill
     // down once.
     type ElementWithChildren = { props?: { children?: unknown } };

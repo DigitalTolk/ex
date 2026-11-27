@@ -3171,11 +3171,13 @@ export interface WorkspaceSettings {
    */
   allowedExtensions: string[];
   /**
-   * GiphyAPIKey, when non-empty, enables the Giphy picker in the
-   * composer. GIPHY requires client-side API/media requests, so this
-   * browser key is sent to authenticated clients that can use the picker.
+   * OhmagifAPIKey, when non-empty, turns on the GIF picker in the
+   * composer. The picker asks ohmagif.com directly, so this key goes to
+   * every signed-in client; ohmagif refuses it on any site the key does
+   * not list. GIFs in messages need no key: they show from their files'
+   * lasting addresses.
    */
-  giphyAPIKey?: string;
+  ohmagifAPIKey?: string;
   /**
    * RunnersInApp turns on the Runners tab in the AI hub, where people set
    * up, start and disconnect ex-runner (the desktop app can install and run

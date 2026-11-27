@@ -136,9 +136,9 @@ func TestAdminHandler_UpdateSettings_OK(t *testing.T) {
 	}
 }
 
-func TestAdminHandler_GetSettings_GiphyKeyVisibleForMember(t *testing.T) {
+func TestAdminHandler_GetSettings_OhmagifKeyVisibleForMember(t *testing.T) {
 	settingsSvc := service.NewSettingsService(&fakeSettingsStore{
-		current: &model.WorkspaceSettings{GiphyAPIKey: "secret-giphy-key"},
+		current: &model.WorkspaceSettings{OhmagifAPIKey: "omg_0123456789abcdefABCDEF0123456789"},
 	})
 	h := NewAdminHandler(settingsSvc)
 	jwtMgr := auth.NewJWTManager("redact-secret", 15*time.Minute, 720*time.Hour)
@@ -158,17 +158,14 @@ func TestAdminHandler_GetSettings_GiphyKeyVisibleForMember(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
 		t.Fatal(err)
 	}
-	if got["giphyAPIKey"] != "secret-giphy-key" {
-		t.Errorf("member should receive browser Giphy key, got %v", got["giphyAPIKey"])
-	}
-	if got["giphyEnabled"] != true {
-		t.Errorf("giphyEnabled = %v, want true", got["giphyEnabled"])
+	if got["ohmagifAPIKey"] != "omg_0123456789abcdefABCDEF0123456789" {
+		t.Errorf("member should receive the browser ohmagif key, got %v", got["ohmagifAPIKey"])
 	}
 }
 
-func TestAdminHandler_GetSettings_GiphyKeyVisibleForAdmin(t *testing.T) {
+func TestAdminHandler_GetSettings_OhmagifKeyVisibleForAdmin(t *testing.T) {
 	settingsSvc := service.NewSettingsService(&fakeSettingsStore{
-		current: &model.WorkspaceSettings{GiphyAPIKey: "secret-giphy-key"},
+		current: &model.WorkspaceSettings{OhmagifAPIKey: "omg_0123456789abcdefABCDEF0123456789"},
 	})
 	h := NewAdminHandler(settingsSvc)
 	jwtMgr := auth.NewJWTManager("admin-vis-secret", 15*time.Minute, 720*time.Hour)
@@ -188,24 +185,21 @@ func TestAdminHandler_GetSettings_GiphyKeyVisibleForAdmin(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
 		t.Fatal(err)
 	}
-	if got["giphyAPIKey"] != "secret-giphy-key" {
-		t.Errorf("admin should see giphyAPIKey, got %v", got["giphyAPIKey"])
-	}
-	if got["giphyEnabled"] != true {
-		t.Errorf("giphyEnabled = %v, want true", got["giphyEnabled"])
+	if got["ohmagifAPIKey"] != "omg_0123456789abcdefABCDEF0123456789" {
+		t.Errorf("admin should see ohmagifAPIKey, got %v", got["ohmagifAPIKey"])
 	}
 }
 
-func TestAdminHandler_UpdateSettings_GiphyRoundtrip(t *testing.T) {
+func TestAdminHandler_UpdateSettings_OhmagifRoundtrip(t *testing.T) {
 	store := &fakeSettingsStore{}
 	settingsSvc := service.NewSettingsService(store)
 	h := NewAdminHandler(settingsSvc)
-	jwtMgr := auth.NewJWTManager("giphy-round-secret", 15*time.Minute, 720*time.Hour)
+	jwtMgr := auth.NewJWTManager("ohmagif-round-secret", 15*time.Minute, 720*time.Hour)
 	admin := &model.User{ID: "u-adm-rt", Email: "a@x.com", SystemRole: model.SystemRoleAdmin}
 	token := makeTokenForUser(jwtMgr, admin)
 
 	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.UpdateSettings))
-	body := `{"maxUploadBytes":2048,"allowedExtensions":["png"],"giphyAPIKey":"  brand-new-key  "}`
+	body := `{"maxUploadBytes":2048,"allowedExtensions":["png"],"ohmagifAPIKey":"  omg_0123456789abcdefABCDEF0123456789  "}`
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/admin/settings", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
@@ -214,19 +208,16 @@ func TestAdminHandler_UpdateSettings_GiphyRoundtrip(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
 	}
-	if store.current == nil || store.current.GiphyAPIKey != "brand-new-key" {
-		t.Errorf("stored key = %q, want trimmed 'brand-new-key'", store.current.GiphyAPIKey)
+	if store.current == nil || store.current.OhmagifAPIKey != "omg_0123456789abcdefABCDEF0123456789" {
+		t.Errorf("stored key = %q, want it trimmed", store.current.OhmagifAPIKey)
 	}
 
 	var got map[string]any
 	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
 		t.Fatal(err)
 	}
-	if got["giphyAPIKey"] != "brand-new-key" {
-		t.Errorf("response key = %v, want 'brand-new-key'", got["giphyAPIKey"])
-	}
-	if got["giphyEnabled"] != true {
-		t.Errorf("giphyEnabled = %v, want true", got["giphyEnabled"])
+	if got["ohmagifAPIKey"] != "omg_0123456789abcdefABCDEF0123456789" {
+		t.Errorf("response key = %v, want it trimmed", got["ohmagifAPIKey"])
 	}
 }
 
@@ -2644,5 +2635,40 @@ func TestAdminHandler_RunnersInAppSwitch(t *testing.T) {
 	}
 	if got := call(h.UpdateSettings, http.MethodPut, admin, `{"runnersInApp":false}`); got["runnersInApp"] != false {
 		t.Fatalf("turn off = %v", got["runnersInApp"])
+	}
+}
+
+// The ohmagif key survives a save that leaves it out (a client from before
+// GIPHY was replaced, which knew no such field); a save that names it sets
+// or clears it, and a malformed key is refused without touching the stored
+// one.
+func TestAdminHandler_UpdateSettings_OhmagifKeyKeptUnlessNamed(t *testing.T) {
+	const key = "omg_0123456789abcdefABCDEF0123456789"
+	store := &fakeSettingsStore{current: &model.WorkspaceSettings{OhmagifAPIKey: key}}
+	h := NewAdminHandler(service.NewSettingsService(store))
+	jwtMgr := auth.NewJWTManager("ohmagif-keep-secret", 15*time.Minute, 720*time.Hour)
+	admin := makeTokenForUser(jwtMgr, &model.User{ID: "u-adm-keep", Email: "a@x.com", SystemRole: model.SystemRoleAdmin})
+	put := func(body string) (int, map[string]any) {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPut, "/api/v1/admin/settings", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+admin)
+		rec := httptest.NewRecorder()
+		middleware.Auth(jwtMgr)(http.HandlerFunc(h.UpdateSettings)).ServeHTTP(rec, req)
+		var out map[string]any
+		_ = json.Unmarshal(rec.Body.Bytes(), &out)
+		return rec.Code, out
+	}
+
+	if code, got := put(`{"maxUploadBytes":2048,"allowedExtensions":["png"]}`); code != http.StatusOK || got["ohmagifAPIKey"] != key {
+		t.Fatalf("save without the key = %d %v, want the key kept", code, got)
+	}
+	if code, got := put(`{"ohmagifAPIKey":"dc6zaTOxFJmzC"}`); code != http.StatusBadRequest || got["error"] == nil {
+		t.Fatalf("malformed key = %d %v, want 400", code, got)
+	}
+	if store.current.OhmagifAPIKey != key {
+		t.Fatalf("stored key after a refused save = %q", store.current.OhmagifAPIKey)
+	}
+	if code, got := put(`{"ohmagifAPIKey":""}`); code != http.StatusOK || got["ohmagifAPIKey"] != nil {
+		t.Fatalf("clear = %d %v, want the key gone", code, got)
 	}
 }

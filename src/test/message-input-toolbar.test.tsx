@@ -19,7 +19,7 @@ function editorDoc(editor: HTMLElement) {
 const mockUploadAttachment = vi.fn();
 const mockDeleteDraftMutateAsync = vi.fn().mockResolvedValue(undefined);
 const workspaceSettings = vi.hoisted(() => ({
-  current: { maxUploadBytes: 0, allowedExtensions: [], giphyEnabled: false, giphyAPIKey: '' },
+  current: { maxUploadBytes: 0, allowedExtensions: [] },
 }));
 
 vi.mock('@/hooks/useAttachments', () => ({
@@ -95,7 +95,7 @@ function setMobileMatch(matches: boolean) {
 describe('MessageInput toolbar buttons', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    workspaceSettings.current = { maxUploadBytes: 0, allowedExtensions: [], giphyEnabled: false, giphyAPIKey: '' };
+    workspaceSettings.current = { maxUploadBytes: 0, allowedExtensions: [] };
     setMobileMatch(false);
   });
 
@@ -118,8 +118,7 @@ describe('MessageInput toolbar buttons', () => {
     workspaceSettings.current = {
       maxUploadBytes: 0,
       allowedExtensions: [],
-      giphyEnabled: true,
-      giphyAPIKey: 'browser-key',
+      ohmagifAPIKey: 'omg_0123456789abcdefABCDEF0123456789',
     };
     renderWithClient(<MessageInput onSend={vi.fn()} initialBody="hello" />);
 

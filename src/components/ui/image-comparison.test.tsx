@@ -27,8 +27,8 @@ describe('ImageComparison', () => {
     const { slider } = renderComparison();
     expect(slider).toHaveAttribute('aria-valuenow', '50');
     expect(slider).toHaveAttribute('aria-valuetext', '50% before');
-    await waitFor(() => expect(screen.getByAltText('Before').style.clipPath).toBe('inset(0 50% 0 0)'));
-    expect(screen.getByAltText('After').style.clipPath).toBe('inset(0 0 0 50%)');
+    await waitFor(() => expect(screen.getByAltText('Before').style.clipPath).toBe('inset(0px 50% 0px 0px)'));
+    expect(screen.getByAltText('After').style.clipPath).toBe('inset(0px 0px 0px 50%)');
   });
 
   it('drags with the pointer, clamped to the stage', async () => {
@@ -49,7 +49,7 @@ describe('ImageComparison', () => {
     fireEvent.pointerCancel(stage);
     fireEvent.pointerMove(stage, { clientX: 400 });
     expect(slider).toHaveAttribute('aria-valuenow', '50');
-    await waitFor(() => expect(screen.getByAltText('Before').style.clipPath).toBe('inset(0 50% 0 0)'));
+    await waitFor(() => expect(screen.getByAltText('Before').style.clipPath).toBe('inset(0px 50% 0px 0px)'));
   });
 
   it('ignores secondary mouse buttons and a zero-width stage', () => {

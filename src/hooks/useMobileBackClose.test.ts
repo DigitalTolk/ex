@@ -176,4 +176,56 @@ describe('useMobileBackClose', () => {
     popTo(null);
     expect(closeB).toHaveBeenCalledTimes(1);
   });
+
+  // One overlay swapped for another, and the second closed before the first's
+  // consume traversal has landed (the panels' swap on a phone, then the page
+  // unmounting). Its own back() waits for that traversal; what it does next
+  // depends on where history came to rest.
+  describe('a close while another consume is on its way', () => {
+    const afterListeners = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+    function swapThenClose() {
+      const a = renderHook(() => useMobileBackClose(true, vi.fn()));
+      const aState = window.history.state;
+      a.unmount(); // consume #1, still on its way
+      const b = renderHook(() => useMobileBackClose(true, vi.fn()));
+      b.unmount(); // asks for consume #2 before #1 landed
+      return aState;
+    }
+
+    it('waits, and goes no further when history landed below both sentinels (spec ordering)', async () => {
+      swapThenClose();
+      expect(backSpy).toHaveBeenCalledTimes(1);
+      // WebKit 27 / Safari 26.2: the traversal resolves from where it was
+      // called and drops the sentinel pushed meanwhile — it lands on the app's
+      // own entry. Another back() would leave the app.
+      popTo(null);
+      await afterListeners();
+      expect(backSpy).toHaveBeenCalledTimes(1);
+      // Nothing is left waiting: the next close consumes straight away.
+      const c = renderHook(() => useMobileBackClose(true, vi.fn()));
+      c.unmount();
+      expect(backSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('waits, then consumes the sentinel left behind when history landed on it (legacy ordering)', async () => {
+      const aState = swapThenClose();
+      popTo(aState); // resolved from the top: lands on A's now-stale sentinel
+      await afterListeners();
+      expect(backSpy).toHaveBeenCalledTimes(2);
+      popTo(null);
+      await afterListeners();
+      expect(backSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('never goes back off a sentinel an open overlay still owns, the app root included', async () => {
+      const root = renderHook(() => useMobileBackClose(true, vi.fn(), { appRoot: true }));
+      const rootState = window.history.state;
+      swapThenClose();
+      popTo(rootState);
+      await afterListeners();
+      expect(backSpy).toHaveBeenCalledTimes(1);
+      root.unmount();
+    });
+  });
 });

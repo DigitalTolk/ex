@@ -616,7 +616,7 @@ describe('MessageList Virtuoso wiring (regression contract)', () => {
     expect(captured.defaultItemHeight).toBe(30);
     expect(captured.atBottomThreshold).toBe(4);
     // Overscan keeps about a screen and a bit of rows mounted off-viewport so
-    // fast scrolling doesn't tear down and remount avatars / Giphy
+    // fast scrolling doesn't tear down and remount avatars / GIF
     // embeds / unfurl cards on every off-screen → on-screen transition
     // (per tier: see 'MessageList overscan').
     expect(captured.increaseViewportBy).toEqual({ top: 1200, bottom: 1200 });

@@ -39,7 +39,7 @@ vi.mock('@/hooks/useEmoji', async (orig) => ({
   useEmojiMap: () => ({ data: {} }),
 }));
 vi.mock('@/hooks/useSettings', () => ({
-  useWorkspaceSettings: () => ({ data: { maxUploadBytes: 0, allowedExtensions: [], giphyEnabled: false } }),
+  useWorkspaceSettings: () => ({ data: { maxUploadBytes: 0, allowedExtensions: [] } }),
   useUpdateWorkspaceSettings: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 

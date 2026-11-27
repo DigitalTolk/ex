@@ -15,7 +15,7 @@ function editorDoc(editor: HTMLElement) {
 const mockUploadAttachment = vi.fn();
 const mockDeleteDraftMutateAsync = vi.fn().mockResolvedValue(undefined);
 const workspaceSettings = vi.hoisted(() => ({
-  current: { maxUploadBytes: 0, allowedExtensions: [], giphyEnabled: false, giphyAPIKey: '' },
+  current: { maxUploadBytes: 0, allowedExtensions: [] },
 }));
 
 vi.mock('@/hooks/useAttachments', () => ({

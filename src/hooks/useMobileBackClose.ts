@@ -21,6 +21,37 @@ let pendingConsumes = 0;
 const consumedPops = new WeakSet<Event>();
 // Overlays whose sentinel is armed right now (open on a phone).
 const armedOverlays = new Set<number>();
+// Every armed sentinel, the app root's included: what a deferred consume must
+// never go back off.
+const liveSentinels = new Set<number>();
+// Consumes held back because another one was still on its way. Engines that
+// follow the HTML spec's session history (WebKit 27, Safari 26.2) resolve a
+// queued history.back() from the entry current when it was CALLED, and drop
+// a sentinel pushed meanwhile: one overlay swapped for another lands below
+// both sentinels. A second back() issued before that settles then steps off
+// the app's own first entry (out of the app). So a consume asked for while
+// another is in flight waits for it to land, then goes back only if history
+// rests on a sentinel no open overlay owns.
+let deferredConsumes = 0;
+
+function consume(): void {
+  pendingConsumes += 1;
+  window.history.back();
+}
+
+// settleDeferredConsume runs once a consume traversal has landed and every
+// popstate listener has had its turn (a still-open overlay may have restored
+// its sentinel). Stopping on a real entry or a live sentinel drops the rest:
+// going back from there would leave what the user is on.
+function settleDeferredConsume(): void {
+  const marker = (window.history.state as Record<string, unknown> | null)?.[OVERLAY_MARKER];
+  if (typeof marker === 'number' && !liveSentinels.has(marker)) {
+    deferredConsumes -= 1;
+    consume();
+    return;
+  }
+  deferredConsumes = 0;
+}
 
 // hasOpenBackOverlay: is an overlay open that Back should close? The phone
 // app's hardware Back asks this first (AppLayout's __exMobileBack), so it pops
@@ -36,6 +67,9 @@ if (typeof window !== 'undefined') {
     if (pendingConsumes > 0) {
       pendingConsumes -= 1;
       consumedPops.add(e);
+      // A task, not a microtask: the browser checkpoints microtasks between
+      // listeners, and the per-overlay ones below must run first.
+      if (pendingConsumes === 0 && deferredConsumes > 0) setTimeout(settleDeferredConsume, 0);
     }
   });
 }
@@ -44,7 +78,9 @@ if (typeof window !== 'undefined') {
 // (whose traversal a jsdom spy swallowed) can't leak into the next.
 export function resetMobileBackCloseForTests(): void {
   pendingConsumes = 0;
+  deferredConsumes = 0;
   armedOverlays.clear();
+  liveSentinels.clear();
 }
 
 function pushSentinel(id: number): void {
@@ -86,6 +122,7 @@ export function useMobileBackClose(
     overlaySequence += 1;
     const id = overlaySequence;
     pushSentinel(id);
+    liveSentinels.add(id);
     if (!appRoot) armedOverlays.add(id);
     const onPop = (e: PopStateEvent) => {
       const state = window.history.state as Record<string, unknown> | null;
@@ -107,12 +144,12 @@ export function useMobileBackClose(
     window.addEventListener('popstate', onPop);
     return () => {
       armedOverlays.delete(id);
+      liveSentinels.delete(id);
       window.removeEventListener('popstate', onPop);
       const state = window.history.state as Record<string, unknown> | null;
-      if (state?.[OVERLAY_MARKER] === id) {
-        pendingConsumes += 1;
-        window.history.back();
-      }
+      if (state?.[OVERLAY_MARKER] !== id) return;
+      if (pendingConsumes > 0) deferredConsumes += 1;
+      else consume();
     };
   }, [open, isMobile, onCloseRef, appRoot]);
 }

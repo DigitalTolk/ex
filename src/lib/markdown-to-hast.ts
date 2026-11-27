@@ -1,3 +1,4 @@
+import { isOhmagifId } from '@/lib/ohmagif';
 import type { HastNode } from '@/types';
 import { EMOJI_SHORTCODE_RE, EMOJI_SHORTCODE_TONED_RE } from './emoji-shortcodes';
 import { MENTION_TOKEN_RE, GROUP_MENTION_RE, CHANNEL_MENTION_RE, mentionTokenFromMatch } from './mention-syntax';
@@ -36,9 +37,22 @@ const STRIKE_RE = /~~([^~]+)~~/;
 const ITALIC_RE = /\*([^*\n]+)\*/;
 const INLINE_CODE_RE = /`([^`\n]+)`/;
 const BARE_URL_RE = /https?:\/\/[^\s<>"]+/;
+
 // An email address, by the rule the composer highlights it with (the GFM
 // autolink of @lezer/markdown), as on the server.
 const EMAIL_RE = /(^|[^\w])([\w.+-]{1,100}@[\w-]+(?:\.[\w.-]+)+)/;
+
+// gifRef reads a picked GIF's pseudo URL: `ohmagif:<id>`, or `giphy:<id>`
+// for one picked before ohmagif replaced GIPHY. An `ohmagif:` ref whose id
+// is malformed is no GIF (it stays text), as on the server.
+function gifRef(url: string): { tag: 'ex-ohmagif' | 'ex-giphy'; id: string } | null {
+  if (url.startsWith('ohmagif:')) {
+    const id = url.slice('ohmagif:'.length);
+    return isOhmagifId(id) ? { tag: 'ex-ohmagif', id } : null;
+  }
+  if (url.startsWith('giphy:')) return { tag: 'ex-giphy', id: url.slice('giphy:'.length) };
+  return null;
+}
 
 function el(tagName: string, properties?: Record<string, unknown>, children: HastNode[] = []): HastNode {
   return { type: 'element', tagName, properties, children } as HastNode;
@@ -104,20 +118,16 @@ const INLINE_KINDS: InlineKind[] = [
   // hydrator renders plain text when no onTagClick handler is wired.
   leadKind(HASHTAG_RE, (m) => [text(m[1]), el('ex-hashtag', { 'data-tag': m[2].toLowerCase(), 'data-value': `#${m[2]}` })]),
 
-  // Persisted GIPHY picks use image-markdown syntax with a `giphy:<id>`
-  // pseudo URL. Raw image/video URLs are intentionally left as literal
-  // text: message markdown must not inject arbitrary media.
+  // A picked GIF is image markdown with a GIF pseudo URL (gifRef). Raw
+  // image/video URLs are intentionally left as literal text: message
+  // markdown must not inject arbitrary media.
   kind(IMAGE_RE, (m) => {
-    if (m[2].startsWith('giphy:')) {
-      const props: Record<string, unknown> = {
-        'data-id': m[2].slice('giphy:'.length),
-        'data-value': m[0],
-      };
-      if (m[3]) props['data-width'] = m[3];
-      if (m[4]) props['data-height'] = m[4];
-      return [el('ex-giphy', props)];
-    }
-    return [el('ex-media-literal', { 'data-value': m[0] })];
+    const ref = gifRef(m[2]);
+    if (!ref) return [el('ex-media-literal', { 'data-value': m[0] })];
+    const props: Record<string, unknown> = { 'data-id': ref.id, 'data-value': m[0] };
+    if (m[3]) props['data-width'] = m[3];
+    if (m[4]) props['data-height'] = m[4];
+    return [el(ref.tag, props)];
   }),
 
   // link: [text](url). URL-scheme safety is enforced by the hydrator's

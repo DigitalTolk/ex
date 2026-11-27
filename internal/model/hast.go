@@ -18,9 +18,9 @@ func marshalJSON(v interface{}) ([]byte, error) { return json.Marshal(v) }
 //	{ "type": "text",    "value": "..." }
 //
 // Custom domain tags use `tagName: "ex-mention-user"`, `"ex-hashtag"`,
-// `"ex-giphy"` and so on; the frontend's components map maps them to
+// `"ex-ohmagif"` and so on; the frontend's components map maps them to
 // the corresponding React component (mention pill, hashtag button,
-// GiphyEmbed, …) so per-viewer behaviour stays on the client without
+// GifEmbed, …) so per-viewer behaviour stays on the client without
 // re-parsing on every render.
 //
 // Lives in `model` (not `service`) because it's a wire/data type:

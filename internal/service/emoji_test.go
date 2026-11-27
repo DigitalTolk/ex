@@ -160,10 +160,13 @@ func TestEmojiService_Create_PresignError(t *testing.T) {
 
 func TestEmojiService_Create_GuestForbidden(t *testing.T) {
 	svc, _, users, _ := setupEmojiSvc()
+	// A signer, so the guest check is what refuses (not the missing signer).
+	svc.SetSigner(&fakeEmojiSigner{urls: map[string]string{}})
 	users.users["g1"] = &model.User{ID: "g1", SystemRole: model.SystemRoleGuest}
 
-	if _, err := svc.Create(context.Background(), "g1", "blob-fire", "uploads/g1/fire.png", false); err == nil {
-		t.Fatal("expected guest error")
+	_, err := svc.Create(context.Background(), "g1", "blob-fire", "uploads/g1/fire.png", false)
+	if !errors.Is(err, apperr.ErrForbidden) {
+		t.Fatalf("err = %v, want the guest rejection", err)
 	}
 }
 

@@ -8,8 +8,18 @@ import { renderMarkdown } from './markdown';
 // and as a fallback when the backend hast isn't available. This file
 // pushes coverage on the inline + block regex branches.
 
-vi.mock('@/hooks/useSettings', () => ({
-  useWorkspaceSettings: () => ({ data: { giphyAPIKey: '' }, isLoading: false }),
+// An old GIPHY GIF's file comes from a path nothing serves, never from
+// GIPHY: a test must not reach out to it.
+vi.mock('@/lib/giphy', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/giphy')>()),
+  giphyFileURL: (id: string) => `${window.location.origin}/__giphy__/${id}.gif`,
+}));
+
+// A GIF's files come from src/test/fixtures/ohmagif, never from ohmagif:
+// a test must not reach out to it.
+vi.mock('@/lib/ohmagif-client', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/ohmagif-client')>()),
+  OHMAGIF_MEDIA_URL: `${window.location.origin}/src/test/fixtures/ohmagif`,
 }));
 
 const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -242,11 +252,20 @@ describe('renderMarkdown (legacy regex pipeline)', () => {
     expect(document.body.textContent).not.toContain('javascript:');
   });
 
-  it('renders a giphy: image markdown reference as a GiphyEmbed', async () => {
-    await render(wrap(<>{renderMarkdown('![GIPHY](giphy:abc =200x150)')}</>));
-    // Without a real apiKey the GiphyEmbed renders the unavailable
-    // placeholder — confirm it actually mounted.
-    expect(document.body.textContent).toMatch(/GIPHY/);
+  it('renders an ohmagif: image markdown reference as the GIF, at the size it kept', async () => {
+    const screen = await render(wrap(<>{renderMarkdown('![GIF](ohmagif:eTxuLnWv7C =200x150)')}</>));
+    const gif = screen.getByRole('link', { name: 'GIF' });
+    await expect.element(gif).toHaveAttribute('href', 'https://ohmagif.com/g/eTxuLnWv7C');
+    const r = gif.element().getBoundingClientRect();
+    expect([r.width, r.height]).toEqual([200, 150]);
+  });
+
+  it('renders a giphy: image markdown reference as the GIF, credited to GIPHY', async () => {
+    const screen = await render(wrap(<>{renderMarkdown('![GIPHY](giphy:abc =200x150)')}</>));
+    await expect.element(screen.getByRole('link', { name: 'Powered by GIPHY' })).toHaveAttribute('href', 'https://giphy.com/gifs/abc');
+    // The room it kept, whether or not the GIF ever arrives.
+    const gif = screen.getByTestId('giphy-gif').element().firstElementChild!.getBoundingClientRect();
+    expect([gif.width, gif.height]).toEqual([200, 150]);
   });
 
   it('leaves a raw image markdown reference as literal text (no img injection)', async () => {
@@ -369,11 +388,14 @@ describe('renderMarkdown (legacy regex pipeline)', () => {
     expect(document.querySelector('button[data-tag="kickoff"]')).not.toBeNull();
   });
 
-  it('renders a giphy embed without width/height when dimensions are omitted', async () => {
-    // `giphy:` ref with no `=WxH` suffix → m[3]/m[4] undefined → the `: undefined`
-    // sides of both Number() ternaries.
-    await render(wrap(<>{renderMarkdown('![GIPHY](giphy:xyz)')}</>));
-    expect(document.body.textContent).toMatch(/GIPHY/);
+  it('renders a GIF embed without width/height when dimensions are omitted', async () => {
+    // `ohmagif:` ref with no `=WxH` suffix → m[3]/m[4] undefined → the `: undefined`
+    // sides of both Number() ternaries, and the 4:3 room.
+    const screen = await render(wrap(<>{renderMarkdown('![GIF](ohmagif:eTxuLnWv7C)')}</>));
+    const gif = screen.getByRole('link', { name: 'GIF' });
+    await expect.element(gif).toBeVisible();
+    const r = gif.element().getBoundingClientRect();
+    expect([r.width, r.height]).toEqual([320, 240]);
   });
 
   it('leaves an unknown :shortcode: as literal text', async () => {
