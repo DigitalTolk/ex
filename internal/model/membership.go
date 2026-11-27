@@ -34,6 +34,10 @@ type UserChannel struct {
 	// Archived mirrors the channel's archived (read-only) flag, stamped at
 	// read time by ListUserChannels; the sidebar groups archived channels.
 	Archived bool `json:"archived,omitempty" dynamodbav:"-"`
+	// LastMessageAt mirrors the channel's last top-level message time,
+	// stamped at read time by ListUserChannels for the sidebar's "Recent
+	// activity" sort.
+	LastMessageAt *time.Time `json:"lastMessageAt,omitempty" dynamodbav:"-"`
 	// Icon mirrors the channel's emoji icon, stamped at read time like
 	// Archived, so changing it writes one row, not one per member.
 	Icon string `json:"icon,omitempty" dynamodbav:"-"`

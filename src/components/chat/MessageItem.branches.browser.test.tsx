@@ -217,6 +217,40 @@ describe('MessageItem desktop toolbar + menu branches', () => {
     }
   });
 
+  it('outlines a pinned message like a card, with no side bar and nothing moved', async () => {
+    const measure = () => {
+      const row = document.querySelector('[data-message-id]') as HTMLElement;
+      const text = (row.querySelector('[data-testid="message-text-column"]') as HTMLElement).getBoundingClientRect();
+      return { row, height: row.getBoundingClientRect().height, textLeft: text.left - row.getBoundingClientRect().left };
+    };
+    const plain = await renderWithProviders(
+      <MessageItem message={makeMessage()} authorName="Alice" isOwn channelId="channel-1" channelSlug="general" currentUserId="user-1" />,
+    );
+    const before = measure();
+    expect(getComputedStyle(before.row, '::before').content).toBe('none');
+    await plain.unmount();
+
+    await renderWithProviders(
+      <MessageItem message={makeMessage({ pinned: true })} authorName="Alice" isOwn channelId="channel-1" channelSlug="general" currentUserId="user-1" />,
+    );
+    const pinned = measure();
+    // The outline is painted over the row: the ordinary border, with the
+    // pin's colour down the left edge, far along the top and round the bottom
+    // corner. It takes no clicks and no room.
+    const outline = getComputedStyle(pinned.row, '::before');
+    expect(outline.backgroundSize).toContain('min(36%, 240px) 50%');
+    expect(outline.backgroundSize).toContain('48px 100%');
+    expect(outline.backgroundImage).not.toContain('deg');
+    expect(outline.backgroundColor).not.toBe('rgba(0, 0, 0, 0)');
+    expect(outline.paddingLeft).toBe('2px');
+    expect(outline.pointerEvents).toBe('none');
+    expect(getComputedStyle(pinned.row).borderLeftWidth).toBe('0px');
+    expect(pinned.textLeft).toBe(before.textLeft);
+    // The pinned row is taller only by its "Pinned" label line, if at all.
+    expect(Math.abs(pinned.height - before.height)).toBeLessThan(2);
+    expect(document.querySelector('[aria-label="Pinned"]')).not.toBeNull();
+  });
+
   it('toggles pin from the kebab menu (pinned message variant)', async () => {
     if (window.innerWidth <= 767) return;
     const screen = await renderWithProviders(

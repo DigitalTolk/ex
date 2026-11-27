@@ -19,6 +19,8 @@ type mockUserStateStore struct {
 	setErr    error
 	deleteErr error
 	listErr   error
+	// listErrKind, when set, fails only that kind's listing with listErr.
+	listErrKind model.UserStateKind
 	// listedKinds is every kind ListUserState was asked for.
 	listedKinds []model.UserStateKind
 }
@@ -71,7 +73,7 @@ func (m *mockUserStateStore) ListUserState(_ context.Context, userID string, kin
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.listedKinds = append(m.listedKinds, kind)
-	if m.listErr != nil {
+	if m.listErr != nil && (m.listErrKind == "" || m.listErrKind == kind) {
 		return nil, m.listErr
 	}
 	out := make([]*model.UserStateItem, 0)
@@ -99,6 +101,11 @@ func TestUserStateService_ErrorsAndNilInputs(t *testing.T) {
 	store.listErr = assertErr("list")
 	if _, err := NewUserStateService(store, nil).List(ctx, "u-1"); err == nil {
 		t.Fatal("expected list error")
+	}
+	store = newMockUserStateStore()
+	store.listErr, store.listErrKind = assertErr("list"), model.UserStateSidebarSort
+	if _, err := NewUserStateService(store, nil).List(ctx, "u-1"); err == nil {
+		t.Fatal("expected sidebar sort list error")
 	}
 	store = newMockUserStateStore()
 	store.setErr = assertErr("set")
@@ -274,4 +281,31 @@ func TestUserStateService_ParentLeft_DropsThatChannelsThreadMarkers(t *testing.T
 	store.listErr = errors.New("dynamo down")
 	svc.ParentLeft(ctx, []string{"u-1"}, "ch-left")
 	NewUserStateService(nil, publisher).ParentLeft(ctx, []string{"u-1"}, "ch-left")
+}
+
+func TestUserStateService_SidebarSorts(t *testing.T) {
+	ctx := context.Background()
+	svc := NewUserStateService(newMockUserStateStore(), newMockPublisher())
+
+	if err := svc.SetSidebarSort(ctx, "u-1", "__channels__", model.SidebarSortRecent); err != nil {
+		t.Fatalf("SetSidebarSort: %v", err)
+	}
+	if err := svc.SetSidebarSort(ctx, "u-1", "cat-1", model.SidebarSortAZ); err != nil {
+		t.Fatalf("SetSidebarSort cat-1: %v", err)
+	}
+	// Choosing again replaces the section's row.
+	if err := svc.SetSidebarSort(ctx, "u-1", "__channels__", model.SidebarSortAZ); err != nil {
+		t.Fatalf("SetSidebarSort again: %v", err)
+	}
+	state, err := svc.List(ctx, "u-1")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(state.SidebarSorts) != 2 || state.SidebarSorts["__channels__"] != model.SidebarSortAZ || state.SidebarSorts["cat-1"] != model.SidebarSortAZ {
+		t.Fatalf("sidebar sorts = %#v", state.SidebarSorts)
+	}
+	// Another user's sorts are their own.
+	if other, _ := svc.List(ctx, "u-2"); len(other.SidebarSorts) != 0 {
+		t.Fatalf("u-2 sidebar sorts = %#v", other.SidebarSorts)
+	}
 }

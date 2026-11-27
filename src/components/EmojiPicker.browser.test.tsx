@@ -143,6 +143,45 @@ describe('EmojiPicker browser', () => {
     ];
   });
 
+  // Windows, Linux, and a Mac set to always show scroll bars give the bar its
+  // own width. The grid must still fit beside it: the last column whole, and
+  // nothing to scroll sideways.
+  it.each([
+    ['an overlay scrollbar', 0],
+    ['a classic scrollbar', 17],
+  ])('fits every column beside %s', async (_label, bar) => {
+    if (window.__EX_FORCE_DEVICE__ === 'touch') return;
+    // Headless browsers hide scrollbars, so a classic bar is stood in for by
+    // a transparent edge of the same width: it narrows the body as a bar would.
+    const style = document.createElement('style');
+    style.textContent = bar ? `[data-testid="emoji-scroll-body"] { border-right: ${bar}px solid transparent; }` : '';
+    document.head.appendChild(style);
+    try {
+      seedFrequency([':tada:', ':smile:']);
+      const screen = await render(<Wrap><EmojiPicker onSelect={vi.fn()} /></Wrap>);
+      await screen.getByLabelText('Open emoji picker').click();
+      const body = await vi.waitUntil(() => document.querySelector<HTMLElement>('[data-testid="emoji-scroll-body"]'));
+      // The main grid: the one the picker's tiles fill.
+      const grid = await vi.waitUntil(() => body.querySelector<HTMLElement>('[data-testid="emoji-picker-tile"]')?.parentElement ?? null);
+      // The bar takes its width.
+      expect(body.offsetWidth - body.clientWidth).toBe(bar);
+      expect(body.scrollWidth).toBeLessThanOrEqual(body.clientWidth);
+      const view = body.getBoundingClientRect();
+      const tiles = Array.from(grid.children).slice(0, 10) as HTMLElement[];
+      expect(tiles).toHaveLength(10);
+      const rowTop = tiles[0].getBoundingClientRect().top;
+      for (const tile of tiles) {
+        const box = tile.getBoundingClientRect();
+        // One row of ten, each whole inside the scroll body.
+        expect(Math.round(box.top)).toBe(Math.round(rowTop));
+        expect(box.left).toBeGreaterThanOrEqual(view.left);
+        expect(box.right).toBeLessThanOrEqual(view.left + body.clientWidth + 0.5);
+      }
+    } finally {
+      style.remove();
+    }
+  });
+
   it('renders the frequently-used shelf and selects from it', async () => {
     seedFrequency([':tada:', ':smile:']);
     const onSelect = vi.fn();

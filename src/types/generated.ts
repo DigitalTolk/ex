@@ -1790,6 +1790,13 @@ export interface Channel {
    * every member is "caught up" and only new messages count — no backfill.
    */
   messageSeq?: number /* int64 */;
+  /**
+   * LastMessageAt is when the last top-level human message was posted —
+   * stamped by the same write that bumps MessageSeq. The sidebar's "Recent
+   * activity" sort orders channels by it. Unset on a channel nobody has
+   * posted in since it was introduced; those sort after the active ones.
+   */
+  lastMessageAt?: string /* RFC3339 */;
 }
 
 //////////
@@ -2623,6 +2630,12 @@ export interface UserChannel {
    */
   archived?: boolean;
   /**
+   * LastMessageAt mirrors the channel's last top-level message time,
+   * stamped at read time by ListUserChannels for the sidebar's "Recent
+   * activity" sort.
+   */
+  lastMessageAt?: string /* RFC3339 */;
+  /**
    * Icon mirrors the channel's emoji icon, stamped at read time like
    * Archived, so changing it writes one row, not one per member.
    */
@@ -3433,6 +3446,20 @@ export const UserStateHiddenConversation: UserStateKind = "hidden_conversation";
  * attaches a hidden skill: hiding is about discovery, not permission.
  */
 export const UserStateHiddenSkill: UserStateKind = "hidden_skill";
+/**
+ * UserStateSidebarSort is how one sidebar section orders its rows for this
+ * user, on every device: TargetID is the section's key (a built-in
+ * section's, or a category's ID), Sort the order.
+ */
+export const UserStateSidebarSort: UserStateKind = "sidebar_sort";
+/**
+ * SidebarSort is a sidebar section's order: by recent activity, or the
+ * user's own order then A-Z ("az"; Unread, which has no order of the user's
+ * own, is plain A-Z).
+ */
+export type SidebarSort = string;
+export const SidebarSortRecent: SidebarSort = "recent";
+export const SidebarSortAZ: SidebarSort = "az";
 export interface UserStateItem {
   userID: string;
   kind: UserStateKind;
@@ -3447,6 +3474,10 @@ export interface UserStateItem {
    * row without it.
    */
   rewound?: boolean;
+  /**
+   * Sort is a sidebar_sort row's order.
+   */
+  sort?: SidebarSort;
   updatedAt: string /* RFC3339 */;
 }
 /**
@@ -3458,6 +3489,11 @@ export interface UserState {
   threadNotifications: string[];
   hiddenConversations: string[];
   hiddenSkills: string[];
+  /**
+   * SidebarSorts maps a sidebar section's key to the order the user chose
+   * for it; a section not listed keeps its default.
+   */
+  sidebarSorts: { [key: string]: SidebarSort};
 }
 /**
  * ThreadReadState is how far the user has read one thread: SeenAt is the

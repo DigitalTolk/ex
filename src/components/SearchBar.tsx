@@ -48,6 +48,29 @@ import {
 // regex) so tests can drive both platform branches.
 const SEARCH_SHORTCUT_HINT = searchShortcutLabel(navigator.userAgent);
 
+// ⌘1 to ⌘9 (Ctrl+1 to Ctrl+9 elsewhere) pick the dropdown's first nine rows,
+// for people who would rather not reach for the arrows.
+const NUMBER_SHORTCUTS = 9;
+
+// isPlatformModifierKey: the key pressed is ⌘ on Apple platforms, Ctrl
+// elsewhere — the one the number shortcuts are held with.
+function isPlatformModifierKey(e: { key: string }): boolean {
+  return e.key === (isApplePlatform(navigator.userAgent) ? 'Meta' : 'Control');
+}
+
+// numberShortcut is the row number (1 to 9) a key press picks, or 0: the
+// platform modifier alone with a digit, as with ⌘K.
+function numberShortcut(e: { key: string; metaKey: boolean; ctrlKey: boolean; shiftKey: boolean; altKey: boolean }): number {
+  const apple = isApplePlatform(navigator.userAgent);
+  const chord = apple ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
+  if (!chord || e.shiftKey || e.altKey || !/^[1-9]$/.test(e.key)) return 0;
+  return Number(e.key);
+}
+
+function numberShortcutLabel(n: number): string {
+  return isApplePlatform(navigator.userAgent) ? `⌘${n}` : `Ctrl ${n}`;
+}
+
 type ScopeKind = 'channel' | 'dm' | 'group';
 
 type Suggestion =
@@ -143,6 +166,9 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
   // text goes back to the live suggestions until they run it again.
   const [submitted, setSubmitted] = useState<{ q: string; scope?: SearchScope } | null>(null);
   const [open, setOpen] = useState(false);
+  // The platform modifier (⌘, or Ctrl) is held in the field: the numbers
+  // that pick the first nine rows show in full.
+  const [numbersShown, setNumbersShown] = useState(false);
   // Highlight tracks item IDENTITY, not index — null means "no explicit
   // selection", which resolves to the message-search action. Index-based
   // highlighting made Enter's destination fetch-timing-dependent: channel
@@ -340,7 +366,8 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
   }, [open, sheet]);
 
   // Global ⌘K (Apple) / Ctrl+K (elsewhere) — focus and open the search from
-  // anywhere in the app, even while typing in the composer. Strictly the
+  // anywhere in the app, even while typing in the composer. ⌘F / Ctrl+F does
+  // the same: "find" means the app's search here, not the page's. Strictly the
   // platform chord: the other modifier, Shift/Alt combos (Cmd+Shift+K etc.)
   // and key-repeat are ignored so native text-editing bindings and other
   // shortcuts are never hijacked. Cleaned up on unmount.
@@ -350,7 +377,8 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
       const apple = isApplePlatform(navigator.userAgent);
       const chord = apple ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
       if (!chord || e.shiftKey || e.altKey || e.repeat) return;
-      if (e.key.toLowerCase() !== 'k') return;
+      const key = e.key.toLowerCase();
+      if (key !== 'k' && key !== 'f') return;
       e.preventDefault();
       inputRef.current?.focus();
       setOpen(true);
@@ -502,9 +530,19 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
   // The bar's own recent list, while the empty field has focus.
   const showRecentDropdown = !sheet && open && !trimmed && items.length > 0;
   const listOpen = (showDropdown || showRecentDropdown) && items.length > 0;
+  // ⌘1 to ⌘9 (Ctrl elsewhere) beside the first nine rows, faded until the
+  // modifier is held (index.css): one rule per row's id, so the rows
+  // themselves stay as they are. Not on a phone's sheet: no keyboard there.
+  const numberRules =
+    listOpen && !sheet
+      ? items
+          .slice(0, NUMBER_SHORTCUTS)
+          .map((it, i) => `#${CSS.escape(optionId(it)!)}::after{content:'${numberShortcutLabel(i + 1)}'}`)
+          .join('')
+      : '';
 
   return (
-    <div ref={containerRef} className="relative w-full" data-testid="searchbar">
+    <div ref={containerRef} className="relative w-full" data-testid="searchbar" data-shortcuts-held={numbersShown || undefined}>
       {/* Rectangular global search per the design — rounded-md corners
           (6px), subtle 1px border, search glyph on the left. On focus
           the field lifts (raised elevation) and widens a touch on
@@ -530,6 +568,14 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
               setOpen(true);
             }}
             onKeyDown={(e) => {
+              if (isPlatformModifierKey(e)) setNumbersShown(true);
+              // ⌘1 to ⌘9 (Ctrl elsewhere) picks that row, counted from the top.
+              const number = numberShortcut(e);
+              if (number && listOpen) {
+                e.preventDefault();
+                if (number <= items.length) activate(number - 1);
+                return;
+              }
               // Enter and the arrows act only on the VISIBLE dropdown — a
               // hidden item list (empty/cleared input) must never be
               // activatable; the old handler navigated to stale hits on
@@ -556,6 +602,10 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
                 setHighlightKey(itemKey(items[safeHighlight < 0 ? items.length - 1 : (safeHighlight - 1 + items.length) % items.length]));
               }
             }}
+            onKeyUp={(e) => {
+              if (isPlatformModifierKey(e)) setNumbersShown(false);
+            }}
+            onBlur={() => setNumbersShown(false)}
             placeholder="Search for anything"
             aria-label="Search"
             role="combobox"
@@ -641,6 +691,7 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
           )}
 
           <div role="listbox" id={listboxId} aria-label="Suggestions">
+          {numberRules && <style data-testid="searchbar-number-shortcuts">{numberRules}</style>}
           {modifierMode && (
             <div role="group" aria-label={MODIFIER_TITLE[active!.key]}>
               <SectionHeader>{MODIFIER_TITLE[active!.key]}</SectionHeader>
@@ -784,7 +835,8 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
                       </span>
                     </span>
                     {isHighlighted && (
-                      <kbd className="rounded border bg-muted px-1.5 py-0.5 text-xs mobile:hidden">Enter</kbd>
+                      // ml-auto: at the right edge, beside the row's number.
+                      <kbd className="ml-auto rounded border bg-muted px-1.5 py-0.5 text-xs mobile:hidden">Enter</kbd>
                     )}
                   </button>
                 );
@@ -805,6 +857,7 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
           }
         >
           <div {...(sheet ? {} : { role: 'listbox', id: listboxId, 'aria-label': 'Recent' })}>
+            {numberRules && <style data-testid="searchbar-number-shortcuts">{numberRules}</style>}
             <div role="group" aria-label="Search options">
               <SectionHeader>Search options</SectionHeader>
               {MODIFIER_HINTS.map((hint) => {

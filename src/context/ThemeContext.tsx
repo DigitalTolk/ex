@@ -1,26 +1,29 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { flushSync } from 'react-dom';
+import { revealTheme } from '@/lib/theme-transition';
 import { readString, writeString } from '@/lib/storage';
 
 export type Theme = 'light' | 'dark' | 'system';
 
 interface ThemeState {
   theme: Theme;
-  setTheme: (t: Theme) => void;
+  // With `reveal`, a change between light and dark plays the dancing
+  // gopher (lib/theme-transition).
+  setTheme: (t: Theme, reveal?: boolean) => void;
 }
 
 const ThemeContext = createContext<ThemeState | undefined>(undefined);
 
+// isDark is whether a theme setting draws the page dark now.
+function isDark(theme: Theme): boolean {
+  if (theme !== 'system') return theme === 'dark';
+  return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+    ? window.matchMedia('(prefers-color-scheme: dark)').matches
+    : false;
+}
+
 function applyTheme(theme: Theme) {
-  const root = document.documentElement;
-  if (theme === 'dark') root.classList.add('dark');
-  else if (theme === 'light') root.classList.remove('dark');
-  else {
-    const dark =
-      typeof window !== 'undefined' && typeof window.matchMedia === 'function'
-        ? window.matchMedia('(prefers-color-scheme: dark)').matches
-        : false;
-    root.classList.toggle('dark', dark);
-  }
+  document.documentElement.classList.toggle('dark', isDark(theme));
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
@@ -37,9 +40,20 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     return () => mq.removeEventListener('change', onChange);
   }, [theme]);
 
-  const setTheme = (t: Theme) => {
+  const setTheme = (t: Theme, reveal = false) => {
     writeString('theme', t);
-    setThemeState(t);
+    // Only a change the eye can see is revealed: Light to "Match system" on
+    // a light machine changes nothing on screen.
+    if (!reveal || isDark(t) === document.documentElement.classList.contains('dark')) {
+      setThemeState(t);
+      return;
+    }
+    // The page must change inside the transition's callback, so the setting
+    // renders now rather than on React's next pass.
+    void revealTheme(() => {
+      flushSync(() => setThemeState(t));
+      applyTheme(t);
+    });
   };
 
   return <ThemeContext.Provider value={{ theme, setTheme }}>{children}</ThemeContext.Provider>;

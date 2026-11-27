@@ -31,6 +31,7 @@ const EMPTY_USER_STATE: UserState = {
   threadNotifications: [],
   hiddenConversations: [],
   hiddenSkills: [],
+  sidebarSorts: {},
 };
 
 export function useUserState(options?: { enabled?: boolean }) {
@@ -42,6 +43,7 @@ export function useUserState(options?: { enabled?: boolean }) {
         threadNotifications: state.threadNotifications ?? [],
         hiddenConversations: state.hiddenConversations ?? [],
         hiddenSkills: state.hiddenSkills ?? [],
+        sidebarSorts: state.sidebarSorts ?? {},
       };
     },
     enabled: options?.enabled ?? true,

@@ -7,6 +7,7 @@ import {
   clearChannelUnreadInCache,
   bumpConversationUnread,
   clearConversationUnreadInCache,
+  touchChannelActivityInCache,
   touchConversationActivityInCache,
 } from './unread-cache';
 
@@ -74,6 +75,40 @@ describe('unread-cache', () => {
     clearConversationUnreadInCache(qc, 'conv-x');
     expect(qc.getQueryData(queryKeys.userChannels())).toBeUndefined();
     expect(qc.getQueryData(queryKeys.userConversations())).toBeUndefined();
+  });
+});
+
+describe('touchChannelActivityInCache', () => {
+  const rows = (qc: QueryClient) => qc.getQueryData<UserChannel[]>(queryKeys.userChannels());
+
+  it('moves the matching row lastMessageAt up, leaving the others as they were', () => {
+    const qc = makeQC();
+    const other: UserChannel = { channelID: 'ch-2', channelName: 'other', channelType: 'public', role: 1 };
+    qc.setQueryData<UserChannel[]>(queryKeys.userChannels(), [
+      { channelID: 'ch-1', channelName: 'general', channelType: 'public', role: 1 },
+      other,
+    ]);
+    touchChannelActivityInCache(qc, 'ch-1', '2026-10-29T09:00:00Z');
+    expect(rows(qc)![0].lastMessageAt).toBe('2026-10-29T09:00:00Z');
+    expect(rows(qc)![1]).toBe(other);
+
+    touchChannelActivityInCache(qc, 'ch-1', '2026-10-29T10:00:00Z');
+    expect(rows(qc)![0].lastMessageAt).toBe('2026-10-29T10:00:00Z');
+  });
+
+  it('ignores an older time, an unknown channel and an unloaded list', () => {
+    const qc = makeQC();
+    touchChannelActivityInCache(qc, 'ch-1', '2026-10-29T09:00:00Z');
+    expect(rows(qc)).toBeUndefined();
+
+    const list: UserChannel[] = [
+      { channelID: 'ch-1', channelName: 'general', channelType: 'public', role: 1, lastMessageAt: '2026-10-29T09:00:00Z' },
+    ];
+    qc.setQueryData<UserChannel[]>(queryKeys.userChannels(), list);
+    touchChannelActivityInCache(qc, 'ch-1', '2026-10-28T09:00:00Z');
+    touchChannelActivityInCache(qc, 'ch-1', '2026-10-29T09:00:00Z');
+    touchChannelActivityInCache(qc, 'ch-gone', '2026-10-30T09:00:00Z');
+    expect(rows(qc)).toBe(list);
   });
 });
 

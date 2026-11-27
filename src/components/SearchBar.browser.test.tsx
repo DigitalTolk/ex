@@ -140,6 +140,80 @@ const APPLE_UA = /mac|iphone|ipad|ipod/i.test(navigator.userAgent);
 const chordInit: KeyboardEventInit = APPLE_UA ? { metaKey: true } : { ctrlKey: true };
 const wrongModifierInit: KeyboardEventInit = APPLE_UA ? { ctrlKey: true } : { metaKey: true };
 
+describe('SearchBar number shortcuts', () => {
+  const MOD = APPLE_UA ? 'Meta' : 'Control';
+  const press = (type: 'keydown' | 'keyup', key: string, init: KeyboardEventInit = {}) =>
+    document.querySelector<HTMLInputElement>('[data-testid="searchbar-input"]')!.dispatchEvent(new KeyboardEvent(type, { key, bubbles: true, cancelable: true, ...init }));
+  const hint = (testID: string) => getComputedStyle(document.querySelector(`[data-testid="${testID}"]`)!, '::after').content;
+
+  beforeEach(() => {
+    useSearchChannelsMock.mockReturnValue({
+      data: { hits: [{ id: 'ch-1', score: 1, _source: { name: 'general', slug: 'general', type: 'public' } }] },
+      isLoading: false,
+    });
+    useSearchUsersMock.mockReturnValue({
+      data: { hits: [{ id: 'u-1', score: 1, _source: { displayName: 'Alice', email: 'alice@x.io' } }] },
+      isLoading: false,
+    });
+  });
+
+  it('shows each row its number, faded, and in full while the modifier is held', async () => {
+    const screen = await renderWithLocation();
+    await screen.getByTestId('searchbar-input').fill('al');
+    await expect.element(screen.getByTestId('searchbar-channel-ch-1')).toBeVisible();
+    const label = (n: number) => (APPLE_UA ? `"⌘${n}"` : `"Ctrl ${n}"`);
+    const opacity = (testID: string) => Number(getComputedStyle(document.querySelector(`[data-testid="${testID}"]`)!, '::after').opacity);
+    // Numbered top to bottom, there from the start but faded.
+    expect(hint('searchbar-channel-ch-1')).toBe(label(1));
+    expect(hint('searchbar-user-u-1')).toBe(label(2));
+    expect(hint('searchbar-show-results')).toBe(label(3));
+    expect(opacity('searchbar-user-u-1')).toBeLessThan(0.6);
+    // Drawn as a small key at the row's right edge, at the 12px floor.
+    const row = document.querySelector('[data-testid="searchbar-user-u-1"]')!;
+    expect(getComputedStyle(row, '::after').fontSize).toBe('12px');
+
+    press('keydown', MOD, chordInit);
+    await expect.poll(() => opacity('searchbar-user-u-1')).toBe(1);
+    press('keyup', MOD);
+    await expect.poll(() => opacity('searchbar-user-u-1')).toBeLessThan(0.6);
+  });
+
+  it('picks the row the number names', async () => {
+    const screen = await renderWithLocation();
+    await screen.getByTestId('searchbar-input').fill('al');
+    await expect.element(screen.getByTestId('searchbar-user-u-1')).toBeVisible();
+    // A number past the end does nothing, and keeps the browser's own use of it away.
+    expect(press('keydown', '9', chordInit)).toBe(false);
+    expect((screen.getByTestId('loc').element() as HTMLElement).dataset.path).toBe('/');
+    // Without the modifier a digit is just typed.
+    expect(press('keydown', '1')).toBe(true);
+
+    press('keydown', '1', chordInit);
+    await expect.poll(() => (screen.getByTestId('loc').element() as HTMLElement).dataset.path).toBe('/channel/general');
+  });
+
+  it('opens the person the number names', async () => {
+    const screen = await renderWithLocation();
+    await screen.getByTestId('searchbar-input').fill('al');
+    await expect.element(screen.getByTestId('searchbar-user-u-1')).toBeVisible();
+    press('keydown', '2', { ...chordInit, shiftKey: true });
+    expect(openDMMock).not.toHaveBeenCalled();
+    press('keydown', '2', chordInit);
+    await expect.poll(() => openDMMock.mock.calls.length).toBe(1);
+    expect(openDMMock.mock.calls[0][0]).toBe('u-1');
+  });
+
+  it('fades the numbers again when the field loses focus with the key still down', async () => {
+    const screen = await renderWithLocation();
+    await screen.getByTestId('searchbar-input').fill('al');
+    await expect.element(screen.getByTestId('searchbar-channel-ch-1')).toBeVisible();
+    press('keydown', MOD, chordInit);
+    await expect.poll(() => screen.getByTestId('searchbar').element().hasAttribute('data-shortcuts-held')).toBe(true);
+    (screen.getByTestId('searchbar-input').element() as HTMLInputElement).blur();
+    await expect.poll(() => screen.getByTestId('searchbar').element().hasAttribute('data-shortcuts-held')).toBe(false);
+  });
+});
+
 describe('SearchBar browser behavior', () => {
   it('keeps search input text readable inside light app chrome', async () => {
     document.documentElement.classList.remove('dark');

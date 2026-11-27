@@ -257,43 +257,67 @@ describe('UnfurlCard browser behaviour', () => {
     });
   });
 
-  // Per the design spec the web (OpenGraph) card is bg/base with a UNIFORM
-  // subtle border — no coloured left accent. Lock both: the four borders
-  // share one colour, and the fill is the base background.
-  function cardStyle(screen: Awaited<ReturnType<typeof render>>) {
+  // A link preview and a quoted message are the plain card: the page's own
+  // surface inside the ordinary 2px border, with no corner mark, no side
+  // bar, no tinted fill and no status icon.
+  function webCardStyle(screen: Awaited<ReturnType<typeof render>>) {
     const card = screen.getByTestId('unfurl-card').element() as HTMLElement;
     return getComputedStyle(card.querySelector('a') as HTMLElement);
   }
+  const WEB = { data: { url: 'https://example.org', title: 'X' }, isLoading: false };
+  const QUOTE = {
+    data: { kind: 'message', url: 'https://ex.test/channel/general#msg-1', authorName: 'Bob', body: 'On it.' },
+    isLoading: false,
+  };
 
-  it('uses a uniform subtle border (no coloured left accent) on the web card', async () => {
+  it('outlines the web card evenly, with no side bar', async () => {
     document.documentElement.classList.remove('dark');
-    useUnfurlMock.mockReturnValue({ data: { url: 'https://example.org', title: 'X' }, isLoading: false });
+    useUnfurlMock.mockReturnValue(WEB);
     const screen = await render(<UnfurlCard url="https://example.org" messageId="m-1" isAuthor={false} />);
-    const s = cardStyle(screen);
-    // Subtle border #E3E3E2 ≈ rgb(227,227,226) on ALL sides (no dark left bar).
-    expect(s.borderLeftColor).toBe(s.borderTopColor);
-    const [r, g, b] = s.borderTopColor.match(/\d+/g)!.map(Number);
-    expect(r).toBeGreaterThan(210);
-    expect(g).toBeGreaterThan(210);
-    expect(b).toBeGreaterThan(210);
+    const s = webCardStyle(screen);
+    for (const width of [s.borderLeftWidth, s.borderTopWidth, s.borderRightWidth, s.borderBottomWidth]) {
+      expect(width).toBe('2px');
+    }
+    // The ordinary border all the way round, and no corner mark.
+    expect(s.backgroundImage).toBe('none');
+    expect(new Set([s.borderLeftColor, s.borderTopColor, s.borderRightColor, s.borderBottomColor]).size).toBe(1);
+    expect(s.borderTopColor).not.toBe('rgba(0, 0, 0, 0)');
   });
 
   it('fills the web card with the base background in light mode (#FCFCFB)', async () => {
     document.documentElement.classList.remove('dark');
-    useUnfurlMock.mockReturnValue({ data: { url: 'https://example.org', title: 'X' }, isLoading: false });
+    useUnfurlMock.mockReturnValue(WEB);
     const screen = await render(<UnfurlCard url="https://example.org" messageId="m-1" isAuthor={false} />);
-    expect(cardStyle(screen).backgroundColor).toBe('rgb(252, 252, 251)');
+    expect(webCardStyle(screen).backgroundColor).toBe('rgb(252, 252, 251)');
   });
 
   it('fills the web card with the base background in dark mode (#1A1A1A)', async () => {
     document.documentElement.classList.add('dark');
     try {
-      useUnfurlMock.mockReturnValue({ data: { url: 'https://example.org', title: 'X' }, isLoading: false });
+      useUnfurlMock.mockReturnValue(WEB);
       const screen = await render(<UnfurlCard url="https://example.org" messageId="m-2" isAuthor={false} />);
-      // #1A1A1A → rgb(26, 26, 26)
-      expect(cardStyle(screen).backgroundColor).toBe('rgb(26, 26, 26)');
+      expect(webCardStyle(screen).backgroundColor).toBe('rgb(26, 26, 26)');
     } finally {
       document.documentElement.classList.remove('dark');
     }
+  });
+
+  it('draws a quoted message as the same plain card, with no side bar and no status icon', async () => {
+    document.documentElement.classList.remove('dark');
+    useUnfurlMock.mockReturnValue(WEB);
+    const web = await render(<UnfurlCard url="https://example.org" messageId="m-1" isAuthor={false} />);
+    const webStyle = webCardStyle(web);
+    const outline = webStyle.borderTopColor;
+    const radius = webStyle.borderRadius;
+    await web.unmount();
+
+    useUnfurlMock.mockReturnValue(QUOTE);
+    const quote = await render(<UnfurlCard url="https://ex.test/channel/general#msg-1" messageId="m-3" isAuthor={false} />);
+    const s = getComputedStyle(quote.getByTestId('unfurl-card').element());
+    expect(s.borderLeftWidth).toBe('2px');
+    expect(s.borderTopColor).toBe(outline);
+    expect(s.backgroundImage).toBe('none');
+    expect(s.borderRadius).toBe(radius);
+    expect(document.querySelector('[data-testid="card-status-icon"]')).toBeNull();
   });
 });

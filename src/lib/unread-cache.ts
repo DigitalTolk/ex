@@ -25,6 +25,21 @@ export function bumpChannelUnread(qc: QueryClient, channelID: string) {
   patchChannel(qc, channelID, (c) => ({ ...c, unread: true, unreadCount: (c.unreadCount ?? 0) + 1 }));
 }
 
+/**
+ * A new top-level message landed in this channel: move its lastMessageAt up
+ * (the sidebar's "Recent activity" sort) in place. An older time — a late or
+ * replayed event — leaves the row as it is.
+ */
+export function touchChannelActivityInCache(qc: QueryClient, channelID: string, at: string) {
+  const prev = qc.getQueryData<UserChannel[]>(queryKeys.userChannels());
+  const row = prev?.find((c) => c.channelID === channelID);
+  if (!prev || !row || Date.parse(at) <= (Date.parse(row.lastMessageAt ?? '') || 0)) return;
+  qc.setQueryData<UserChannel[]>(
+    queryKeys.userChannels(),
+    prev.map((c) => (c === row ? { ...c, lastMessageAt: at } : c)),
+  );
+}
+
 /** The user opened/read this channel — reset the badge immediately (the PUT /read refetch confirms). */
 export function clearChannelUnreadInCache(qc: QueryClient, channelID: string) {
   patchChannel(qc, channelID, (c) => ({ ...c, unread: false, unreadCount: 0, unreadNotifyCount: 0 }));

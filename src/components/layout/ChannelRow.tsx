@@ -1,8 +1,11 @@
-import { Star, BellOff } from 'lucide-react';
+import { Star, BellOff, LogOut } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { ChannelIcon, PrivateChannelMark } from '@/components/ChannelIcon';
-import { DropdownMenuItem } from '@/components/ui/dropdown-menu';
+import { DropdownMenuItem, DropdownMenuSeparator } from '@/components/ui/dropdown-menu';
 import { slugify } from '@/lib/format';
+import { canLeaveChannel } from '@/lib/roles';
+import { useLeaveChannel } from '@/hooks/useChannels';
+import { useNavigate } from 'react-router-dom';
 import { useFavoriteChannel, useSetCategory, useCategories } from '@/hooks/useSidebar';
 import { useRowLongPressMenu } from '@/hooks/useRowLongPressMenu';
 import { SidebarRowMenu } from './SidebarRowMenu';
@@ -159,7 +162,35 @@ export const ChannelRow = memo(function ChannelRow({
             Move to {c.name}
           </DropdownMenuItem>
         ))}
+        {canLeaveChannel(channel.role, slugify(channel.channelName)) && (
+          <>
+            <DropdownMenuSeparator />
+            <LeaveChannelItem channelID={channel.channelID} active={active} />
+          </>
+        )}
       </SidebarRowMenu>
     </div>
   );
 });
+
+// LeaveChannelItem leaves the channel from its sidebar row, as the channel's
+// own menu does. Its own component so the leave mutation exists only while a
+// row's menu is open, never once per row: an account can be in thousands of
+// channels. Leaving the channel on screen goes home at once: the menu, and
+// this item with it, closes on the click, so nothing here is left to hear the
+// leave succeed. A failed leave still says so (useLeaveChannel's toast).
+function LeaveChannelItem({ channelID, active }: { channelID: string; active: boolean }) {
+  const leave = useLeaveChannel();
+  const navigate = useNavigate();
+  return (
+    <DropdownMenuItem
+      onClick={() => {
+        leave.run(channelID);
+        if (active) navigate('/');
+      }}
+      data-testid={`row-leave-${channelID}`}
+    >
+      <LogOut className="mr-2 h-4 w-4" /> Leave channel
+    </DropdownMenuItem>
+  );
+}

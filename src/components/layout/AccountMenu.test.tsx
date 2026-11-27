@@ -232,6 +232,18 @@ describe('AccountMenu', () => {
       expect(tab).toHaveClass('text-sidebar-foreground');
     });
 
+    it('wears your status on the You tab avatar', () => {
+      mockIsMobile = true;
+      mockUserStatus = { emoji: ':house:', text: 'Working from home' };
+      renderMenu(<AccountMenu variant="tab" />);
+      const tab = screen.getByTestId('mobile-tab-you');
+      const mark = within(tab).getByTestId('account-status-mark');
+      // A phone has no hover: the emoji alone, named for screen readers.
+      expect(within(mark).getByLabelText(/^Working from home,/)).not.toHaveAttribute('data-slot', 'tooltip-trigger');
+      expect(mark).toHaveClass('bg-sidebar');
+      expect(tab.querySelector('[data-presence]')).toBeNull();
+    });
+
     it('falls back to "??" with no signed-in user', () => {
       mockIsMobile = true;
       mockUserNull = true;
@@ -253,6 +265,26 @@ describe('AccountMenu', () => {
       fireEvent.click(trigger);
       expect(screen.getByTestId('user-menu-about')).toBeInTheDocument();
       expect(screen.getByTestId('user-menu-signout')).toBeInTheDocument();
+    });
+
+    it('wears your status in place of the presence dot, since no name is shown beside it', () => {
+      setOnline(['u-1']);
+      mockUserStatus = { emoji: ':house:', text: 'Working from home' };
+      renderMenu(<AccountMenu variant="rail" />);
+      const trigger = screen.getByTestId('account-menu-trigger');
+      const mark = within(trigger).getByTestId('account-status-mark');
+      // The status card's trigger: its text (and when it clears) on hover.
+      expect(within(mark).getByLabelText(/^Working from home,/)).toHaveAttribute('data-slot', 'tooltip-trigger');
+      // On the rail's own colour, so it reads as cut out of it, and where the dot was.
+      expect(mark).toHaveClass('bg-sidebar-rail', '-bottom-1', '-right-1');
+      expect(trigger.querySelector('[data-presence]')).toBeNull();
+    });
+
+    it('keeps the presence dot without a status', () => {
+      setOnline(['u-1']);
+      renderMenu(<AccountMenu variant="rail" />);
+      expect(screen.queryByTestId('account-status-mark')).not.toBeInTheDocument();
+      expect(screen.getByTestId('account-menu-trigger').querySelector('[data-presence]')).not.toBeNull();
     });
 
     it('keeps the name and the fade on the sidebar footer', () => {

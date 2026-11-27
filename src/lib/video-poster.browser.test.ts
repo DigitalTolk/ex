@@ -114,6 +114,18 @@ describe('readVideoPoster', () => {
     await expect(pending).resolves.toMatchObject({ width: CLIP_WIDTH, height: CLIP_HEIGHT });
   });
 
+  // WebKit doesn't always report a painted frame for an unseen, paused video
+  // (a CI run waited the whole timeout and got no poster): once the seek is
+  // done, the frame is drawn after a short grace however the frame callback
+  // behaves.
+  it('draws the seeked frame even when the browser never reports it painted', async () => {
+    vi.spyOn(HTMLVideoElement.prototype, 'requestVideoFrameCallback').mockImplementation(() => 1);
+    const started = performance.now();
+    const poster = await readVideoPoster(clipWebm());
+    expect(poster).toMatchObject({ width: CLIP_WIDTH, height: CLIP_HEIGHT });
+    expect(performance.now() - started).toBeLessThan(POSTER_TIMEOUT_MS / 2);
+  });
+
   it('draws on `seeked` in a browser without frame callbacks', async () => {
     const own = Object.getOwnPropertyDescriptor(HTMLVideoElement.prototype, 'requestVideoFrameCallback')!;
     Object.defineProperty(HTMLVideoElement.prototype, 'requestVideoFrameCallback', { configurable: true, value: undefined });

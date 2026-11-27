@@ -1,6 +1,7 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
 import { useTheme, type Theme } from '@/context/ThemeContext';
+import { preloadThemeReveal } from '@/lib/theme-transition';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { hasCustomPanelWidths, resetPanelWidths } from '@/lib/panel-width';
 import { showToast } from '@/lib/toast';
@@ -24,6 +25,9 @@ export function AppearanceSettings() {
   const isMobile = useIsMobile();
   // Read on mount — the page remounts whenever it's opened.
   const [layoutCustomized, setLayoutCustomized] = useState(() => hasCustomPanelWidths());
+  // The theme switch's dancing gopher (lib/theme-transition), fetched while
+  // the page is open so the switch doesn't wait for it.
+  useEffect(() => preloadThemeReveal(), []);
 
   function handleResetLayout() {
     resetPanelWidths();
@@ -42,7 +46,7 @@ export function AppearanceSettings() {
               role="radio"
               aria-checked={theme === t.value}
               aria-label={`${t.label} theme`}
-              onClick={() => setTheme(t.value)}
+              onClick={() => setTheme(t.value, true)}
               className="group text-left outline-none"
               data-testid={`theme-option-${t.value}`}
             >

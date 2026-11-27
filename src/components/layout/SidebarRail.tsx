@@ -107,7 +107,7 @@ function RailLink({
       className={ITEM_CLASS}
       data-testid={testID}
     >
-      <span className={tileClass(active)}>
+      <span className={tileClass(active)} data-rail-tile="true">
         <Icon className={`h-5 w-5 ${ICON_MOTION[motion]}`} aria-hidden="true" />
         <RailBadge value={badge} testID={badgeTestID} />
       </span>
@@ -153,7 +153,7 @@ function RailActivityButton({
       className={ITEM_CLASS}
       data-testid="sidebar-mode-activity"
     >
-      <span className={tileClass(active)}>
+      <span className={tileClass(active)} data-rail-tile="true">
         {children}
         <RailBadge value={badge} testID="activity-unread-badge" />
       </span>
@@ -187,6 +187,7 @@ export const SidebarRail = memo(function SidebarRail({ onNavigate }: { onNavigat
       // are told apart by their tone alone.
       className={`${themeClass || 'border-r border-sidebar-border'} flex w-[4.5rem] shrink-0 flex-col items-center bg-sidebar-rail px-1 text-sidebar-foreground`}
       data-app-chrome="true"
+      data-sidebar-rail="true"
       data-testid="sidebar-rail"
     >
       {/* Level with the top bar; the window drags by it, and macOS traffic

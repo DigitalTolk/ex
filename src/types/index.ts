@@ -588,6 +588,9 @@ export interface UserChannel {
   // Read-only: the channel is archived. Listed in the sidebar's Archived
   // section, history readable, nobody can post.
   archived?: boolean;
+  // When the channel's last top-level message was posted (absent until one
+  // is): the sidebar's "Recent activity" sort.
+  lastMessageAt?: string;
   // The channel's emoji, drawn in place of its globe or lock.
   icon?: string;
   muted?: boolean;
@@ -664,6 +667,9 @@ export interface UserState {
   // Skills this user removed from their agents' discovery index — explicit
   // /skill picks still work.
   hiddenSkills: string[];
+  // How each sidebar section is sorted (by section key), on every device; a
+  // section not listed keeps its default. Absent from older servers.
+  sidebarSorts?: Record<string, 'recent' | 'az'>;
 }
 
 // How far the user has read one thread, asked when it opens. markedUnreadAt:

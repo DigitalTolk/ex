@@ -80,6 +80,28 @@ body > :not(#root) {
   height: 5.25rem;
   align-items: flex-end;
 }
+/* The rail is as wide as the traffic lights (their last button ends at
+   4.5rem), which put its edge right against the green button. Wider there,
+   so the edge clears the lights by about the gap on their left. */
+.electron-mac.tier-full [data-sidebar-rail='true'] {
+  width: 5.5rem;
+}
+/* The wider rail's stops grow a little with it, so it doesn't look empty:
+   tiles 36px to 40px, icons 20px to 22px, the mark and your avatar 32px to
+   36px. The labels keep their size. */
+.electron-mac.tier-full [data-sidebar-rail='true'] [data-rail-tile='true'] {
+  width: 2.5rem;
+  height: 2.5rem;
+}
+.electron-mac.tier-full [data-sidebar-rail='true'] [data-rail-tile='true'] > svg {
+  width: 1.375rem;
+  height: 1.375rem;
+}
+.electron-mac.tier-full [data-sidebar-rail='true'] [data-testid='sidebar-rail-logo'],
+.electron-mac.tier-full [data-sidebar-rail='true'] [data-testid='account-menu-trigger'] [data-slot='avatar'] {
+  width: 2.25rem;
+  height: 2.25rem;
+}
 @custom-variant data-open {
   &:where([data-state="open"]),
   &:where([data-open]:not([data-open="false"])) {
@@ -965,4 +987,86 @@ body > :not(#root) {
     font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
     font-size: 0.875rem;
   }
+}
+
+/* A coloured card's outline (lib/card-tint): the ordinary 2px border with
+   the card's hue (--card-hue) down its whole left edge, a long arm along the
+   top (a third of the card, at most 15rem) and a short arm along the
+   bottom. Flat layers, painted as backgrounds so the colour follows the
+   rounded corners: the surface, the top arm, the left edge with its bottom arm,
+   the border. */
+.card-outline {
+  border: 2px solid transparent;
+  background:
+    linear-gradient(var(--color-background), var(--color-background)) padding-box,
+    linear-gradient(var(--card-hue), var(--card-hue)) top left / min(36%, 15rem) 50% no-repeat border-box,
+    linear-gradient(var(--card-hue), var(--card-hue)) left / 48px 100% no-repeat border-box,
+    linear-gradient(var(--color-border), var(--color-border)) border-box;
+}
+
+/* A pinned message wears the same outline in warning yellow, in place of a
+   bar down its side. The yellow is a brighter one on the light
+   surface: the darker text yellow reads as red-brown in a 2px line. Only the
+   outline is painted, over the row (the mask cuts the middle out), so the
+   row keeps its own background, its hover tint and every pixel of its layout. */
+:root {
+  --pinned-mark: #EAB308;
+}
+html.dark {
+  --pinned-mark: var(--color-rt-yellow);
+}
+.pinned-outline::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  padding: 2px;
+  border-radius: inherit;
+  pointer-events: none;
+  background:
+    linear-gradient(var(--pinned-mark), var(--pinned-mark)) top left / min(36%, 15rem) 50% no-repeat,
+    linear-gradient(var(--pinned-mark), var(--pinned-mark)) left / 48px 100% no-repeat,
+    var(--color-border);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+}
+
+/* The search dropdown's number shortcuts (SearchBar): the first nine rows
+   show the key that picks them at their right edge, drawn like the
+   dropdown's Enter hint, faded until ⌘ or Ctrl is held. No content here:
+   SearchBar adds it per row id. */
+[data-testid='searchbar'] [role='option']::after {
+  margin-left: auto;
+  flex-shrink: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 0.25rem;
+  background: var(--color-muted);
+  padding: 0 0.375rem;
+  font-size: 0.75rem;
+  line-height: 1rem;
+  color: var(--color-muted-foreground);
+  opacity: 0.45;
+  transition: opacity 120ms ease-out, color 120ms ease-out;
+}
+/* A row's own Enter hint takes the right edge; its number sits beside it. */
+[data-testid='searchbar'] [role='option']:has(> kbd)::after {
+  margin-left: 0.5rem;
+}
+[data-testid='searchbar'][data-shortcuts-held] [role='option']::after {
+  opacity: 1;
+  color: var(--color-foreground);
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-testid='searchbar'] [role='option']::after {
+    transition: none;
+  }
+}
+
+/* The theme switch's reveal (lib/theme-transition): the browser's default
+   cross-fade is off, so the new theme is uncovered only by the GIF mask the
+   switch animates, over the old one held still. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
 }

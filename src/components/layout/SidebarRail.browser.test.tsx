@@ -236,4 +236,37 @@ describe.runIf(window.__EX_FORCE_DEVICE__ === 'desktop')('SidebarRail under a de
       await expect.element(screen.getByTestId(id)).toBeVisible();
     }
   });
+
+  it('is wider in the macOS desktop app, so its edge clears the traffic lights', async () => {
+    // The lights' last button ends 72px in: a 72px rail put its edge right
+    // against the green one.
+    const root = document.documentElement;
+    const before = root.className;
+    root.classList.add('electron-mac', 'tier-full');
+    root.classList.remove('tier-compact', 'tier-mobile');
+    try {
+      const screen = await renderRail();
+      const rail = screen.getByTestId('sidebar-rail').element();
+      const strip = rail.getBoundingClientRect();
+      expect(Math.round(strip.width)).toBe(88);
+      // Everything still sits inside it, centred.
+      const mark = screen.getByTestId('sidebar-rail-logo').element().getBoundingClientRect();
+      expect(Math.round(mark.left + mark.width / 2)).toBe(Math.round(strip.left + strip.width / 2));
+      for (const label of rail.querySelectorAll<HTMLElement>('a > span[aria-hidden="true"], button > span[aria-hidden="true"]')) {
+        expect(label.getBoundingClientRect().right, label.textContent!).toBeLessThanOrEqual(strip.right);
+        // The labels keep their size; only the stops grow.
+        expect(getComputedStyle(label).fontSize).toBe('12px');
+      }
+      // The stops grow a little with it, so the wider rail isn't empty.
+      const size = (el: Element) => Math.round(el.getBoundingClientRect().width);
+      const tile = screen.getByTestId('sidebar-rail-threads').element().querySelector('[data-rail-tile]')!;
+      expect(size(tile)).toBe(40);
+      expect(size(tile.querySelector('svg')!)).toBe(22);
+      expect(size(screen.getByTestId('dnd-trigger').element())).toBe(40);
+      expect(Math.round(mark.width)).toBe(36);
+      expect(size(screen.getByTestId('account-menu-trigger').element().querySelector('[data-slot="avatar"]')!)).toBe(36);
+    } finally {
+      root.className = before;
+    }
+  });
 });
