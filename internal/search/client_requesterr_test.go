@@ -3,15 +3,19 @@ package search
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
-	"github.com/opensearch-project/opensearch-go/v4/opensearchtransport"
+	"github.com/opensearch-project/opensearch-go/v5/opensearchapi"
 )
 
 // fakeAWSConfig swaps the SDK config loader for one that honours the
@@ -120,19 +124,64 @@ func TestNewClient_MalformedURLDisablesSearch(t *testing.T) {
 	}
 }
 
-// The transport constructor's error contract is honoured even though the
+// The client talks to the one URL it was given. The library's default router
+// would discover the cluster's nodes, send requests straight to them and
+// health-check them; a managed endpoint's nodes can't be reached that way.
+func TestNewClient_RunsWithoutTheDefaultRouter(t *testing.T) {
+	t.Setenv(routerEnv, "")
+	if err := os.Unsetenv(routerEnv); err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen = append(seen, r.Method+" "+r.URL.Path)
+		mu.Unlock()
+		_, _ = w.Write([]byte(`{"status":"green"}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL)
+	if got := os.Getenv(routerEnv); got != "false" {
+		t.Fatalf("%s = %q, want false", routerEnv, got)
+	}
+	for range 2 {
+		if _, err := c.ClusterHealth(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if want := []string{"GET /_cluster/health", "GET /_cluster/health"}; !slices.Equal(seen, want) {
+		t.Fatalf("requests = %q, want only %q", seen, want)
+	}
+}
+
+// An operator who chose a router keeps their choice.
+func TestNewClient_KeepsAnOperatorsRouterChoice(t *testing.T) {
+	t.Setenv(routerEnv, "true")
+	if NewClient("http://example.test") == nil {
+		t.Fatal("no client")
+	}
+	if got := os.Getenv(routerEnv); got != "true" {
+		t.Fatalf("%s = %q, want the operator's true", routerEnv, got)
+	}
+}
+
+// The client constructor's error contract is honoured even though the
 // configuration built here cannot trip it.
-func TestNewClient_TransportBuildError(t *testing.T) {
-	orig := newTransport
-	t.Cleanup(func() { newTransport = orig })
-	newTransport = func(opensearchtransport.Config) (*opensearchtransport.Client, error) {
-		return nil, errors.New("transport boom")
+func TestNewClient_ClientBuildError(t *testing.T) {
+	orig := newAPIClient
+	t.Cleanup(func() { newAPIClient = orig })
+	newAPIClient = func(opensearchapi.Config) (*opensearchapi.Client, error) {
+		return nil, errors.New("client boom")
 	}
 	if c := NewClient("http://example.test"); c != nil {
-		t.Fatalf("NewClient = %v, want nil when the transport can't be built", c)
+		t.Fatalf("NewClient = %v, want nil when the client can't be built", c)
 	}
-	if _, err := NewClientFromConfig(context.Background(), ClientConfig{URL: "http://example.test"}); err == nil || !strings.Contains(err.Error(), "transport boom") {
-		t.Fatalf("NewClientFromConfig error = %v, want the transport error", err)
+	if _, err := NewClientFromConfig(context.Background(), ClientConfig{URL: "http://example.test"}); err == nil || !strings.Contains(err.Error(), "client boom") {
+		t.Fatalf("NewClientFromConfig error = %v, want the client error", err)
 	}
 }
 
@@ -208,14 +257,60 @@ func TestClient_BulkDoError(t *testing.T) {
 	}
 }
 
-// The HTTP transport keeps enough idle connections per host for concurrent
-// search traffic against the one cluster endpoint.
-func TestNewHTTPTransport_Tuned(t *testing.T) {
-	tr := newHTTPTransport()
-	if tr.MaxIdleConnsPerHost != 64 || tr.MaxIdleConns < tr.MaxIdleConnsPerHost {
-		t.Fatalf("idle conns = %d per host / %d total, want 64 per host", tr.MaxIdleConnsPerHost, tr.MaxIdleConns)
+// Concurrent requests to the one endpoint reuse pooled connections. With
+// net/http's default of 2 idle connections per host, every round after the
+// first would open most of its connections afresh (a TCP/TLS handshake each).
+func TestClient_ConcurrentRequestsReuseConnections(t *testing.T) {
+	const parallel, rounds = 8, 3
+	var (
+		mu      sync.Mutex
+		opened  int
+		waiting int
+		release = make(chan struct{})
+	)
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Hold each request until the whole round is in flight, so every
+		// round needs `parallel` connections at once.
+		mu.Lock()
+		round := release
+		if waiting++; waiting == parallel {
+			waiting = 0
+			close(release)
+			release = make(chan struct{})
+		}
+		mu.Unlock()
+		select {
+		case <-round:
+		case <-r.Context().Done():
+			return
+		}
+		_, _ = w.Write([]byte(`{"status":"green"}`))
+	}))
+	srv.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			mu.Lock()
+			opened++
+			mu.Unlock()
+		}
 	}
-	if tr.Proxy == nil || tr.DialContext == nil || tr.TLSHandshakeTimeout == 0 {
-		t.Fatalf("transport lost the DefaultTransport essentials: %+v", tr)
+	srv.Start()
+	defer srv.Close()
+
+	c := NewClient(srv.URL)
+	for range rounds {
+		var wg sync.WaitGroup
+		for range parallel {
+			wg.Go(func() {
+				if _, err := c.ClusterHealth(context.Background()); err != nil {
+					t.Error(err)
+				}
+			})
+		}
+		wg.Wait()
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if opened != parallel {
+		t.Fatalf("%d rounds of %d concurrent requests opened %d connections, want %d", rounds, parallel, opened, parallel)
 	}
 }

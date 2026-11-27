@@ -21,7 +21,7 @@ updates:
     ignore:
       - dependency-name: "node"
         versions:
-          - ">=25.0.0"
+          - ">=27.0.0"
     groups:
       docker:
         patterns:
@@ -42,10 +42,10 @@ updates:
       interval: "daily"
     ignore:
       # @types/node must track the Node runtime the app is pinned to
-      # (package.json engines + the node:24 build stage), not npm's latest.
+      # (package.json engines + the node:26 build stage), not npm's latest.
       - dependency-name: "@types/node"
         versions:
-          - ">=25.0.0"
+          - ">=27.0.0"
       # TypeScript stays on the 6.x line deliberately — 7.x is the native-port
       # compiler and is a breaking change for the type-check gate and for
       # typescript-eslint. Revisit as an intentional migration, not a bump.

@@ -1,6 +1,6 @@
 // Package search wraps the small set of OpenSearch operations the app
 // uses (index, delete, get and search documents, bulk writes, alias-swap
-// index rebuilds) on top of github.com/opensearch-project/opensearch-go/v4.
+// index rebuilds) on top of github.com/opensearch-project/opensearch-go/v5.
 // The library builds every request, runs the transport — SigV4 signing via
 // its signer/awsv2 package, retries with backoff on 429/502/503/504 and on
 // connection errors, connection pooling — parses cluster errors, and drives
@@ -20,20 +20,19 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
-	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
 
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
-	"github.com/opensearch-project/opensearch-go/v4"
-	"github.com/opensearch-project/opensearch-go/v4/opensearchapi"
-	"github.com/opensearch-project/opensearch-go/v4/opensearchtransport"
-	"github.com/opensearch-project/opensearch-go/v4/opensearchutil"
-	"github.com/opensearch-project/opensearch-go/v4/signer"
-	"github.com/opensearch-project/opensearch-go/v4/signer/awsv2"
+	"github.com/opensearch-project/opensearch-go/v5"
+	"github.com/opensearch-project/opensearch-go/v5/opensearchapi"
+	"github.com/opensearch-project/opensearch-go/v5/opensearchutil"
+	"github.com/opensearch-project/opensearch-go/v5/signer"
+	"github.com/opensearch-project/opensearch-go/v5/signer/awsv2"
 )
 
 const (
@@ -69,10 +68,10 @@ var retryBackoff = func(attempt int) time.Duration {
 	return d/2 + rand.N(d/2)
 }
 
-// newTransport is a seam over opensearchtransport.New: with the fixed
+// newAPIClient is a seam over opensearchapi.NewClient: with the fixed
 // configuration built here it cannot fail, but its error contract is the
 // library's, so the arm stays and is exercised through this seam.
-var newTransport = opensearchtransport.New
+var newAPIClient = opensearchapi.NewClient
 
 // Client talks to OpenSearch. A nil *Client is a valid no-op client, so the
 // app runs without search configured (search routes then return empty
@@ -95,57 +94,48 @@ func NewClient(baseURL string) *Client {
 	return c
 }
 
-// newClient builds the library client: one seed URL, the tuned HTTP
-// transport, retries with backoff, and no background traffic — the
-// node-stats poller and health checks are for self-managed multi-node
-// clusters and would only probe a managed endpoint that may not allow them.
+// routerEnv is opensearch-go's switch for its default router, which it reads
+// from the environment only: "false" leaves the transport without one.
+const routerEnv = "OPENSEARCH_GO_ROUTER"
+
+// newClient builds the library client: one seed URL, retries with
+// backoff, and no background traffic. The library's own HTTP transport
+// keeps a deep enough idle-connection pool for concurrent traffic to the
+// one endpoint. The library's default router discovers the cluster's
+// nodes, sends requests straight to them and health-checks them; behind a
+// managed endpoint (AWS) the nodes' own addresses can't be reached, so ex
+// runs without it and every request goes to the one URL given. An operator
+// who set routerEnv keeps their choice; discovery stays off either way.
 func newClient(baseURL string, sgn signer.Signer) (*Client, error) {
 	trimmed := strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if trimmed == "" {
 		return nil, nil
 	}
-	u, err := url.Parse(trimmed)
-	if err != nil {
+	if _, err := url.Parse(trimmed); err != nil {
 		return nil, fmt.Errorf("search: parse url: %w", err)
 	}
-	tp, err := newTransport(opensearchtransport.Config{
-		URLs:      []*url.URL{u},
+	if _, set := os.LookupEnv(routerEnv); !set {
+		// Setenv fails only for a key no environment can hold.
+		_ = os.Setenv(routerEnv, "false")
+	}
+	api, err := newAPIClient(opensearchapi.Config{Client: opensearch.Config{
+		Addresses: []string{trimmed},
 		Signer:    sgn,
-		Transport: newHTTPTransport(),
 		RetryOnStatus: []int{
 			http.StatusTooManyRequests, http.StatusBadGateway,
 			http.StatusServiceUnavailable, http.StatusGatewayTimeout,
 		},
-		MaxRetries:        maxRetries,
-		RetryBackoff:      func(attempt int) time.Duration { return retryBackoff(attempt) },
-		RequestTimeout:    requestTimeout,
-		NodeStatsInterval: -1,
-		HealthCheck:       opensearchtransport.NoOpHealthCheck,
-	})
+		MaxRetries:            maxRetries,
+		RetryBackoff:          func(attempt int) time.Duration { return retryBackoff(attempt) },
+		RequestTimeout:        requestTimeout,
+		DiscoverNodesOnStart:  new(false),
+		DiscoverNodesInterval: -1,
+		NodeStatsInterval:     -1,
+	}})
 	if err != nil {
-		return nil, fmt.Errorf("search: build transport: %w", err)
+		return nil, fmt.Errorf("search: build client: %w", err)
 	}
-	return &Client{api: opensearchapi.NewFromClient(&opensearch.Client{Transport: tp})}, nil
-}
-
-// newHTTPTransport mirrors http.DefaultTransport but keeps far more idle
-// connections per host: every search, index write and bulk request goes to
-// the same cluster endpoint, and the default of 2 idle connections per host
-// made concurrent traffic churn through fresh TCP/TLS handshakes.
-func newHTTPTransport() *http.Transport {
-	return &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
-		DialContext: (&net.Dialer{
-			Timeout:   30 * time.Second,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
-		ForceAttemptHTTP2:     true,
-		MaxIdleConns:          128,
-		MaxIdleConnsPerHost:   64,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ExpectContinueTimeout: time.Second,
-	}
+	return &Client{api: api}, nil
 }
 
 // AWSSigning configures SigV4 signing for managed AWS OpenSearch.
@@ -208,7 +198,7 @@ func NewClientFromConfig(ctx context.Context, cfg ClientConfig) (*Client, error)
 // so callers can treat a specific status (404) as a non-error. The status is
 // 0 when no response arrived.
 func perform[T any](ctx context.Context, c *Client, method string, req opensearch.Request, out *T) (int, error) {
-	resp, err := opensearch.Do(ctx, c.api.Client, method, req, out)
+	resp, err := opensearch.Execute(ctx, c.api.Client, method, req, out)
 	if err != nil {
 		return 0, err
 	}
@@ -240,12 +230,12 @@ func (c *Client) EnsureIndices(ctx context.Context) error {
 		}
 		if exists {
 			if upd, ok := settingsUpdates[name]; ok {
-				if _, err := c.send(ctx, http.MethodPut, opensearchapi.SettingsPutReq{Indices: []string{name}, Body: strings.NewReader(upd)}); err != nil {
+				if _, err := c.send(ctx, http.MethodPut, opensearchapi.IndicesPutSettingsReq{Indices: []string{name}, BodyReader: strings.NewReader(upd)}); err != nil {
 					return fmt.Errorf("search: update settings %s: %w", name, err)
 				}
 			}
 			if upd, ok := mappingUpdates[name]; ok {
-				if _, err := c.send(ctx, http.MethodPut, opensearchapi.MappingPutReq{Indices: []string{name}, Body: strings.NewReader(upd)}); err != nil {
+				if _, err := c.send(ctx, http.MethodPut, opensearchapi.IndicesPutMappingReq{Indices: []string{name}, BodyReader: strings.NewReader(upd)}); err != nil {
 					return fmt.Errorf("search: update mapping %s: %w", name, err)
 				}
 			}
@@ -267,7 +257,7 @@ func (c *Client) indexExists(ctx context.Context, name string) (bool, error) {
 }
 
 func (c *Client) createIndex(ctx context.Context, name, body string) error {
-	_, err := c.send(ctx, http.MethodPut, opensearchapi.IndicesCreateReq{Index: name, Body: strings.NewReader(body)})
+	_, err := c.send(ctx, http.MethodPut, opensearchapi.IndicesCreateReq{Index: name, BodyReader: strings.NewReader(body)})
 	return err
 }
 
@@ -347,7 +337,7 @@ func (c *Client) PromoteIndex(ctx context.Context, name, staging string) error {
 		}
 	}
 	payload := must(json.Marshal(map[string]any{"actions": actions}))
-	if _, err := c.send(ctx, http.MethodPost, opensearchapi.AliasesReq{Body: bytes.NewReader(payload)}); err != nil {
+	if _, err := c.send(ctx, http.MethodPost, opensearchapi.IndicesUpdateAliasesReq{BodyReader: bytes.NewReader(payload)}); err != nil {
 		return fmt.Errorf("search: swap alias %s -> %s: %w", name, staging, err)
 	}
 	if old != "" {
@@ -379,7 +369,7 @@ func (c *Client) aliasBacking(ctx context.Context, name string) (string, error) 
 	var out map[string]struct {
 		Aliases map[string]any `json:"aliases"`
 	}
-	status, err := perform(ctx, c, http.MethodGet, opensearchapi.AliasGetReq{Alias: []string{name}}, &out)
+	status, err := perform(ctx, c, http.MethodGet, opensearchapi.IndicesGetAliasReq{Name: []string{name}}, &out)
 	if status == http.StatusNotFound {
 		return "", nil
 	}
@@ -411,7 +401,7 @@ func (c *Client) GetDoc(ctx context.Context, index, id string) (map[string]any, 
 	var envelope struct {
 		Source map[string]any `json:"_source"`
 	}
-	status, err := perform(ctx, c, http.MethodGet, opensearchapi.DocumentGetReq{Index: index, DocumentID: id}, &envelope)
+	status, err := perform(ctx, c, http.MethodGet, opensearchapi.GetReq{Index: index, ID: id}, &envelope)
 	if status == http.StatusNotFound {
 		return nil, nil
 	}
@@ -433,7 +423,7 @@ func (c *Client) IndexDoc(ctx context.Context, index, id string, doc any) error 
 	if err != nil {
 		return fmt.Errorf("search: marshal doc: %w", err)
 	}
-	if _, err := c.send(ctx, http.MethodPut, opensearchapi.IndexReq{Index: index, DocumentID: id, Body: bytes.NewReader(body)}); err != nil {
+	if _, err := c.send(ctx, http.MethodPut, opensearchapi.IndexReq{Index: index, ID: id, Body: bytes.NewReader(body)}); err != nil {
 		return fmt.Errorf("search: index %s/%s: %w", index, id, err)
 	}
 	return nil
@@ -444,7 +434,7 @@ func (c *Client) DeleteDoc(ctx context.Context, index, id string) error {
 	if c == nil {
 		return nil
 	}
-	status, err := c.send(ctx, http.MethodDelete, opensearchapi.DocumentDeleteReq{Index: index, DocumentID: id})
+	status, err := c.send(ctx, http.MethodDelete, opensearchapi.DeleteReq{Index: index, ID: id})
 	if status == http.StatusNotFound {
 		return nil
 	}
@@ -504,27 +494,20 @@ func (c *Client) Bulk(ctx context.Context, index string, entries []BulkEntry) er
 func (c *Client) bulkRound(ctx context.Context, index string, entries []BulkEntry, bodies [][]byte, pending []int) ([]int, error) {
 	var (
 		mu        sync.Mutex
-		acked     int
 		throttled []int
 		failures  []error
 		reqErr    error
 	)
-	// The workers stop once their context is done, and opensearch-go starts
-	// them before it counts them: one handed a context that was already done
-	// could stop before it was counted, and the WaitGroup panicked, which
-	// takes the whole process down. They get the caller's cancellation only
-	// once the indexer is built.
-	workCtx, stopWork := context.WithCancel(context.WithoutCancel(ctx))
-	defer stopWork()
-	// One worker, so a caller's batch goes out in order as one request.
-	// NewBulkIndexer only errors when it has to build its own client.
+	// One request at a time. Every item gets exactly one callback before
+	// Close returns, a response that leaves an item out included: that comes
+	// back as the request's error. NewBulkIndexer only errors when it has to
+	// build its own client.
 	bi := must(opensearchutil.NewBulkIndexer(opensearchutil.BulkIndexerConfig{
 		Client:     c.api,
-		Context:    workCtx,
+		Context:    ctx,
 		NumWorkers: 1,
 		FlushBytes: bulkFlushBytes,
 	}))
-	defer context.AfterFunc(ctx, stopWork)()
 	var addErr error
 	for _, i := range pending {
 		id := entries[i].ID
@@ -534,33 +517,26 @@ func (c *Client) bulkRound(ctx context.Context, index string, entries []BulkEntr
 			Action:     "index",
 			DocumentID: id,
 			Body:       bytes.NewReader(bodies[i]),
-			OnSuccess: func(context.Context, opensearchutil.BulkIndexerItem, opensearchapi.BulkRespItem) {
+			OnError: func(_ context.Context, _ opensearchutil.BulkIndexerItem, err *opensearchutil.BulkError) {
 				mu.Lock()
 				defer mu.Unlock()
-				acked++
-			},
-			OnFailure: func(_ context.Context, _ opensearchutil.BulkIndexerItem, res opensearchapi.BulkRespItem, err error) {
-				mu.Lock()
-				defer mu.Unlock()
-				acked++
 				switch {
-				case err != nil && throttledRequest(err):
-					// The whole request was still answered with 429 after the
-					// transport's own retries: resubmit it like throttled items.
+				case err.Status == http.StatusTooManyRequests:
+					// The item was rejected with 429, or the whole request was
+					// still answered with 429 after the transport's own retries:
+					// resubmit it.
 					throttled = append(throttled, i)
-				case err != nil:
+				case err.Layer == opensearchutil.LayerItem:
+					// The error names the document and the cluster's reason.
+					failures = append(failures, err)
+				case reqErr == nil:
 					// The whole request failed; every item reports the same error.
-					reqErr = cmp.Or(reqErr, err)
-				case res.Status == http.StatusTooManyRequests:
-					throttled = append(throttled, i)
-				default:
-					failures = append(failures, bulkItemError(id, res))
+					reqErr = err
 				}
 			},
 		}))
 	}
 	closeErr := bi.Close(ctx)
-	// A Close cut short by ctx can leave a worker still reporting results.
 	mu.Lock()
 	defer mu.Unlock()
 	if err := cmp.Or(addErr, closeErr, reqErr); err != nil {
@@ -570,31 +546,7 @@ func (c *Client) bulkRound(ctx context.Context, index string, entries []BulkEntr
 		shown := failures[:min(len(failures), bulkMaxReportedFailures)]
 		return nil, fmt.Errorf("search: bulk %s: %d of %d items failed: %w", index, len(failures), len(pending), errors.Join(shown...))
 	}
-	if acked < len(pending) {
-		return nil, fmt.Errorf("search: bulk %s: cluster acknowledged %d of %d items", index, acked, len(pending))
-	}
 	return throttled, nil
-}
-
-// throttledRequest reports whether a failed request was answered with 429.
-func throttledRequest(err error) bool {
-	var structErr *opensearch.StructError
-	var stringErr *opensearch.StringError
-	switch {
-	case errors.As(err, &structErr):
-		return structErr.Status == http.StatusTooManyRequests
-	case errors.As(err, &stringErr):
-		return stringErr.Status == http.StatusTooManyRequests
-	}
-	return false
-}
-
-// bulkItemError names a failed bulk item and the cluster's reason for it.
-func bulkItemError(id string, res opensearchapi.BulkRespItem) error {
-	if res.Error == nil {
-		return fmt.Errorf("%s: status %d", id, res.Status)
-	}
-	return fmt.Errorf("%s: status %d: %s: %s", id, res.Status, res.Error.Type, res.Error.Reason)
 }
 
 // sleepCtx waits d, or until ctx is done. A var so a test can give up at the
@@ -664,7 +616,7 @@ func (c *Client) Search(ctx context.Context, index string, body any) (*SearchRes
 			} `json:"buckets"`
 		} `json:"aggregations"`
 	}
-	req := opensearchapi.SearchReq{Indices: []string{index}, Body: bytes.NewReader(raw)}
+	req := opensearchapi.SearchReq{Indices: []string{index}, BodyReader: bytes.NewReader(raw)}
 	if _, err := perform(ctx, c, http.MethodPost, req, &envelope); err != nil {
 		return nil, fmt.Errorf("search: query %s: %w", index, err)
 	}
@@ -784,7 +736,7 @@ func (c *Client) IndexSchemaVersion(ctx context.Context, name string) (int, bool
 			} `json:"_meta"`
 		} `json:"mappings"`
 	}
-	status, err := perform(ctx, c, http.MethodGet, opensearchapi.MappingGetReq{Indices: []string{name}}, &out)
+	status, err := perform(ctx, c, http.MethodGet, opensearchapi.IndicesGetMappingReq{Indices: []string{name}}, &out)
 	if status == http.StatusNotFound {
 		return 0, false, nil
 	}

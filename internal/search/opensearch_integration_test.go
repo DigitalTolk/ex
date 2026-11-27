@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/model"
-	"github.com/opensearch-project/opensearch-go/v4/opensearchapi"
+	"github.com/opensearch-project/opensearch-go/v5/opensearchapi"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
@@ -34,7 +34,7 @@ func TestMain(m *testing.M) {
 	ctx := context.Background()
 	req := testcontainers.ContainerRequest{
 		// Match the docker-compose stack's image so tests run what prod runs.
-		Image:        "opensearchproject/opensearch:3.6.0",
+		Image:        "opensearchproject/opensearch:3.9.0",
 		ExposedPorts: []string{"9200/tcp"},
 		Env: map[string]string{
 			"discovery.type":              "single-node",
@@ -83,7 +83,7 @@ func refreshIndex(t *testing.T, c *Client, index string) {
 	t.Helper()
 	// IndexDoc writes with refresh=false, so force a refresh to make docs
 	// searchable before asserting.
-	if _, err := c.send(context.Background(), http.MethodPost, opensearchapi.IndicesRefreshReq{Index: []string{index}}); err != nil {
+	if _, err := c.send(context.Background(), http.MethodPost, opensearchapi.IndicesRefreshReq{Indices: []string{index}}); err != nil {
 		t.Fatalf("refresh %s: %v", index, err)
 	}
 }
@@ -473,7 +473,7 @@ func TestSearch_BulkReportsItemError_RealEngine(t *testing.T) {
 		{ID: "bulk-ok", Doc: map[string]any{"id": "bulk-ok", "parentId": "bulk-ch", "body": "bulkgood"}},
 		{ID: "bulk-bad", Doc: map[string]any{"id": "bulk-bad", "parentId": "bulk-ch", "createdAt": "not-a-date"}},
 	})
-	if err == nil || !strings.Contains(err.Error(), "bulk-bad: status 400: mapper_parsing_exception") {
+	if err == nil || !strings.Contains(err.Error(), `"bulk-bad" rejected: "mapper_parsing_exception"`) {
 		t.Fatalf("Bulk error = %v, want the engine's per-item reason for bulk-bad", err)
 	}
 	doc, err := c.GetDoc(ctx, IndexMessages, "bulk-ok")
@@ -599,7 +599,7 @@ func TestSearch_ReactionsDoNotAddFields_RealEngine(t *testing.T) {
 				} `json:"properties"`
 			} `json:"mappings"`
 		}
-		if _, err := perform(ctx, c, http.MethodGet, opensearchapi.MappingGetReq{Indices: []string{IndexMessages}}, &m); err != nil {
+		if _, err := perform(ctx, c, http.MethodGet, opensearchapi.IndicesGetMappingReq{Indices: []string{IndexMessages}}, &m); err != nil {
 			t.Fatalf("get mapping: %v", err)
 		}
 		for _, idx := range m {
@@ -673,7 +673,7 @@ func TestSearch_MessagesFieldLimit_RealEngine(t *testing.T) {
 				} `json:"index"`
 			} `json:"settings"`
 		}
-		if _, err := perform(ctx, c, http.MethodGet, opensearchapi.SettingsGetReq{Indices: []string{index}}, &m); err != nil {
+		if _, err := perform(ctx, c, http.MethodGet, opensearchapi.IndicesGetSettingsReq{Indices: []string{index}}, &m); err != nil {
 			t.Fatalf("get settings: %v", err)
 		}
 		for _, idx := range m {

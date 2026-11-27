@@ -59,7 +59,7 @@ services:
       start_period: 10s
 
   opensearch:
-    image: opensearchproject/opensearch:3.6.0
+    image: opensearchproject/opensearch:3.9.0
     environment:
       discovery.type: single-node
       # Dev: security plugin off so the API is plain HTTP on :9200.

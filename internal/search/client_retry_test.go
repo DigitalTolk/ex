@@ -113,7 +113,7 @@ func TestClient_Bulk_ReportsTheRealItemError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected the failed item to surface")
 	}
-	for _, want := range []string{"1 of 2 items failed", "m2: status 400: mapper_parsing_exception: failed to parse field [createdAt] of m2"} {
+	for _, want := range []string{"1 of 2 items failed", `"m2" rejected: "mapper_parsing_exception": "failed to parse field [createdAt] of m2"`} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q does not contain %q", err, want)
 		}
@@ -134,8 +134,20 @@ func TestClient_Bulk_CapsReportedItemErrors(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "7 of 7 items failed") {
 		t.Fatalf("error = %v, want the full failure count", err)
 	}
-	if !strings.Contains(err.Error(), "d4: status 400") || strings.Contains(err.Error(), "d5:") {
+	if !strings.Contains(err.Error(), `"d4" rejected`) || strings.Contains(err.Error(), `"d5"`) {
 		t.Errorf("error = %q, want detail for the first %d items only", err, bulkMaxReportedFailures)
+	}
+}
+
+// A response that leaves a document out fails the batch: that document was
+// never written.
+func TestClient_Bulk_ResponseMissingAnItemFails(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"errors":false,"items":[{"index":{"_id":"1","status":201}}]}`))
+	}))
+	defer srv.Close()
+	if err := NewClient(srv.URL).Bulk(context.Background(), IndexUsers, entriesFor("1", "2")); err == nil {
+		t.Fatal("a batch with an unacknowledged document succeeded")
 	}
 }
 
@@ -146,7 +158,7 @@ func TestClient_Bulk_ItemFailureWithoutErrorObject(t *testing.T) {
 	}))
 	defer srv.Close()
 	err := NewClient(srv.URL).Bulk(context.Background(), IndexUsers, entriesFor("x"))
-	if err == nil || !strings.Contains(err.Error(), "x: status 500") {
+	if err == nil || !strings.Contains(err.Error(), `"x" rejected: status 500`) {
 		t.Fatalf("error = %v, want the bare item status", err)
 	}
 }
@@ -232,10 +244,10 @@ func TestClient_Bulk_CancelledContext(t *testing.T) {
 	}
 }
 
-// Regression: opensearch-go starts the indexer's workers before it counts
-// them, so a worker handed a context that was already done could stop before
-// it was counted, and the WaitGroup panicked, killing the process. Only a
-// race, hence the repeats; each one gave it another chance.
+// Regression: opensearch-go v4 started the indexer's workers before it
+// counted them, so a worker handed a context that was already done could stop
+// before it was counted, and the WaitGroup panicked, killing the process. Only
+// a race, hence the repeats; each one gave it another chance.
 func TestClient_Bulk_CancelledContextNeverPanics(t *testing.T) {
 	b := &bulkCluster{respond: func(_ int, ids []string) string {
 		return bulkResponse(ids, func(string) int { return http.StatusCreated })

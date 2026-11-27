@@ -35,7 +35,7 @@ require (
 	github.com/hibiken/asynq v0.26.0
 	github.com/klauspost/compress v1.20.5
 	github.com/oklog/ulid/v2 v2.1.2
-	github.com/opensearch-project/opensearch-go/v4 v4.8.2
+	github.com/opensearch-project/opensearch-go/v5 v5.2.1
 	github.com/redis/go-redis/v9 v9.24.0
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/testcontainers/testcontainers-go v0.45.0
@@ -166,6 +166,7 @@ require (
 	github.com/power-devops/perfstat v0.0.0-20260916203055-22a1a467d9f0 // indirect
 	github.com/puzpuzpuz/xsync/v4 v4.5.0 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
+	github.com/rs/dnscache v0.0.0-20230804202142-fc85eb664529 // indirect
 	github.com/rs/zerolog v1.35.1 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
 	github.com/secure-systems-lab/go-securesystemslib v0.11.1 // indirect

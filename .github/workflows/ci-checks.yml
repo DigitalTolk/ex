@@ -9,7 +9,7 @@ permissions:
 
 env:
   GO_VERSION: '1.27.4'
-  NODE_VERSION: '24'
+  NODE_VERSION: '26'
 
 jobs:
   # Lint runs first and fails fast — no point spinning up the test
@@ -99,8 +99,9 @@ jobs:
     container:
       # Tag must track the playwright-core version in package-lock.json —
       # vitest launches the browsers this image pre-installs, and a mismatch
-      # fails with "Executable doesn't exist".
-      image: ghcr.io/digitaltolk/docker-builder-playwright:1.65.1
+      # fails with "Executable doesn't exist". The -1 revision is the same
+      # Playwright on the node:26 base.
+      image: ghcr.io/digitaltolk/docker-builder-playwright:1.65.1-1
     needs: lint
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
