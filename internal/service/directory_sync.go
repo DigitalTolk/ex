@@ -342,7 +342,7 @@ func (s *DirectorySyncService) syncUser(ctx context.Context, user *model.User) (
 	}
 	applyDirectoryProfile(user, dp)
 	user.UpdatedAt = time.Now()
-	fields := dp.fields()
+	fields := dp.fields(user)
 	// Field-level: the copy came from the sweep's page read, and writing all
 	// of it back would undo a status change made since (the status sweep
 	// deactivating this very account, say).

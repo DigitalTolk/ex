@@ -1,12 +1,13 @@
 // Package msgraph is a minimal Microsoft Graph client. The app-only
 // (client-credentials) Client covers exactly the slices of Graph the app uses
 // as itself: directory
-// profile reads (name, phone, department, job title + manager, synced onto Ex profiles at SSO login) and
+// profile reads (name, phone, department, job title, manager and groups,
+// synced onto Ex profiles at SSO login and by the periodic sweep) and
 // creating Teams online meetings on behalf of a user (the /mstmeetings slash
 // command). Because the workspace already authenticates through the same
 // Azure AD app registration, no per-user account linking or token storage is
 // needed — the app authenticates itself and acts via Graph application
-// permissions (User.Read.All; OnlineMeetings.ReadWrite.All via an application
+// permissions (User.Read.All, GroupMember.Read.All; OnlineMeetings.ReadWrite.All via an application
 // access policy for meeting creation). Delegated (delegated.go) acts as a
 // signed-in user instead, for what must never run with the app's rights:
 // sharing SharePoint files.
@@ -230,21 +231,37 @@ func (a UserAccount) Enabled() bool {
 
 // ListUserAccounts returns every user account in the tenant with its enabled
 // flag, following Graph's paging to the end: one call per 999 accounts, so a
-// whole-tenant check stays cheap enough to run every few minutes. A page
-// link pointing anywhere but this client's Graph base URL is refused rather
-// than sent the bearer token.
+// whole-tenant check stays cheap enough to run every few minutes.
 func (c *Client) ListUserAccounts(ctx context.Context) ([]UserAccount, error) {
-	var accounts []UserAccount
-	path := "/users?$select=id,accountEnabled&$top=999"
+	return listAll[UserAccount](ctx, c, "/users?$select=id,accountEnabled&$top=999")
+}
+
+// Group is one group a user belongs to.
+type Group struct {
+	DisplayName     string `json:"displayName"`
+	SecurityEnabled bool   `json:"securityEnabled"`
+}
+
+// ListUserGroups returns the groups the user is a direct member of (the
+// cast leaves out directory roles and administrative units).
+func (c *Client) ListUserGroups(ctx context.Context, key string) ([]Group, error) {
+	return listAll[Group](ctx, c, "/users/"+url.PathEscape(key)+"/memberOf/microsoft.graph.group?$select=displayName,securityEnabled&$top=999")
+}
+
+// listAll reads a Graph collection to the end, following its page links. A
+// page link pointing anywhere but this client's Graph base URL is refused
+// rather than sent the bearer token.
+func listAll[T any](ctx context.Context, c *Client, path string) ([]T, error) {
+	var items []T
 	for path != "" {
 		var page struct {
-			Value    []UserAccount `json:"value"`
-			NextLink string        `json:"@odata.nextLink"`
+			Value    []T    `json:"value"`
+			NextLink string `json:"@odata.nextLink"`
 		}
 		if err := c.doJSON(ctx, http.MethodGet, path, nil, &page); err != nil {
 			return nil, err
 		}
-		accounts = append(accounts, page.Value...)
+		items = append(items, page.Value...)
 		path = ""
 		if page.NextLink != "" {
 			rest, ok := strings.CutPrefix(page.NextLink, c.baseURL+"/")
@@ -254,7 +271,7 @@ func (c *Client) ListUserAccounts(ctx context.Context) ([]UserAccount, error) {
 			path = "/" + rest
 		}
 	}
-	return accounts, nil
+	return items, nil
 }
 
 // GetUserManager fetches a user's manager from the directory hierarchy.

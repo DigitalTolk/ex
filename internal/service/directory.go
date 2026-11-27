@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -23,16 +24,27 @@ type DirectoryProfile struct {
 	DisplayName string
 	Phone       string
 	Department  string
-	// Squad is the squad (or squads, joined with ", ") the directory lists
-	// after the department.
+	// Squad is the user's squad (several joined with ", "), from their
+	// security groups.
 	Squad    string
 	JobTitle string
-	Manager     *model.UserManager
+	Manager  *model.UserManager
+	// squadUnread marks a profile whose groups could not be read: the
+	// stored squad stands rather than being cleared.
+	squadUnread bool
 }
 
-// fields is the directory-owned attribute set a profile writes.
-func (dp *DirectoryProfile) fields() store.UserDirectoryFields {
-	return store.UserDirectoryFields{Phone: dp.Phone, Department: dp.Department, Squad: dp.Squad, JobTitle: dp.JobTitle, Manager: dp.Manager}
+// squadFor is the squad applying dp leaves on user.
+func (dp *DirectoryProfile) squadFor(user *model.User) string {
+	if dp.squadUnread {
+		return user.Squad
+	}
+	return dp.Squad
+}
+
+// fields is the directory-owned attribute set a profile writes over user.
+func (dp *DirectoryProfile) fields(user *model.User) store.UserDirectoryFields {
+	return store.UserDirectoryFields{Phone: dp.Phone, Department: dp.Department, Squad: dp.squadFor(user), JobTitle: dp.JobTitle, Manager: dp.Manager}
 }
 
 // differsFrom reports whether applying dp would change anything on user —
@@ -40,7 +52,7 @@ func (dp *DirectoryProfile) fields() store.UserDirectoryFields {
 func (dp *DirectoryProfile) differsFrom(user *model.User) bool {
 	return user.Phone != dp.Phone ||
 		user.Department != dp.Department ||
-		user.Squad != dp.Squad ||
+		user.Squad != dp.squadFor(user) ||
 		user.JobTitle != dp.JobTitle ||
 		!user.Manager.Equal(dp.Manager) ||
 		(dp.DisplayName != "" && user.DisplayName != dp.DisplayName) ||
@@ -48,7 +60,7 @@ func (dp *DirectoryProfile) differsFrom(user *model.User) bool {
 }
 
 // DirectoryLookup resolves directory attributes (name, phone, department,
-// job title, manager) for a user.
+// squad, job title, manager) for a user.
 // Implementations must treat "user not in the directory" as (nil, nil) — only
 // transport/auth failures are errors. AuthService calls it fail-open: a
 // directory outage degrades to an un-enriched login, never a failed one.
@@ -64,10 +76,11 @@ type GraphDirectory interface {
 	GetUserProfile(ctx context.Context, key string) (*msgraph.UserProfile, error)
 	ResolveUserByEmail(ctx context.Context, email string) (*msgraph.UserProfile, error)
 	GetUserManager(ctx context.Context, key string) (*msgraph.UserProfile, error)
+	ListUserGroups(ctx context.Context, key string) ([]msgraph.Group, error)
 	ListUserAccounts(ctx context.Context) ([]msgraph.UserAccount, error)
 }
 
-// MSDirectoryService reads the profile + manager from Microsoft Graph and resolves
+// MSDirectoryService reads the profile, groups and manager from Microsoft Graph and resolves
 // the manager to an Ex user (by email) so profiles can link to them.
 type MSDirectoryService struct {
 	graph GraphDirectory
@@ -101,14 +114,20 @@ func (s *MSDirectoryService) LookupProfile(ctx context.Context, email, objectID 
 		return nil, fmt.Errorf("directory: get user profile: %w", err)
 	}
 
-	department, squad := splitDepartment(profile.Department)
 	dp := &DirectoryProfile{
 		ObjectID:    profile.ID,
 		DisplayName: directoryName(profile.DisplayName),
 		Phone:       profile.Phone(),
-		Department:  department,
-		Squad:       squad,
+		Department:  strings.TrimSpace(profile.Department),
 		JobTitle:    strings.TrimSpace(profile.JobTitle),
+	}
+	groups, err := s.graph.ListUserGroups(ctx, profile.ID)
+	switch {
+	case err == nil:
+		dp.Squad = squadsOf(dp.Department, groups)
+	case !errors.Is(err, msgraph.ErrNotFound):
+		slog.WarnContext(ctx, "directory: group lookup failed; keeping the stored squad", "error", err)
+		dp.squadUnread = true
 	}
 
 	// Key the manager read by the profile's canonical object id — the input
@@ -174,11 +193,26 @@ func directoryName(name string) string {
 	return name
 }
 
-// splitDepartment parses the directory's department field, which Cliffhub's
-// sync writes as "Department - Squad" (several squads joined with ", "). The
-// first " - " splits: a squad may contain one, and a hyphen inside a word
-// ("Sales-Ops") is no separator. A value without one is all department.
-func splitDepartment(value string) (department, squad string) {
-	department, squad, _ = strings.Cut(" "+strings.TrimSpace(value)+" ", " - ")
-	return strings.TrimSpace(department), strings.TrimSpace(squad)
+// squadsOf is the user's squads: the security groups named
+// "<department>-<squad>" for their own department (case and spaces around
+// the hyphen don't matter), sorted and joined with ", ". The department is
+// matched whole, so a hyphen inside it or inside a squad is no separator, and
+// another department's groups never count.
+func squadsOf(department string, groups []msgraph.Group) string {
+	if department == "" {
+		return ""
+	}
+	var squads []string
+	for _, g := range groups {
+		name := strings.TrimSpace(g.DisplayName)
+		if !g.SecurityEnabled || len(name) < len(department) || !strings.EqualFold(name[:len(department)], department) {
+			continue
+		}
+		rest, ok := strings.CutPrefix(strings.TrimSpace(name[len(department):]), "-")
+		if squad := strings.TrimSpace(rest); ok && squad != "" && !slices.Contains(squads, squad) {
+			squads = append(squads, squad)
+		}
+	}
+	slices.Sort(squads)
+	return strings.Join(squads, ", ")
 }

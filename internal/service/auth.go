@@ -419,7 +419,7 @@ func (s *AuthService) refreshOIDCUser(ctx context.Context, user *model.User, inf
 	dirProfile := s.lookupDirectory(ctx, user.Email, cmp.Or(info.ObjectID, user.MSObjectID))
 	directoryChanged := dirProfile != nil && dirProfile.differsFrom(user)
 	if dirProfile != nil {
-		fields := dirProfile.fields()
+		fields := dirProfile.fields(user)
 		patch.Directory = &fields
 		if dirProfile.DisplayName != "" {
 			// The directory is the source of truth for names; the ID
@@ -947,7 +947,7 @@ func applyDirectoryProfile(user *model.User, dp *DirectoryProfile) {
 	}
 	user.Phone = dp.Phone
 	user.Department = dp.Department
-	user.Squad = dp.Squad
+	user.Squad = dp.squadFor(user)
 	user.JobTitle = dp.JobTitle
 	user.Manager = dp.Manager
 	if dp.ObjectID != "" {

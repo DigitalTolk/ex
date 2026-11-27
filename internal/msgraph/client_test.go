@@ -647,3 +647,36 @@ func TestListUserAccountsError(t *testing.T) {
 		t.Fatalf("err = %v, want the 403 propagated", err)
 	}
 }
+
+func TestListUserGroups(t *testing.T) {
+	tokenSrv, _ := newTokenServer(t, 3600)
+	var graphURL string
+	graphSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/users/oid-1/memberOf/microsoft.graph.group" {
+			t.Errorf("path = %q, want the user's group memberships", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("$select"); got != "displayName,securityEnabled" {
+			t.Errorf("$select = %q, want displayName,securityEnabled", got)
+		}
+		if r.URL.Query().Get("$skiptoken") == "" {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"value":           []map[string]any{{"displayName": "Engineering-Platform", "securityEnabled": true}},
+				"@odata.nextLink": graphURL + "/users/oid-1/memberOf/microsoft.graph.group?$select=displayName,securityEnabled&$skiptoken=p2",
+			})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"value": []map[string]any{{"displayName": "All staff", "securityEnabled": false}}})
+	}))
+	defer graphSrv.Close()
+	graphURL = graphSrv.URL
+
+	c := newClient(t, tokenSrv.URL, graphSrv.URL)
+	groups, err := c.ListUserGroups(context.Background(), "oid-1")
+	if err != nil {
+		t.Fatalf("ListUserGroups: %v", err)
+	}
+	want := []Group{{DisplayName: "Engineering-Platform", SecurityEnabled: true}, {DisplayName: "All staff"}}
+	if len(groups) != len(want) || groups[0] != want[0] || groups[1] != want[1] {
+		t.Errorf("groups = %+v, want %+v (both pages)", groups, want)
+	}
+}
