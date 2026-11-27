@@ -69,6 +69,40 @@ describe('keepBottomEdge', () => {
     expect(fromEnd()).toBeLessThanOrEqual(1);
   });
 
+  // A sent image's row grows when its picture loads while the box is still
+  // closing, and the browser nudges the view, so a scroll lands with the view
+  // short of the new end. The list then catches up to the end in the same
+  // frame the box closes a step further. That catch-up was taken for the
+  // browser pulling the view back, and the reader was put back where the
+  // nudge had left them (seen in CI as a sent image left 61px under the
+  // fold). A reader at the end whose content grew is still at the end.
+  it('keeps a reader at the end there when their content grows mid-closing', async () => {
+    const { scroller, fromEnd, grow, addMessage } = setup();
+    // The list measures its rows in a ResizeObserver of its own, and the box
+    // closes a step from in there, so this helper hears of it a frame late.
+    const row = document.createElement('div');
+    row.style.height = '1px';
+    scroller.appendChild(row);
+    let catchUp = false;
+    const list = new ResizeObserver(() => {
+      if (!catchUp) return;
+      catchUp = false;
+      scroller.scrollTop = scroller.scrollHeight;
+      grow(8);
+    });
+    list.observe(row);
+    await frame();
+    await frame();
+    addMessage(160);
+    scroller.scrollTop -= 40;
+    await new Promise<void>((resolve) => scroller.addEventListener('scroll', () => resolve(), { once: true }));
+    catchUp = true;
+    row.style.height = '2px';
+    for (let i = 0; i < 4; i += 1) await frame();
+    list.disconnect();
+    expect(fromEnd()).toBeLessThanOrEqual(1);
+  });
+
   it('keeps a reader further up where they were as the box closes', async () => {
     const { scroller, fromEnd, grow } = setup();
     scroller.scrollTop -= 200;

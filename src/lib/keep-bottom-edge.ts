@@ -12,10 +12,22 @@ export function keepBottomEdge(scroller: HTMLElement): () => void {
   let top = 0;
   let fromEnd = 0;
   let scrollable = false;
+  // Whether the reader is at the end. Content growing under a reader there (a
+  // picture loading, a message arriving) leaves them there, however far the
+  // view stands from the new end until the list catches up: going by the
+  // distance alone, a catch-up taken for the browser pulling the view back
+  // put a reader whose sent picture had just loaded 61px above the end.
+  let atEnd = false;
+  let contentHeight = 0;
   const note = () => {
+    const grew = scroller.scrollHeight > contentHeight;
+    contentHeight = scroller.scrollHeight;
     top = scroller.scrollTop;
     fromEnd = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
     scrollable = scroller.scrollHeight > scroller.clientHeight;
+    // An empty or short list is at the end of nothing: one that fills later
+    // leaves its reader where they are.
+    atEnd = (scrollable && fromEnd <= 1) || (atEnd && grew);
   };
   note();
   // The browser pulled the view back inside the content since the observer
@@ -33,7 +45,7 @@ export function keepBottomEdge(scroller: HTMLElement): () => void {
       // grew and shrank again before this ran (the keyboard coming up: the
       // composer drops its home-indicator padding, then opens its toolbar).
       if (!pulled && scroller.scrollTop !== top && top <= end) note();
-      if (scrollable && fromEnd <= 1) {
+      if (atEnd) {
         scroller.scrollTop = end;
       } else if (shrunk > 0 || scroller.scrollTop < end - 1) {
         scroller.scrollTop += shrunk;
