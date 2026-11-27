@@ -137,6 +137,34 @@ describe('keepBottomEdge', () => {
     expect(fromEnd()).toBeLessThanOrEqual(1);
   });
 
+  // Regression: sending an image on a phone. The list follows the new
+  // message down while the message box closes under it, so the list's own
+  // move down comes as a scroll event while the view is taller than the
+  // observer has heard of. That read as the browser pulling the view back
+  // inside its content (which only ever moves it up), so the list's jump to
+  // the end in the next callback was undone to where it had stood before.
+  it('lets a jump to the end stand when the list moved down as the box closed', async () => {
+    const { scroller, fromEnd, grow } = setup();
+    scroller.scrollTop -= 61;
+    await frame();
+    await frame();
+    // Between frames: the box closes a step and the list starts down.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    grow(16);
+    scroller.scrollTop += 3;
+    // That scroll event comes before the next frame's callbacks; the list
+    // jumps to the end in one of them.
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => {
+        scroller.scrollTop = scroller.scrollHeight;
+        resolve();
+      }),
+    );
+    await frame();
+    await frame();
+    expect(fromEnd()).toBeLessThanOrEqual(1);
+  });
+
   it('keeps the bottom edge when the view shrinks', async () => {
     const { scroller, fromEnd, grow } = setup();
     scroller.scrollTop -= 100;
