@@ -113,6 +113,9 @@ export const queryKeys = {
   // projects() so one invalidation refreshes the list and every open detail.
   projects: () => ['projects'] as const,
   project: (key: string) => ['projects', key] as const,
+  // Where projects come from (CliffHub's sync status). '#' never appears in
+  // a project key, so it can't collide with project(key).
+  projectSource: () => ['projects', '#source'] as const,
 
   // Members directory; query "" lists everyone. No argument = every query.
   usersDirectory: (query?: string) =>

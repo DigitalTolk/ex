@@ -10,6 +10,8 @@ import type { CodingProject, ProjectLink, ProjectRepo, ProjectScreen } from '@/t
 // on other devices stay current.
 
 export interface ProjectSummary extends CodingProject {
+  // Opens the project in CliffHub, where projects live when it is connected.
+  editURL?: string;
   screenCount: number;
   oldestScreenAt?: string;
 }
@@ -25,6 +27,7 @@ export interface ProjectDetail {
   project: CodingProject;
   screens: ScreenView[];
   canManage: boolean;
+  editURL?: string;
   // The uploaded stylesheet as the agent sees it (never the raw file).
   theme?: ThemeView;
 }
@@ -46,6 +49,7 @@ export interface ProjectPatch {
   links?: ProjectLink[];
   repos?: ProjectRepo[];
   uiLibrary?: string;
+  instructions?: string;
   // The project's main stylesheet ('' removes it) and its file name.
   themeCSS?: string;
   themeFilename?: string;
@@ -59,6 +63,33 @@ export interface ScreenPatch {
   seenBy?: string;
   route?: string;
   attachmentID?: string;
+}
+
+// ProjectSource is where projects come from when they are not ex's own:
+// CliffHub's systems, kept in sync by a poll.
+export interface ProjectSource {
+  provider: 'cliffhub';
+  newURL?: string;
+  lastSyncAt?: string;
+  lastError?: string;
+}
+
+export function useProjectSource() {
+  return useQuery({
+    queryKey: queryKeys.projectSource(),
+    queryFn: async () => {
+      const res = await apiFetch<{ source: ProjectSource | null }>('/api/v1/project-source');
+      return res.source ?? null;
+    },
+  });
+}
+
+export function useSyncProjects() {
+  const invalidate = useInvalidateProjects();
+  return useMutation({
+    mutationFn: () => apiFetch<{ result: unknown }>('/api/v1/project-source/sync', { method: 'POST' }),
+    onSuccess: invalidate,
+  });
 }
 
 export function useProjects(opts: { enabled?: boolean } = {}) {

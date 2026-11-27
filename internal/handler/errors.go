@@ -112,6 +112,8 @@ var errorMappings = []errorMapping{
 	{agents.ErrStaleTask, http.StatusConflict, "bad_transition", "the task changed meanwhile — read it again"},
 	{agents.ErrTaskNotReady, http.StatusConflict, "not_ready", ""},
 	{agents.ErrNotRequester, http.StatusForbidden, "forbidden", "only the requester can do that"},
+	// Not on the project's dev access list: the text names who and where to ask.
+	{agents.ErrNoDevAccess, http.StatusForbidden, "no_dev_access", ""},
 	{agents.ErrTaskAgent, http.StatusServiceUnavailable, "no_dev_agent", "the dev coding agent is not available in this workspace"},
 	{agents.ErrNotTaskRun, http.StatusBadRequest, "not_task_run", "this run is not bound to a coding task"},
 

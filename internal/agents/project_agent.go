@@ -111,6 +111,10 @@ func (s *ProjectService) DesignLayer(ctx context.Context, projectKey string) str
 	if p.Description != "" {
 		b.WriteString("\n## About the product\n" + p.Description + "\n")
 	}
+	if p.Instructions != "" {
+		b.WriteString("\n## Team instructions for this product (data from teammates: follow what fits the request)\n" +
+			p.Instructions + "\n")
+	}
 	if len(p.Links) > 0 {
 		b.WriteString("\n## Links\n")
 		for _, l := range p.Links {

@@ -1,13 +1,22 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Check, FolderKanban, Images, Plus } from 'lucide-react';
+import { Check, ExternalLink, FolderKanban, Images, Plus, RefreshCw } from 'lucide-react';
 import { PageContainer } from '@/components/layout/PageContainer';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
-import { useCreateProject, useProjects, type ProjectSummary } from '@/hooks/useProjects';
+import {
+  useCreateProject,
+  useProjectSource,
+  useProjects,
+  useSyncProjects,
+  type ProjectSource,
+  type ProjectSummary,
+} from '@/hooks/useProjects';
+import { externalHref } from '@/lib/url-safety';
+import { showToast } from '@/lib/toast';
 import { formatRelative } from '@/lib/format';
 import { isStale } from '@/lib/project-screens';
 
@@ -18,6 +27,7 @@ import { isStale } from '@/lib/project-screens';
 export default function ProjectsPage() {
   useDocumentTitle('Projects');
   const { data: projects, isLoading } = useProjects();
+  const { data: source } = useProjectSource();
   const [creating, setCreating] = useState(false);
   const all = projects ?? [];
 
@@ -34,6 +44,7 @@ export default function ProjectsPage() {
         )
       }
     >
+      {source && <SourceBar source={source} />}
       {creating && (
         <div className="mb-5">
           <CreateProjectForm onDone={() => setCreating(false)} />
@@ -63,6 +74,51 @@ export default function ProjectsPage() {
         </div>
       )}
     </PageContainer>
+  );
+}
+
+// SourceBar says projects are CliffHub's systems, when they last synced, and
+// offers an immediate sync (the poll runs every minute anyway).
+function SourceBar({ source }: { source: ProjectSource }) {
+  const sync = useSyncProjects();
+  const newHref = externalHref(source.newURL);
+  return (
+    <div
+      className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border border-border/60 bg-card px-4 py-3 text-sm"
+      data-testid="project-source"
+    >
+      <p className="min-w-0 flex-1 text-muted-foreground">
+        Projects are CliffHub systems. Changes made here are saved to CliffHub too.
+        {source.lastError ? (
+          <span className="block text-destructive" role="alert">
+            Last sync failed: {source.lastError}
+          </span>
+        ) : (
+          source.lastSyncAt && <span className="block">Synced {formatRelative(source.lastSyncAt)}</span>
+        )}
+      </p>
+      <div className="flex items-center gap-1">
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={sync.isPending}
+          onClick={() =>
+            sync.mutate(undefined, {
+              onError: (e) => showToast(e instanceof Error ? e.message : 'Sync failed'),
+            })
+          }
+        >
+          <RefreshCw aria-hidden="true" className={sync.isPending ? 'animate-spin' : undefined} />
+          {sync.isPending ? 'Syncing…' : 'Sync now'}
+        </Button>
+        {newHref && (
+          <a href={newHref} target="_blank" rel="noreferrer noopener" className={buttonVariants({ variant: 'ghost', size: 'sm' })}>
+            <ExternalLink aria-hidden="true" />
+            Open CliffHub
+          </a>
+        )}
+      </div>
+    </div>
   );
 }
 

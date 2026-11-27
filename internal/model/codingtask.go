@@ -37,6 +37,22 @@ type CodingProject struct {
 	// Tailwind v4, Tabler icons") — the design agent draws anything the
 	// screens don't show the way that library renders it.
 	UILibrary string `json:"uiLibrary,omitempty" dynamodbav:"uiLibrary,omitempty"`
+	// Instructions are what agents should know to work on the product: how
+	// to run and test it, conventions, things to avoid. Teammates write them
+	// (in CliffHub); every coding and design run on the project reads them.
+	Instructions string `json:"instructions,omitempty" dynamodbav:"instructions,omitempty"`
+	// AgentEmails are the people (by lowercased email) allowed to have the
+	// dev agent work on a CliffHub-linked project; empty means nobody. Not
+	// used for a project ex holds alone.
+	AgentEmails []string `json:"agentEmails,omitempty" dynamodbav:"agentEmails,omitempty"`
+	// SystemID links the project to its CliffHub system, the source of truth
+	// for everything above: ex keeps this row as a cached copy, refreshed by
+	// the project sync. Empty for a project ex has not linked yet.
+	SystemID string `json:"systemID,omitempty" dynamodbav:"systemID,omitempty"`
+	// Archived is set when the linked system is archived or deleted in
+	// CliffHub. The row stays (tasks and screens still point at it) but the
+	// Projects page no longer lists it.
+	Archived bool `json:"archived,omitempty" dynamodbav:"archived,omitempty"`
 	// No channel here on purpose: a project has one channel PER REQUESTER,
 	// derived from (project key, requester id) — see service.ProjectChannelID.
 	// Rows written before 2026-09-21 carry a channelID attribute for the old
@@ -67,6 +83,8 @@ const (
 	// into their context, so huge images only cost tokens.
 	ScreenImageMaxBytes    = 8 << 20
 	ProjectUILibraryMaxLen = 300
+	// ProjectInstructionsMaxLen caps the agent instructions.
+	ProjectInstructionsMaxLen = 8000
 	// ProjectThemeMaxBytes caps an uploaded theme stylesheet (globals.css).
 	ProjectThemeMaxBytes = 256 << 10
 )
@@ -87,16 +105,20 @@ type ProjectTheme struct {
 // ordinary attachment; the screen holds a reference on it (see
 // ScreenAttachmentRef) so the attachment GC keeps it alive.
 type ProjectScreen struct {
-	ID           string    `json:"id" dynamodbav:"id"`
-	ProjectKey   string    `json:"projectKey" dynamodbav:"projectKey"`
-	Page         string    `json:"page" dynamodbav:"page"`               // "Booking detail"
-	Description  string    `json:"description" dynamodbav:"description"` // what the page is for / shows
-	Viewport     string    `json:"viewport" dynamodbav:"viewport"`       // ScreenViewport*
-	State        string    `json:"state,omitempty" dynamodbav:"state,omitempty"`
-	SeenBy       string    `json:"seenBy,omitempty" dynamodbav:"seenBy,omitempty"`
-	Route        string    `json:"route,omitempty" dynamodbav:"route,omitempty"`
-	AttachmentID string    `json:"attachmentID" dynamodbav:"attachmentID"`
-	UploadedBy   string    `json:"uploadedBy" dynamodbav:"uploadedBy"`
+	ID           string `json:"id" dynamodbav:"id"`
+	ProjectKey   string `json:"projectKey" dynamodbav:"projectKey"`
+	Page         string `json:"page" dynamodbav:"page"`               // "Booking detail"
+	Description  string `json:"description" dynamodbav:"description"` // what the page is for / shows
+	Viewport     string `json:"viewport" dynamodbav:"viewport"`       // ScreenViewport*
+	State        string `json:"state,omitempty" dynamodbav:"state,omitempty"`
+	SeenBy       string `json:"seenBy,omitempty" dynamodbav:"seenBy,omitempty"`
+	Route        string `json:"route,omitempty" dynamodbav:"route,omitempty"`
+	AttachmentID string `json:"attachmentID" dynamodbav:"attachmentID"`
+	UploadedBy   string `json:"uploadedBy" dynamodbav:"uploadedBy"`
+	// SourceSHA256 is the hash of the CliffHub image this screen's attachment
+	// was copied from. Empty for a screen CliffHub does not have yet, which
+	// the project sync then moves there.
+	SourceSHA256 string    `json:"-" dynamodbav:"sourceSHA256,omitempty"`
 	CreatedAt    time.Time `json:"createdAt" dynamodbav:"createdAt"`
 	UpdatedAt    time.Time `json:"updatedAt" dynamodbav:"updatedAt"`
 }
@@ -119,6 +141,10 @@ type ProjectRepo struct {
 	Role string `json:"role" dynamodbav:"role"` // RepoRole*
 	// DefaultBranch, when known (learned by the runner from origin/HEAD).
 	DefaultBranch string `json:"defaultBranch,omitempty" dynamodbav:"defaultBranch,omitempty"`
+	// URL and Label are the repo link as CliffHub holds it, kept so a write
+	// back to CliffHub returns the same link and label it read.
+	URL   string `json:"url,omitempty" dynamodbav:"url,omitempty"`
+	Label string `json:"label,omitempty" dynamodbav:"label,omitempty"`
 }
 
 // Repo roles.

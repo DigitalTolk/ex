@@ -77,6 +77,25 @@ type Config struct {
 	// UserGroupSyncInterval paces the user-group sync
 	// (USERGROUP_SYNC_INTERVAL, default 30m); admins can also sync at once.
 	UserGroupSyncInterval time.Duration `env:"USERGROUP_SYNC_INTERVAL" envDefault:"30m"`
+	// CliffHubURL turns on projects from CliffHub: its systems become ex's
+	// projects (CLIFFHUB_URL, the API origin). CliffHubAPIKey is its EX_API_KEY.
+	// Without a real key (see CliffHubEnabled) the feature stays off and
+	// projects live in ex as before: a missing secret never stops the boot.
+	CliffHubURL    string `env:"CLIFFHUB_URL"`
+	CliffHubAPIKey string `env:"CLIFFHUB_API_KEY"`
+	// CliffHubWebURL is CliffHub's web app, for links to a system
+	// (CLIFFHUB_WEB_URL); empty shows no links.
+	CliffHubWebURL string `env:"CLIFFHUB_WEB_URL"`
+	// CliffHubFallbackActor is the CliffHub employee (email) ex acts as when
+	// the person making a change is not one (CLIFFHUB_FALLBACK_ACTOR). Empty
+	// refuses such changes; meant for development with seed users.
+	CliffHubFallbackActor string `env:"CLIFFHUB_FALLBACK_ACTOR"`
+	// CliffHubEmailMap makes ex users stand for CliffHub employees with other
+	// addresses: "ex@a=cliffhub@b,…" (CLIFFHUB_EMAIL_MAP). Development only.
+	CliffHubEmailMap string `env:"CLIFFHUB_EMAIL_MAP"`
+	// CliffHubSyncInterval paces the project sync (CLIFFHUB_SYNC_INTERVAL,
+	// default 1m). An unchanged catalogue costs one 304.
+	CliffHubSyncInterval time.Duration `env:"CLIFFHUB_SYNC_INTERVAL" envDefault:"1m"`
 	// MSTokenKey turns on SharePoint link sharing: a SharePoint link posted
 	// in a channel or conversation is shared with its members as the person
 	// who posted it. It is the base64 of 32 random bytes that seal each
@@ -327,6 +346,9 @@ func Load() (*Config, error) {
 	if c.UserGroupSyncInterval <= 0 {
 		return nil, fmt.Errorf("invalid USERGROUP_SYNC_INTERVAL %s: must be a positive duration", c.UserGroupSyncInterval)
 	}
+	if c.CliffHubSyncInterval <= 0 {
+		return nil, fmt.Errorf("invalid CLIFFHUB_SYNC_INTERVAL %s: must be a positive duration", c.CliffHubSyncInterval)
+	}
 	if c.UserGroupEntraParentGroup != "" && c.MSTenantID == "" {
 		return nil, fmt.Errorf("USERGROUP_ENTRA_PARENT_GROUP is set but MS_TENANT_ID isn't: user groups are read from Microsoft 365")
 	}
@@ -388,6 +410,17 @@ func envError(err error) error {
 // configured.
 func (c *Config) MSGraphEnabled() bool {
 	return c.MSTenantID != ""
+}
+
+// cliffHubKeyMinLen is the shortest CLIFFHUB_API_KEY taken as set. Terraform
+// seeds new SSM parameters with a placeholder ("bar"); CliffHub refuses keys
+// this short too.
+const cliffHubKeyMinLen = 32
+
+// CliffHubEnabled reports whether projects come from CliffHub: a URL and a
+// real key. A URL with a missing or placeholder key is off, not an error.
+func (c *Config) CliffHubEnabled() bool {
+	return c.CliffHubURL != "" && len(c.CliffHubAPIKey) >= cliffHubKeyMinLen
 }
 
 // loadSharePoint checks the SharePoint settings. A key set without what

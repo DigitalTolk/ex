@@ -89,7 +89,24 @@ type CodingTaskService struct {
 	agents   *AgentService
 	orch     *Orchestrator
 	baseURL  string
+	upstream projectUpstream
 	now      func() time.Time
+}
+
+// SetProjectUpstream makes projects a task learns land in CliffHub
+// (optional; nil keeps them in ex alone).
+func (s *CodingTaskService) SetProjectUpstream(u projectUpstream) { s.upstream = u }
+
+// saveUpstream writes a project change through to CliffHub when projects
+// come from there. Best-effort: the cache is updated either way, and the
+// next sync brings it back in line if CliffHub refused.
+func (s *CodingTaskService) saveUpstream(ctx context.Context, actorID string, p *model.CodingProject) {
+	if s.upstream == nil || !s.upstream.Enabled() {
+		return
+	}
+	if err := s.upstream.Save(ctx, actorID, p); err != nil {
+		slog.WarnContext(ctx, "project change not written to CliffHub", "project", p.Key, "error", err)
+	}
 }
 
 // NewCodingTaskService wires the task layer.
@@ -205,6 +222,10 @@ type CreateTaskInput struct {
 	Kind       string
 	BaseBranch string // default base for repos that don't name one
 	Ticket     *model.TaskTicket
+	// Check validates everything a create would (project, repos, dev access,
+	// an active task) and reports the repos it would use, creating nothing.
+	// The runner checks it can reach those repos before the real create.
+	Check bool
 }
 
 // CreateTaskResult is what the creating agent learns back.
@@ -218,6 +239,9 @@ type CreateTaskResult struct {
 	// KickoffErr is set when the task exists but its first run could not
 	// start (the requester's runner vanished between intake and kickoff).
 	KickoffErr error
+	// Checked: a Check call passed; Repos are what the task would touch.
+	Checked bool
+	Repos   []model.TaskRepo
 }
 
 // Create opens a coding task for the run's invoker (the requester): resolves
@@ -325,8 +349,9 @@ func (s *CodingTaskService) Create(ctx context.Context, run *model.Run, in Creat
 		// grow it. Anyone else's extra repos stay on their own task.
 		if len(repos) == 0 {
 			repos = projectTaskRepos(proj, in.BaseBranch)
-		} else if projectCallerOf(requester).canManage(proj) && s.mergeProjectRepos(proj, repos) {
+		} else if !in.Check && projectCallerOf(requester).canManage(proj) && s.mergeProjectRepos(proj, repos) {
 			proj.UpdatedAt = s.now()
+			s.saveUpstream(ctx, requester.ID, proj)
 			if err := s.tasks.UpdateProject(ctx, proj); err != nil {
 				slog.WarnContext(ctx, "project repo merge failed", "project", key, "error", err)
 			}
@@ -345,12 +370,26 @@ func (s *CodingTaskService) Create(ctx context.Context, run *model.Run, in Creat
 		for _, r := range repos {
 			proj.Repos = append(proj.Repos, model.ProjectRepo{Path: r.Path, Role: r.Role})
 		}
+		// Projects live in CliffHub when it is on: register the system
+		// before anything else happens, so a refusal changes nothing.
+		if !in.Check && s.upstream != nil && s.upstream.Enabled() {
+			if err := s.upstream.Create(ctx, requester.ID, proj); err != nil {
+				return nil, fmt.Errorf("task: register project %q in CliffHub: %w", name, err)
+			}
+		}
 		projectCreated = true
 	default:
 		return nil, fmt.Errorf("task: project lookup: %w", err)
 	}
 	if len(repos) == 0 {
 		return nil, fmt.Errorf("%w: %q has no repos on record", ErrProjectUnknown, name)
+	}
+	// Only the people a CliffHub project lists may have the dev agent work
+	// on it: the agent relays this refusal to the requester.
+	if s.upstream != nil {
+		if err := s.upstream.CheckDevAccess(proj, requester); err != nil {
+			return nil, err
+		}
 	}
 
 	channelID := s.requesterChannelID(ctx, requester, key)
@@ -370,6 +409,9 @@ func (s *CodingTaskService) Create(ctx context.Context, run *model.Run, in Creat
 			return nil, fmt.Errorf("%w: %q is %s — follow it at %s", ErrTaskActive, t.Title, t.State, s.TaskURL(t))
 		}
 		superseded = append(superseded, t)
+	}
+	if in.Check {
+		return &CreateTaskResult{Checked: true, Project: proj, ProjectCreated: projectCreated, Repos: repos}, nil
 	}
 
 	ch, created, err := s.ensureChannel(ctx, requester, channelID, proj)
@@ -765,7 +807,17 @@ func (s *CodingTaskService) ListByChannel(ctx context.Context, callerID, channel
 
 // ListProjects lists the known projects (products + repos).
 func (s *CodingTaskService) ListProjects(ctx context.Context) ([]*model.CodingProject, error) {
-	return s.tasks.ListProjects(ctx)
+	all, err := s.tasks.ListProjects(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*model.CodingProject, 0, len(all))
+	for _, p := range all {
+		if !p.Archived {
+			out = append(out, p)
+		}
+	}
+	return out, nil
 }
 
 // RepoUpdate is one repo's slice of a lifecycle report.
@@ -877,6 +929,7 @@ func (s *CodingTaskService) learnDefaultBranch(ctx context.Context, invokerID, p
 		if p.Repos[i].Path == repoPath && p.Repos[i].DefaultBranch != base {
 			p.Repos[i].DefaultBranch = base
 			p.UpdatedAt = s.now()
+			s.saveUpstream(ctx, invokerID, p)
 			if err := s.tasks.UpdateProject(ctx, p); err != nil {
 				slog.DebugContext(ctx, "project default-branch learn failed", "project", projectKey, "error", err)
 			}

@@ -346,7 +346,7 @@ func TestOtaskCov_TaskSpecAndSectionRendering(t *testing.T) {
 	if got := mrSuffix(model.TaskRepo{}); got != "" {
 		t.Fatalf("no MR must render nothing, got %q", got)
 	}
-	if got := renderProjectsIndex(nil); got != "" {
+	if got := renderProjectsIndex(nil, nil); got != "" {
 		t.Fatalf("no projects must render nothing, got %q", got)
 	}
 }

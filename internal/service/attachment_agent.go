@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"path"
 	"strings"
 	"time"
@@ -113,6 +114,13 @@ func (s *AttachmentService) UploadForAgent(ctx context.Context, p AgentUploadPar
 		RunID:       p.RunID,
 		CreatedAt:   time.Now(),
 	}
+	return s.storeVerified(ctx, a, contentType, data)
+}
+
+// storeVerified stores the bytes of a new attachment row and verifies them
+// exactly as ProcessUpload does a browser upload, removing both again if
+// they fail.
+func (s *AttachmentService) storeVerified(ctx context.Context, a *model.Attachment, contentType string, data []byte) (*model.Attachment, error) {
 	// The same content checks a browser upload gets at process time, on the
 	// bytes in hand: a PNG must decode as a PNG, a PDF must start like one.
 	cfg, _, release, err := inspectContent(ctx, a, contentType, bufio.NewReader(bytes.NewReader(data)), false)
@@ -138,6 +146,48 @@ func (s *AttachmentService) UploadForAgent(ctx context.Context, p AgentUploadPar
 		return nil, err
 	}
 	return a, nil
+}
+
+// importImageTypes are the image types the server may import.
+var importImageTypes = map[string]string{
+	"image/png": ".png", "image/jpeg": ".jpg", "image/gif": ".gif", "image/webp": ".webp",
+}
+
+// ImportImageParams is one image the server fetched itself.
+type ImportImageParams struct {
+	Name      string // a base name without extension; the type adds one
+	CreatedBy string
+	Data      []byte
+}
+
+// ImportImage stores an image the server fetched from an integration (a
+// CliffHub system's screenshot), typed by its bytes and verified like any
+// upload. The row is nobody's draft: the caller takes a reference on it.
+func (s *AttachmentService) ImportImage(ctx context.Context, p ImportImageParams) (*model.Attachment, error) {
+	if s.signer == nil {
+		return nil, errors.New("attachment: storage not configured")
+	}
+	if len(p.Data) == 0 || int64(len(p.Data)) > model.UploadMaxBytes {
+		return nil, ErrUploadTooLarge
+	}
+	contentType := http.DetectContentType(p.Data)
+	ext, ok := importImageTypes[contentType]
+	if !ok {
+		return nil, ErrUnsupportedUploadType
+	}
+	sum := sha256.Sum256(p.Data)
+	id := store.NewID()
+	a := &model.Attachment{
+		ID:          id,
+		SHA256:      hex.EncodeToString(sum[:]),
+		Size:        int64(len(p.Data)),
+		ContentType: contentType,
+		Filename:    sanitizeUploadFilename(p.Name) + ext,
+		S3Key:       "attachments/" + id,
+		CreatedBy:   p.CreatedBy,
+		CreatedAt:   time.Now(),
+	}
+	return s.storeVerified(ctx, a, contentType, p.Data)
 }
 
 func (s *AttachmentService) discardObject(ctx context.Context, key string) {
