@@ -1,4 +1,3 @@
-import { Quote } from 'lucide-react';
 import {
   Fragment,
   createContext,
@@ -245,13 +244,8 @@ const HAST_COMPONENTS_MAP: Record<string, AnyComponent> = {
   h5: ({ children }) => <h5 className={headingClass(5)}>{children}</h5>,
   h6: ({ children }) => <h6 className={headingClass(6)}>{children}</h6>,
   hr: () => <hr className="my-3 border-muted" />,
-  // Text quoted by hand ("> …"): a quote mark and muted text, no bar and no
-  // box.
   blockquote: ({ children }) => (
-    <blockquote className="relative my-1 pl-7 text-muted-foreground">
-      <Quote className="absolute top-[3px] left-0.5 h-4 w-4 fill-current text-border-strong" aria-hidden="true" data-testid="quote-mark" />
-      {children}
-    </blockquote>
+    <blockquote className="my-1 border-l-2 border-muted-foreground/30 pl-3 text-muted-foreground">{children}</blockquote>
   ),
   p: (props: { children?: ReactNode; 'data-blank'?: string }) => {
     if (props['data-blank'] === 'true') {
