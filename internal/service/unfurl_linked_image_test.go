@@ -6,6 +6,7 @@ import (
 	"image"
 	"image/color"
 	"image/gif"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -115,6 +116,7 @@ func TestUnfurlService_LinkedImageWithoutPreview(t *testing.T) {
 		{"SVG", "image/svg+xml", []byte(`<svg xmlns="http://www.w3.org/2000/svg"/>`), false},
 		{"bytes that are no image", "image/avif", []byte("<html>not an image</html>"), false},
 		{"image that can't be measured", "image/png", []byte("\x89PNG\r\n\x1a\ntruncated"), false},
+		{"image too big for a browser to decode", "image/png", pngHeader(30000, 30000), false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -180,6 +182,81 @@ func TestDecodeImageDims_AVIF(t *testing.T) {
 	for _, name := range []string{"still.avif", "animated.avif"} {
 		if w, h := decodeImageDims(readAVIFFixture(t, name)); w != 24 || h != 16 {
 			t.Errorf("%s: dims = %dx%d, want 24x16", name, w, h)
+		}
+	}
+}
+
+// A preview image is decoded in full by every viewer's browser: one that
+// declares more pixels than the server would decode for a message's picture
+// is refused, whatever its file size, and so is one whose size can't be read
+// (a BMP or ICO could hide the same).
+func TestUnfurlService_FetchUpstreamImageRefusesPixelBombs(t *testing.T) {
+	if w, h := decodeImageDims(pngHeader(30000, 30000)); w != 30000 || h != 30000 {
+		t.Fatalf("header reads as %dx%d", w, h)
+	}
+	cases := []struct {
+		name        string
+		contentType string
+		body        []byte
+		ok          bool
+	}{
+		{"30000x30000 PNG of a few bytes", "image/png", pngHeader(30000, 30000), false},
+		{"just over the limit", "image/png", pngHeader(8193, 4096), false},
+		{"exactly at the limit", "image/png", pngHeader(8192, 4096), true},
+		{"BMP, size unreadable", "image/bmp", append([]byte("BM"), make([]byte, 64)...), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := serveImage(t, tc.contentType, tc.body)
+			svc := newLoopbackUnfurlService(newFakeUnfurlCache())
+			_, _, err := svc.fetchUpstreamImage(context.Background(), srv.URL+"/x")
+			if (err == nil) != tc.ok {
+				t.Fatalf("err = %v, want ok=%v", err, tc.ok)
+			}
+		})
+	}
+}
+
+// An image stored before the pixel limit existed is held to it once its
+// size is known.
+func TestUnfurlService_StoredImageOverTheLimitIsNotShown(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeImageStore()
+	cache := newFakeUnfurlCache()
+	key := unfurlImageKey("https://cdn.example/huge.png")
+	store.existing[key] = true
+	if err := cache.Set(ctx, imageDimsKey(key), imageDims{W: 30000, H: 30000, Measured: true}, unfurlCacheTTL); err != nil {
+		t.Fatal(err)
+	}
+	svc := newLoopbackUnfurlService(cache)
+	svc.SetImageStore(store)
+	if u, w, h := svc.ProxyImageWithSize(ctx, "https://cdn.example/huge.png"); u != "" || w != 0 || h != 0 {
+		t.Fatalf("proxy = %q %dx%d, want none", u, w, h)
+	}
+	if store.headCalls != 0 || store.getCalls != 0 {
+		t.Fatalf("head=%d get=%d, want the record alone to decide", store.headCalls, store.getCalls)
+	}
+}
+
+func TestFitsDecodeBudget(t *testing.T) {
+	cases := []struct {
+		w, h int
+		want bool
+	}{
+		{1, 1, true},
+		{8192, 4096, true},  // 32 MiP: the 256 MiB budget at 8 bytes a pixel
+		{8193, 4096, false}, // one column more
+		{4096, 8193, false},
+		{0, 100, false},
+		{100, 0, false},
+		{-1, 100, false},
+		// Sides an AVIF header can declare, whose product overflows int64.
+		{1 << 32, 1 << 32, false},
+		{math.MaxInt32, math.MaxInt32, false},
+	}
+	for _, tc := range cases {
+		if got := fitsDecodeBudget(tc.w, tc.h); got != tc.want {
+			t.Errorf("fitsDecodeBudget(%d, %d) = %v, want %v", tc.w, tc.h, got, tc.want)
 		}
 	}
 }

@@ -448,7 +448,7 @@ func TestUnfurlService_NamesItselfToSites(t *testing.T) {
 func TestUnfurlService_ImageProxiedToS3_HitsCache(t *testing.T) {
 	imgSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "image/png")
-		_, _ = w.Write([]byte("\x89PNG\r\n\x1a\nfake-png-bytes"))
+		_, _ = w.Write(realPNG1x1)
 	}))
 	defer imgSrv.Close()
 
@@ -624,7 +624,7 @@ func TestUnfurlService_ImageProxyKeyExt(t *testing.T) {
 func TestUnfurlService_ImageProxyPutFailureClearsImage(t *testing.T) {
 	imgSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "image/png")
-		_, _ = w.Write([]byte("\x89PNGfake"))
+		_, _ = w.Write(realPNG1x1)
 	}))
 	defer imgSrv.Close()
 	pageSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -644,6 +644,9 @@ func TestUnfurlService_ImageProxyPutFailureClearsImage(t *testing.T) {
 	}
 	if got.Image != "" {
 		t.Errorf("Image = %q, want \"\" when S3 PUT fails", got.Image)
+	}
+	if store.putCalls != 1 {
+		t.Errorf("putCalls = %d, want the upload tried", store.putCalls)
 	}
 }
 
@@ -873,14 +876,19 @@ func TestUnfurlService_ProxyImageWithSizeFailures(t *testing.T) {
 		t.Fatalf("put-error proxy = %q", u)
 	}
 
-	// Sign error on a HEAD-hit (object already present).
+	// Sign error on a HEAD-hit (object already present, a real image, so
+	// it is signing alone that fails).
 	ss := newFakeImageStore()
 	ss.failSign = true
 	ss.existing[unfurlImageKey(imgSrv.URL+"/a.png")] = true
+	ss.puts[unfurlImageKey(imgSrv.URL+"/a.png")] = realPNG1x1
 	signSvc := newLoopbackUnfurlService(nil)
 	signSvc.SetImageStore(ss)
 	if u, _, _ := signSvc.ProxyImageWithSize(ctx, imgSrv.URL+"/a.png"); u != "" {
 		t.Fatalf("sign-error proxy = %q", u)
+	}
+	if ss.signCalls != 1 {
+		t.Fatalf("signCalls = %d, want the failure to come from signing", ss.signCalls)
 	}
 }
 

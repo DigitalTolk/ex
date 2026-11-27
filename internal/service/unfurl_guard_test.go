@@ -169,7 +169,9 @@ func TestUnfurlService_CachedImageSkipsHead(t *testing.T) {
 		}
 	})
 
-	t.Run("undecodable object is measured once", func(t *testing.T) {
+	// An image whose size can't be read can't be held to the pixel limit:
+	// it is not shown, and not read again on the next post.
+	t.Run("undecodable object is measured once, and not shown", func(t *testing.T) {
 		store := newFakeImageStore()
 		key := unfurlImageKey("https://cdn.example/odd.ico")
 		store.existing[key] = true
@@ -177,8 +179,8 @@ func TestUnfurlService_CachedImageSkipsHead(t *testing.T) {
 		svc := newLoopbackUnfurlService(newFakeUnfurlCache())
 		svc.SetImageStore(store)
 		for range 3 {
-			if u, w, h := svc.ProxyImageWithSize(ctx, "https://cdn.example/odd.ico"); u == "" || w != 0 || h != 0 {
-				t.Fatalf("proxy = %q %dx%d", u, w, h)
+			if u, w, h := svc.ProxyImageWithSize(ctx, "https://cdn.example/odd.ico"); u != "" || w != 0 || h != 0 {
+				t.Fatalf("proxy = %q %dx%d, want none", u, w, h)
 			}
 		}
 		if store.headCalls != 1 || store.getCalls != 1 {

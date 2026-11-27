@@ -432,6 +432,11 @@ func (s *UnfurlService) storeImage(ctx context.Context, imgURL string, measure b
 	if dirty {
 		s.saveImageRecord(ctx, key, rec)
 	}
+	// An image stored before fetchUpstreamImage checked the pixel count is
+	// held to it too, once its size is known.
+	if rec.measured() && !fitsDecodeBudget(rec.W, rec.H) {
+		return "", imageDims{}, false
+	}
 	return key, rec, true
 }
 
@@ -546,9 +551,17 @@ func decodeImageDims(data []byte) (int, int) {
 	return res.ImageConfig.Width, res.ImageConfig.Height
 }
 
+// fitsDecodeBudget reports whether a w×h image's decoded pixels fit
+// maxImageDecodeBytes, the most the server decodes one picture into. It
+// divides rather than multiplies: an AVIF header can declare sides whose
+// product overflows.
+func fitsDecodeBudget(w, h int) bool {
+	return w > 0 && h > 0 && int64(w) <= maxImageDecodeBytes/decodeBytesPerPixel/int64(h)
+}
+
 // fetchUpstreamImage pulls the upstream image with the same SSRF-hardened
-// HTTP client used for HTML scraping. Enforces a 2 MiB size cap and an
-// `image/*` content-type.
+// HTTP client used for HTML scraping. Enforces a 2 MiB size cap, an
+// `image/*` content-type and a pixel count every viewer can decode.
 func (s *UnfurlService) fetchUpstreamImage(ctx context.Context, imgURL string) ([]byte, string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, imgURL, nil)
 	if err != nil {
@@ -590,6 +603,14 @@ func (s *UnfurlService) fetchUpstreamImage(ctx context.Context, imgURL string) (
 	detected := sniffImageType(body)
 	if !strings.HasPrefix(detected, "image/") {
 		return nil, "", fmt.Errorf("unfurl: image magic mismatch %q", detected)
+	}
+	// Every viewer's browser decodes the image in full, and a few KB of PNG
+	// can declare 30000×30000 pixels (several GB decoded). Only an image whose
+	// size can be read, and whose pixels fit the budget the server decodes a
+	// message's picture within, is kept: a BMP or ICO, whose size Go can't
+	// read, could hide the same.
+	if w, h := decodeImageDims(body); !fitsDecodeBudget(w, h) {
+		return nil, "", fmt.Errorf("unfurl: image size %dx%d unreadable or too large", w, h)
 	}
 	// Store what the bytes are, never the upstream's header verbatim: a list
 	// such as "image/png, text/html" passes the prefix check above, yet a
