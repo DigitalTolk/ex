@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/model"
-	"github.com/cenkalti/backoff/v5"
+	"github.com/cenkalti/backoff/v6"
 )
 
 // fakeSentDraftClearer records every clear and fails the first `failures`

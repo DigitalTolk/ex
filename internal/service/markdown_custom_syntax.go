@@ -8,13 +8,13 @@ import (
 
 // Custom inline syntax extractor — Go port of the frontend's
 // markdown-custom-syntax. Walks a text fragment and slices out
-// domain tokens (mentions, hashtags, emoji shortcodes, giphy refs,
+// domain tokens (mentions, hashtags, emoji shortcodes, GIF refs,
 // bare URLs, email addresses, image-literal markdown) into hast `ex-*`
 // element nodes.
 //
-// The frontend renders ex-mention-user / ex-hashtag / ex-giphy /
-// ex-bare-url / ex-emoji-shortcode / ex-media-literal directly
-// through the components map — no JS-side regex pass is needed.
+// The frontend renders ex-mention-user / ex-hashtag / ex-ohmagif /
+// ex-giphy / ex-bare-url / ex-emoji-shortcode / ex-media-literal
+// directly through the components map — no JS-side regex pass is needed.
 
 var (
 	// CHANNEL_MENTION_RE_GLOBAL, with the slug half held to the slug
@@ -31,6 +31,10 @@ var (
 	hashtagRE = regexp.MustCompile(`(^|[^\w/])#([\p{L}\p{N}_-]{2,64})`)
 	// IMAGE_RE — markdown image syntax with optional =WxH suffix.
 	imageRE = regexp.MustCompile(`!\[([^\]]*)\]\(([^)\s]+?)(?:\s+=(\d+)x(\d+))?\)`)
+	// An ohmagif GIF id: 10 letters or digits (isGifId in @ohmagif/js).
+	// Anything else in an `ohmagif:` ref stays literal text, so a typed id
+	// can never shape the request the client makes for it.
+	ohmagifIDRE = regexp.MustCompile(`^[0-9A-Za-z]{10}$`)
 	// BARE_URL_RE — http(s) only.
 	bareURLRE = regexp.MustCompile(`https?://[^\s<>"]+`)
 	// EMAIL_RE — an email address, by the rule the composer highlights it
@@ -90,30 +94,39 @@ func extractCustomTokens(input string) []*HastNode {
 		return out
 	})
 
-	// Image markdown — giphy refs become embeds, others become
-	// literal text spans (security: no arbitrary remote media).
+	// Image markdown — GIF refs become embeds, others become literal
+	// text spans (security: no arbitrary remote media). `ohmagif:<id>` is
+	// what the GIF picker inserts; `giphy:<id>` is a GIF picked before
+	// ohmagif replaced GIPHY, which the client plays from GIPHY's files.
 	pieces = splitTokens(pieces, imageRE, func(m []string, _ int) []*HastNode {
 		url := m[2]
-		if strings.HasPrefix(url, "giphy:") {
-			props := map[string]interface{}{
-				"data-id":    strings.TrimPrefix(url, "giphy:"),
-				"data-value": m[0],
-			}
-			if m[3] != "" {
-				if w, err := strconv.Atoi(m[3]); err == nil {
-					props["data-width"] = w
-				}
-			}
-			if m[4] != "" {
-				if h, err := strconv.Atoi(m[4]); err == nil {
-					props["data-height"] = h
-				}
-			}
-			return []*HastNode{exElement("ex-giphy", props)}
+		tag := ""
+		var id string
+		if rest, ok := strings.CutPrefix(url, "ohmagif:"); ok && ohmagifIDRE.MatchString(rest) {
+			tag, id = "ex-ohmagif", rest
+		} else if rest, ok := strings.CutPrefix(url, "giphy:"); ok {
+			tag, id = "ex-giphy", rest
 		}
-		return []*HastNode{exElement("ex-media-literal", map[string]interface{}{
+		if tag == "" {
+			return []*HastNode{exElement("ex-media-literal", map[string]interface{}{
+				"data-value": m[0],
+			})}
+		}
+		props := map[string]interface{}{
+			"data-id":    id,
 			"data-value": m[0],
-		})}
+		}
+		if m[3] != "" {
+			if w, err := strconv.Atoi(m[3]); err == nil {
+				props["data-width"] = w
+			}
+		}
+		if m[4] != "" {
+			if h, err := strconv.Atoi(m[4]); err == nil {
+				props["data-height"] = h
+			}
+		}
+		return []*HastNode{exElement(tag, props)}
 	})
 
 	// Bare URLs — after images (whose parens contain URLs the image pass

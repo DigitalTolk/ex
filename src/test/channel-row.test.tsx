@@ -337,9 +337,23 @@ describe('ChannelRow', () => {
     const onNavigate = vi.fn();
     renderRow(makeChannel({ channelID: 'ch-1', channelName: 'general' }), false, { onNavigate });
     const link = screen.getByText('general').closest('a')!;
-    for (const modifier of [{ metaKey: true }, { ctrlKey: true }, { shiftKey: true }, { altKey: true }]) {
-      expect(fireEvent.click(link, modifier)).toBe(true);
+    // Whether the row left each click alone, read on window, after the app's
+    // handler; the click's own default (opening the link) is then cancelled,
+    // as jsdom cannot navigate to another document.
+    const leftToBrowser: boolean[] = [];
+    const record = (e: MouseEvent) => {
+      leftToBrowser.push(!e.defaultPrevented);
+      e.preventDefault();
+    };
+    window.addEventListener('click', record);
+    try {
+      for (const modifier of [{ metaKey: true }, { ctrlKey: true }, { shiftKey: true }, { altKey: true }]) {
+        fireEvent.click(link, modifier);
+      }
+    } finally {
+      window.removeEventListener('click', record);
     }
+    expect(leftToBrowser).toEqual([true, true, true, true]);
     expect(onNavigate).not.toHaveBeenCalled();
   });
 

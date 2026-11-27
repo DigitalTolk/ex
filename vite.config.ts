@@ -36,12 +36,13 @@ const vendorChunks: Array<[string, (id: string) => boolean]> = [
 ]
 
 // pdf.js (the lazy PdfPreview), Uppy (loaded on the first attachment
-// upload), GIPHY (the first GIF), the code highlighter and the date picker
-// are reachable only through dynamic imports, so they are left out of
-// the manual groups on purpose: a group also captures the shared modules its
-// members depend on (Vite's preload helper, clsx), which made the entry import
-// — and preload — all of pdf.js. Natural code splitting keeps them in their
-// lazy chunks; they must not fall into the eager catch-all `vendor` either.
+// upload), ohmagif (the first GIF, or the GIF picker opening), the code
+// highlighter and the date picker are reachable only through dynamic
+// imports, so they are left out of the manual groups on purpose: a group
+// also captures the shared modules its members depend on (Vite's preload
+// helper, clsx), which made the entry import — and preload — all of pdf.js.
+// Natural code splitting keeps them in their lazy chunks; they must not fall
+// into the eager catch-all `vendor` either.
 // The rest are those libraries' own dependencies, used by nothing else.
 const lazyOnlyPackages = [
   'react-pdf', 'pdfjs-dist',
@@ -52,10 +53,8 @@ const lazyOnlyPackages = [
   // The Sentry SDK (every @sentry/* package): lib/sentry imports it only
   // once the server served a DSN.
   '@sentry',
-  // GIPHY: the picker's grid and the message embed import it dynamically, so
-  // it loads with the first GIF. A manual group made the entry preload it.
-  '@giphy/js-fetch-api', '@giphy/js-util', '@giphy/js-types', '@giphy/js-analytics', '@giphy/colors', '@giphy/react-components',
-  'styled-components', 'intersection-observer', 'react-use', 'throttle-debounce', 'uuid', 'tslib',
+  // ohmagif: GifFile and GifGrid, behind React.lazy.
+  '@ohmagif/js',
   // The code highlighter (lib/code-highlight-loader) and the reminder /
   // schedule date picker (LazyReminderDialog) load on first use.
   'lowlight', 'highlight.js', 'react-day-picker', 'date-fns', '@date-fns/tz',

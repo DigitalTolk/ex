@@ -63,7 +63,7 @@ vi.mock('@/hooks/useDrafts', () => ({
 }));
 
 vi.mock('@/hooks/useSettings', () => ({
-  useWorkspaceSettings: () => ({ data: { maxUploadBytes: 0, allowedExtensions: [], giphyEnabled: false, giphyAPIKey: '' } }),
+  useWorkspaceSettings: () => ({ data: { maxUploadBytes: 0, allowedExtensions: [] } }),
 }));
 
 vi.mock('@/context/AuthContext', () => {

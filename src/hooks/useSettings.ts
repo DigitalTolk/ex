@@ -6,7 +6,6 @@ import type { WorkspaceSettings } from '@/types';
 const DEFAULT_WORKSPACE_SETTINGS: WorkspaceSettings = {
   maxUploadBytes: 0,
   allowedExtensions: [],
-  giphyEnabled: false,
   runnersInApp: false,
 };
 

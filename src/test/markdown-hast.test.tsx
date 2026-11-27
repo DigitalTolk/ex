@@ -1,14 +1,20 @@
-import { describe, it, expect, vi } from 'vitest';
+import { beforeAll, describe, it, expect, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { renderMarkdown } from '@/lib/markdown';
 import { decoratePicks, renderHastTree } from '@/lib/markdown-hast';
 import type { HastNode } from '@/types';
 
+// A GIF's GifFile arrives via React.lazy. Pre-load its module so a test
+// that shows a GIF waits on a microtask, not on chunk I/O.
+beforeAll(async () => {
+  await import('@/components/GifFile');
+});
+
 // Server-style hast trees that the backend's RenderToHast produces.
 // These tests exercise the frontend's hydration path WITHOUT touching
 // the legacy regex parser — proving the per-viewer behaviour
-// (currentUserId, onTagClick, renderUserMention, emojiMap, GIPHY API
-// key) survives the migration to a server-rendered tree.
+// (currentUserId, onTagClick, renderUserMention, emojiMap) survives the
+// migration to a server-rendered tree.
 
 function root(...children: HastNode[]): HastNode {
   return { type: 'root', children };
@@ -227,12 +233,13 @@ describe('renderMarkdown via hast tree', () => {
     expect(container.querySelector('img, video')).toBeNull();
   });
 
-  it('renders ex-giphy via the GiphyEmbed component (unavailable when key missing)', () => {
+  it("shows ex-giphy, a GIF picked from GIPHY before ohmagif, from GIPHY's files", () => {
     const tree = root(el('p', {},
-      el('ex-giphy', { 'data-id': 'g-1' }),
+      el('ex-giphy', { 'data-id': 'g-1', 'data-width': '200', 'data-height': '150' }),
     ));
-    const { container } = render(<>{renderMarkdown('', { tree, giphyAPIKey: '' })}</>);
-    expect(container.textContent).toContain('GIPHY unavailable');
+    render(<>{renderMarkdown('', { tree })}</>);
+    expect(screen.getByRole('img', { name: 'GIF' })).toHaveAttribute('src', 'https://i.giphy.com/g-1.gif');
+    expect(screen.getByRole('link', { name: 'Powered by GIPHY' })).toHaveAttribute('href', 'https://giphy.com/gifs/g-1');
   });
 
   it('renders the data-blank paragraph as a whitespace spacer that re-emits data-blank', () => {
@@ -344,12 +351,13 @@ describe('renderMarkdown via hast tree', () => {
     expect(span?.textContent).toBe('😄');
   });
 
-  it('renders ex-giphy with explicit width + height', () => {
+  it('renders ex-ohmagif through GifEmbed, at the size it kept', async () => {
     const tree = root(el('p', {},
-      el('ex-giphy', { 'data-id': 'g-2', 'data-width': '200', 'data-height': '150' }),
+      el('ex-ohmagif', { 'data-id': 'eTxuLnWv7C', 'data-width': '200', 'data-height': '150' }),
     ));
-    const { container } = render(<>{renderMarkdown('', { tree, giphyAPIKey: '' })}</>);
-    expect(container.textContent).toContain('GIPHY unavailable');
+    render(<>{renderMarkdown('', { tree })}</>);
+    const gif = await screen.findByRole('link', { name: 'GIF' });
+    expect(gif).toHaveStyle({ width: '200px', aspectRatio: '200 / 150' });
   });
 });
 

@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, vi } from 'vitest';
 
-// Uppy's constructor schedules a check of navigator.onLine 3 s out, and
-// destroy() never cancels it. An upload near the end of a test file left that
-// check pending past the file: the worker lives on after its last test (longer
-// on a loaded machine), and once jsdom was torn down the check threw "window
-// is not defined" as an unhandled error, failing the run.
+// A timer an upload leaves pending can outlive its test file: the worker lives
+// on after its last test (longer on a loaded machine), and once jsdom is torn
+// down the timer throws "window is not defined" as an unhandled error, failing
+// the run. Uppy's online check did exactly that until @uppy/core 6.3.2 made
+// destroy() cancel it; this keeps any other such timer from doing the same.
 //
 // A file that runs real uploads in jsdom calls this once. Its timers are fake
 // but keep pace with the clock, so uploads run as they would, and whatever a

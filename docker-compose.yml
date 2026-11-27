@@ -134,7 +134,7 @@ services:
     # Optional: a fresh checkout has no .env, and compose treats a missing
     # env_file as a hard error — which blocked `make dev` / `make dev-watch`
     # before any container started. Everything the local stack needs is set
-    # below; .env is only for the optional integrations (SSO, SMTP, Giphy).
+    # below; .env is only for the optional integrations (SSO, SMTP).
     env_file:
       - path: .env
         required: false

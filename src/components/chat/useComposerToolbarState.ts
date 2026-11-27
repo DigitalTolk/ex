@@ -1,6 +1,7 @@
 import { useEffect, useState, type RefObject } from 'react';
 import type { ActiveFormat, WysiwygEditorHandle } from '@/components/chat/markdown/MarkdownComposer';
 import { useWorkspaceSettings } from '@/hooks/useSettings';
+import { ohmagifKey } from '@/lib/ohmagif';
 
 // useComposerToolbarState gathers what the formatting toolbar reflects: the
 // formats active at the caret (its pressed buttons) and whether the GIF
@@ -19,13 +20,12 @@ export function useComposerToolbarState(editorRef: RefObject<WysiwygEditorHandle
     );
   }, [editorRef]);
 
+  // The GIF picker needs the workspace's ohmagif key; without one there is
+  // no GIF button.
   const { data: settings } = useWorkspaceSettings();
-  /* istanbul ignore next -- the `?? ''` fallback only applies when settings.giphyAPIKey is undefined, but the settings object always carries the field; defensive. */
-  const giphyAPIKey = settings?.giphyAPIKey?.trim() ?? '';
-  /* istanbul ignore next -- the `?? false` fallback only applies when settings.giphyEnabled is undefined, but the settings object always carries the flag; defensive. */
-  const giphyEnabled = (settings?.giphyEnabled ?? false) && giphyAPIKey !== '';
+  const gifKey = ohmagifKey(settings?.ohmagifAPIKey);
 
-  return { activeFormats, giphyAPIKey, giphyEnabled };
+  return { activeFormats, gifKey };
 }
 
 function sameFormats(a: Set<ActiveFormat>, b: Set<ActiveFormat>): boolean {

@@ -14,7 +14,9 @@ export interface UnfurlPreview {
   siteName?: string;
   // Internal message-link preview (Slack/Mattermost-style). Present only when
   // kind === 'message'; the card renders an author/body/channel layout.
-  kind?: 'message';
+  // kind === 'image' is a link straight to an image: `image` is that image,
+  // measured as imageWidth × imageHeight, and shows instead of a card.
+  kind?: 'message' | 'image';
   authorName?: string;
   authorAvatarURL?: string;
   channelLabel?: string;

@@ -4,8 +4,11 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { reactNodeText, renderHastTree } from './markdown-hast';
 import type { HastNode } from '@/types';
 
-vi.mock('@/hooks/useSettings', () => ({
-  useWorkspaceSettings: () => ({ data: { giphyAPIKey: '' }, isLoading: false }),
+// A GIF's files come from src/test/fixtures/ohmagif, never from ohmagif:
+// a test must not reach out to it.
+vi.mock('@/lib/ohmagif-client', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/ohmagif-client')>()),
+  OHMAGIF_MEDIA_URL: `${window.location.origin}/src/test/fixtures/ohmagif`,
 }));
 
 const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -338,13 +341,16 @@ describe('renderHastTree — every custom-tag branch', () => {
     expect(onTagClick).toHaveBeenCalledWith('launch');
   });
 
-  it('renders a giphy embed with explicit width/height', async () => {
+  it('renders a GIF embed with explicit width/height', async () => {
     const tree = root([
-      elem('p', {}, [elem('ex-giphy', { 'data-id': 'gif-1', 'data-width': '320', 'data-height': '180' })]),
+      elem('p', {}, [elem('ex-ohmagif', { 'data-id': 'eTxuLnWv7C', 'data-width': '320', 'data-height': '180' })]),
     ]);
-    await render(wrap(<>{renderHastTree(tree)}</>));
-    // GiphyEmbed mounts with the parsed dimensions; assert the tree rendered.
-    expect(document.body).not.toBeNull();
+    const screen = await render(wrap(<>{renderHastTree(tree)}</>));
+    // The GIF takes the room of the parsed size.
+    const gif = screen.getByRole('link', { name: 'GIF' });
+    await expect.element(gif).toBeVisible();
+    const r = gif.element().getBoundingClientRect();
+    expect([r.width, r.height]).toEqual([320, 180]);
   });
 
   it('renders an ex-hashtag with no data-tag (the data-tag ?? "" fallback)', async () => {
@@ -363,13 +369,13 @@ describe('renderHastTree — every custom-tag branch', () => {
     expect(document.querySelector('p')).not.toBeNull();
   });
 
-  it('renders a giphy embed with no id and no dimensions (the ?? "" / : undefined sides)', async () => {
-    // ex-giphy with neither data-id nor data-width/height: id falls back to '',
-    // and both `props['data-...'] ? Number(...) : undefined` ternaries take the
-    // undefined side.
-    const tree = root([elem('p', {}, [elem('ex-giphy', {})])]);
+  it('renders a GIF embed with no id and no dimensions (the ?? "" / : undefined sides)', async () => {
+    // ex-ohmagif with neither data-id nor data-width/height: id falls back to
+    // '', and both `props['data-...'] ? Number(...) : undefined` ternaries
+    // take the undefined side.
+    const tree = root([elem('p', {}, [elem('ex-ohmagif', {})])]);
     await render(wrap(<>{renderHastTree(tree)}</>));
-    expect(document.body).not.toBeNull();
+    expect(document.querySelector('[data-testid="gif-embed-box"]')).toHaveTextContent('GIF unavailable');
   });
 
   it('prefers the unicode glyph over a custom emoji image when a skin tone is set', async () => {

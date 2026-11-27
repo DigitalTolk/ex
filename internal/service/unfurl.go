@@ -18,6 +18,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bep/imagemeta"
+	"github.com/gabriel-vasile/mimetype"
 	"golang.org/x/net/html"
 
 	"github.com/DigitalTolk/ex/internal/netguard"
@@ -40,8 +42,10 @@ type UnfurlPreview struct {
 	// Internal message-link preview (Slack/Mattermost-style). When Kind is
 	// "message" the client renders a rich author/body/channel card instead
 	// of the generic OpenGraph card. These fields are populated only by the
-	// MessageLinkService, never by web scraping.
-	Kind            string `json:"kind,omitempty"`            // "" (web) | "message"
+	// MessageLinkService, never by web scraping. When Kind is "image" the
+	// link points straight at an image: Image is that image and the client
+	// shows it, at ImageWidth × ImageHeight, instead of a card.
+	Kind            string `json:"kind,omitempty"`            // "" (web) | "message" | "image"
 	AuthorName      string `json:"authorName,omitempty"`      // display name (or webhook username)
 	AuthorAvatarURL string `json:"authorAvatarURL,omitempty"` // signed avatar URL
 	ChannelLabel    string `json:"channelLabel,omitempty"`    // "~slug" / group name / "Direct message"
@@ -53,6 +57,9 @@ type UnfurlPreview struct {
 	// are surfaced via Image above and omitted here.
 	Attachments []UnfurlAttachment `json:"attachments,omitempty"`
 }
+
+// unfurlKindImage is the Kind of a link that points straight at an image.
+const unfurlKindImage = "image"
 
 // UnfurlAttachment is the minimal file descriptor a message-link preview
 // carries so the client can pick a file-type icon by content type / name.
@@ -225,10 +232,21 @@ func (s *UnfurlService) fetchAndScrape(ctx context.Context, urlStr string) (*Unf
 			return nil, err
 		}
 	}
-	// Proxy the preview image through S3 (folder `unfurl/`) when an
-	// image store is configured. Failures clear preview.Image so the
-	// frontend renders a placeholder rather than chasing a dead URL.
-	s.proxyImage(ctx, preview)
+	if preview.Kind == unfurlKindImage {
+		// The image is the whole preview, and the message list must know its
+		// size before it loads: one that can't be stored and measured (or no
+		// image store to keep it in) shows no preview at all.
+		img, w, h := s.ProxyImageWithSize(ctx, preview.Image)
+		if img == "" || w == 0 || h == 0 {
+			return nil, errors.New("unfurl: linked image unavailable")
+		}
+		preview.Image, preview.ImageWidth, preview.ImageHeight = img, w, h
+	} else {
+		// Proxy the preview image through S3 (folder `unfurl/`) when an
+		// image store is configured. Failures clear preview.Image so the
+		// frontend renders a placeholder rather than chasing a dead URL.
+		s.proxyImage(ctx, preview)
+	}
 	if s.cache != nil {
 		_ = s.cache.Set(ctx, cacheKey, preview, unfurlCacheTTL)
 	}
@@ -255,6 +273,12 @@ func (s *UnfurlService) scrapePage(ctx context.Context, urlStr string) (*UnfurlP
 	}
 
 	ct := resp.Header.Get("Content-Type")
+	// A link straight to an image previews as the image. Its body is not read
+	// here: the image proxy fetches, checks and stores it like any preview
+	// image (and refuses an SVG).
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(ct)), "image/") {
+		return &UnfurlPreview{URL: urlStr, Kind: unfurlKindImage, Image: urlStr}, nil
+	}
 	if !strings.Contains(strings.ToLower(ct), "html") {
 		return nil, fmt.Errorf("unfurl: non-HTML content-type %q", ct)
 	}
@@ -504,14 +528,22 @@ func (s *UnfurlService) loadImageRecord(ctx context.Context, key string) (imageD
 
 // decodeImageDims reads the intrinsic dimensions from image bytes. The
 // png/jpeg/gif/webp decoders are registered package-wide (see emoji.go),
-// so DecodeConfig resolves the format by magic bytes. Returns (0,0) for
-// undecodable input.
+// so DecodeConfig resolves the format by magic bytes. Go has no AVIF
+// decoder: imagemeta reads an AVIF's size from its header (an animated
+// one's from its track). Returns (0,0) for undecodable input.
 func decodeImageDims(data []byte) (int, int) {
-	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if cfg, _, err := image.DecodeConfig(bytes.NewReader(data)); err == nil {
+		return cfg.Width, cfg.Height
+	}
+	res, err := imagemeta.Decode(imagemeta.Options{
+		R:           bytes.NewReader(data),
+		ImageFormat: imagemeta.AVIF,
+		Sources:     imagemeta.CONFIG,
+	})
 	if err != nil {
 		return 0, 0
 	}
-	return cfg.Width, cfg.Height
+	return res.ImageConfig.Width, res.ImageConfig.Height
 }
 
 // fetchUpstreamImage pulls the upstream image with the same SSRF-hardened
@@ -555,7 +587,7 @@ func (s *UnfurlService) fetchUpstreamImage(ctx context.Context, imgURL string) (
 	if len(body) == 0 {
 		return nil, "", errors.New("unfurl: empty image body")
 	}
-	detected := strings.ToLower(strings.TrimSpace(strings.Split(http.DetectContentType(body), ";")[0]))
+	detected := sniffImageType(body)
 	if !strings.HasPrefix(detected, "image/") {
 		return nil, "", fmt.Errorf("unfurl: image magic mismatch %q", detected)
 	}
@@ -563,6 +595,15 @@ func (s *UnfurlService) fetchUpstreamImage(ctx context.Context, imgURL string) (
 	// such as "image/png, text/html" passes the prefix check above, yet a
 	// browser takes the last valid entry and would render the object as HTML.
 	return body, detected, nil
+}
+
+// sniffImageType is the media type an image's bytes are. Go's sniffer knows
+// no AVIF (it reads one as unknown bytes, or as an MP4); mimetype does.
+func sniffImageType(body []byte) string {
+	if mimetype.Detect(body).Is("image/avif") {
+		return "image/avif"
+	}
+	return strings.ToLower(strings.TrimSpace(strings.Split(http.DetectContentType(body), ";")[0]))
 }
 
 // unfurlImageKey builds the S3 key for a given upstream image URL. The

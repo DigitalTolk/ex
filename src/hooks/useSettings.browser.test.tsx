@@ -37,11 +37,11 @@ describe('useWorkspaceSettings', () => {
     await new Promise((r) => setTimeout(r, 150));
     const parsed = JSON.parse(screen.getByTestId('probe').element().getAttribute('data-data') || '{}');
     // Runners in the app is off until an admin turns it on.
-    expect(parsed).toEqual({ maxUploadBytes: 0, allowedExtensions: [], giphyEnabled: false, runnersInApp: false });
+    expect(parsed).toEqual({ maxUploadBytes: 0, allowedExtensions: [], runnersInApp: false });
   });
 
   it('returns the API settings when present', async () => {
-    apiFetchMock.mockResolvedValue({ maxUploadBytes: 100, allowedExtensions: ['png'], giphyEnabled: true });
+    apiFetchMock.mockResolvedValue({ maxUploadBytes: 100, allowedExtensions: ['png'], ohmagifAPIKey: 'omg_0123456789abcdefABCDEF0123456789' });
     const screen = await renderHook(() => useWorkspaceSettings());
     await new Promise((r) => setTimeout(r, 150));
     const parsed = JSON.parse(screen.getByTestId('probe').element().getAttribute('data-data') || '{}');
@@ -58,7 +58,7 @@ describe('useWorkspaceSettings', () => {
 
 describe('useUpdateWorkspaceSettings', () => {
   it('PUTs the settings and writes them into the cache on success', async () => {
-    const next: WorkspaceSettings = { maxUploadBytes: 5, allowedExtensions: ['jpg'], giphyEnabled: false };
+    const next: WorkspaceSettings = { maxUploadBytes: 5, allowedExtensions: ['jpg'] };
     apiFetchMock.mockResolvedValue(next);
     function MutProbe() {
       const m = useUpdateWorkspaceSettings();

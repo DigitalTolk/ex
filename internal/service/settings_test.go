@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/DigitalTolk/ex/internal/apperr"
 	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/pubsub"
@@ -148,6 +149,47 @@ func TestSettingsService_AllowsExtensionAndSize(t *testing.T) {
 	}
 	if svc.AllowsSize(ctx, 0) {
 		t.Error("zero size should be rejected")
+	}
+}
+
+func TestSettingsService_Update_OhmagifAPIKey(t *testing.T) {
+	const key = "omg_0123456789abcdefABCDEF0123456789"
+	st := &fakeSettingsStore{}
+	svc := NewSettingsService(st)
+	got, err := svc.Update(context.Background(), &model.WorkspaceSettings{OhmagifAPIKey: "  " + key + "\n"})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if got.OhmagifAPIKey != key || st.stored.OhmagifAPIKey != key {
+		t.Errorf("key = %q (stored %q), want it trimmed to %q", got.OhmagifAPIKey, st.stored.OhmagifAPIKey, key)
+	}
+
+	// Blank turns GIFs off.
+	if _, err := svc.Update(context.Background(), &model.WorkspaceSettings{OhmagifAPIKey: "   "}); err != nil {
+		t.Fatalf("Update blank: %v", err)
+	}
+	if st.stored.OhmagifAPIKey != "" {
+		t.Errorf("stored key = %q, want blank", st.stored.OhmagifAPIKey)
+	}
+}
+
+func TestSettingsService_Update_RefusesAMalformedOhmagifAPIKey(t *testing.T) {
+	for _, key := range []string{
+		"dc6zaTOxFJmzC",                         // a GIPHY key
+		"omg_0123456789abcdefABCDEF012345678",   // one short
+		"omg_0123456789abcdefABCDEF01234567890", // one long
+		"omg_0123456789abcdefABCDEF012345678-",  // not a letter or digit
+		"OMG_0123456789abcdefABCDEF0123456789",
+	} {
+		st := &fakeSettingsStore{stored: &model.WorkspaceSettings{OhmagifAPIKey: "omg_0123456789abcdefABCDEF0123456789"}}
+		svc := NewSettingsService(st)
+		_, err := svc.Update(context.Background(), &model.WorkspaceSettings{OhmagifAPIKey: key})
+		if !errors.Is(err, apperr.ErrValidation) {
+			t.Errorf("Update(%q) err = %v, want a validation error", key, err)
+		}
+		if st.stored.OhmagifAPIKey != "omg_0123456789abcdefABCDEF0123456789" {
+			t.Errorf("Update(%q) replaced the stored key with %q", key, st.stored.OhmagifAPIKey)
+		}
 	}
 }
 

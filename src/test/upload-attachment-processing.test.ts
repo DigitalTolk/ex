@@ -126,10 +126,10 @@ describe('uploadAttachment processing', () => {
     expect(JSON.parse(init.body as string)).toMatchObject({ filename: 'IMG_0001.HEIC', contentType: 'image/heic' });
   });
 
-  // Uppy schedules a check of navigator.onLine 3 s out and never cancels it.
-  // It must be on the clock these tests drop when they end (upload-timers):
-  // left running it outlived the file and threw once jsdom was gone.
-  it("leaves Uppy's pending online check on the clock the test drops", async () => {
+  // Uppy schedules a check of navigator.onLine 3 s out. Before @uppy/core
+  // 6.3.2 destroy() left it pending, and it outlived the file and threw once
+  // jsdom was gone; destroy() (which every upload reaches) now cancels it.
+  it('leaves no online check pending once the upload is done', async () => {
     routeUpload({
       id: 'att-timer',
       key: 'attachments/att-timer',
@@ -144,7 +144,7 @@ describe('uploadAttachment processing', () => {
 
     const onLine = vi.spyOn(window.navigator, 'onLine', 'get');
     vi.advanceTimersByTime(3000);
-    expect(onLine).toHaveBeenCalled();
+    expect(onLine).not.toHaveBeenCalled();
     onLine.mockRestore();
   });
 

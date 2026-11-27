@@ -2,12 +2,11 @@ package service
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/safe"
-	"github.com/cenkalti/backoff/v5"
+	"github.com/cenkalti/backoff/v6"
 )
 
 // SentDraftClearer removes a composer scope's draft once its content has been
@@ -71,10 +70,10 @@ func clearSentDraft(ctx context.Context, clearer SentDraftClearer, scope draftSc
 func clearSentDraftNow(ctx context.Context, clearer SentDraftClearer, scope draftScope) error {
 	ctx, cancel := context.WithTimeout(ctx, clearSentDraftTimeout)
 	defer cancel()
-	var lastErr error
+	// Retry's error carries both why it stopped (the deadline, the attempt
+	// cap) and the last attempt's failure.
 	_, err := backoff.Retry(ctx, func() (struct{}, error) {
-		lastErr = clearer.DeleteForScope(ctx, scope.userID, scope.parentID, scope.parentType, scope.parentMessageID)
-		return struct{}{}, lastErr
+		return struct{}{}, clearer.DeleteForScope(ctx, scope.userID, scope.parentID, scope.parentType, scope.parentMessageID)
 	},
 		backoff.WithBackOff(newClearSentDraftBackOff()),
 		backoff.WithMaxTries(clearSentDraftMaxTries),
@@ -84,9 +83,5 @@ func clearSentDraftNow(ctx context.Context, clearer SentDraftClearer, scope draf
 				"userID", scope.userID, "parentID", scope.parentID, "parentType", scope.parentType,
 				"retryIn", next, "error", err)
 		}))
-	if err != nil && ctx.Err() != nil {
-		// Retry reports the deadline, not why the attempts failed.
-		return fmt.Errorf("abandoned at the deadline (%w): %w", err, lastErr)
-	}
 	return err
 }

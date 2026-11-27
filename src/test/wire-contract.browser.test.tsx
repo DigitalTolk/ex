@@ -1,13 +1,27 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { parseMessage } from '@/test/ws-frames';
 import { renderMarkdown } from '@/lib/markdown';
 import type { Message } from '@/types';
 
-// GiphyEmbed uses React Query — every render call needs a provider
-// in scope. A single QC across the suite is fine; tests don't
-// interact with the query cache.
+// An old GIPHY GIF's file comes from a path nothing serves, never from
+// GIPHY: a test must not reach out to it.
+vi.mock('@/lib/giphy', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/giphy')>()),
+  giphyFileURL: (id: string) => `${window.location.origin}/__giphy__/${id}.gif`,
+}));
+
+// A GIF's files come from src/test/fixtures/ohmagif, never from ohmagif:
+// a test must not reach out to it.
+vi.mock('@/lib/ohmagif-client', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/ohmagif-client')>()),
+  OHMAGIF_MEDIA_URL: `${window.location.origin}/src/test/fixtures/ohmagif`,
+}));
+
+// Every render call keeps a React Query provider in scope for the body's
+// components. A single QC across the suite is fine; tests don't interact
+// with the query cache.
 const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 function wrap(children: React.ReactNode) {
   return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
@@ -77,8 +91,13 @@ describe('wire-format contract: backend hast tree → frontend renderer', () => 
     // sentinel and verify nothing throws during hydration.
     await render(wrap(<>{renderMarkdown('', { tree: hastAllCustomTags as import('@/types').HastNode })}</>));
     // Mention, channel mention, group mention, hashtag, bare URL,
-    // emoji, giphy embed — all should be in the DOM.
+    // emoji, GIF embed — all should be in the DOM.
     expect(document.querySelector('[data-mention-user-id="u-1"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="gif-embed"]')).not.toBeNull();
+    // A GIF picked from GIPHY before ohmagif replaced it shows from GIPHY,
+    // credited to it.
+    expect(document.querySelector('[data-testid="giphy-gif"]')).not.toBeNull();
+    expect(document.querySelector('a[href="https://giphy.com/gifs/abc"]')?.textContent).toBe('Powered by GIPHY');
     expect(document.querySelector('[data-channel-id="ch-1"]')).not.toBeNull();
     expect(document.querySelector('[data-mention-group="all"]')).not.toBeNull();
     // Bare URLs render as anchors with the protocol stripped from

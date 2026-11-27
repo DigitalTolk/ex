@@ -36,7 +36,6 @@ export function RunnersInAppCard() {
               update.mutate({
                 maxUploadBytes: data.maxUploadBytes,
                 allowedExtensions: data.allowedExtensions,
-                giphyAPIKey: data.giphyAPIKey,
                 runnersInApp: next,
               })
             }

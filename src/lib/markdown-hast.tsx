@@ -9,7 +9,9 @@ import {
 import { jsx, jsxs } from 'react/jsx-runtime';
 import { toJsxRuntime, type Components as JsxComponents } from 'hast-util-to-jsx-runtime';
 import type { Nodes as HastNodes } from 'hast';
-import { GiphyEmbed } from '@/components/GiphyEmbed';
+import { GifEmbed } from '@/components/GifEmbed';
+import { GiphyGif } from '@/components/GiphyGif';
+import { isGiphyId } from '@/lib/giphy';
 import { CodeBlock } from '@/components/chat/CodeBlock';
 import { applySkinToneSuffix, shortcodeToUnicode, emojiGlyphClass, emojiImageClass } from './emoji-shortcodes';
 import { isSafeUrl } from './url-safety';
@@ -80,7 +82,7 @@ const ALLOWED_TAGS = new Set([
   'em', 'strong', 's', 'hr',
   'table', 'thead', 'tbody', 'tr', 'th', 'td',
   'ex-mention-user', 'ex-mention-usergroup', 'ex-mention-channel', 'ex-mention-group',
-  'ex-hashtag', 'ex-giphy', 'ex-media-literal', 'ex-emoji-shortcode',
+  'ex-hashtag', 'ex-ohmagif', 'ex-giphy', 'ex-media-literal', 'ex-emoji-shortcode',
   'ex-bare-url',
   // Client-injected (decoratePicks below), never server-emitted: a known
   // "/token" pick rendered as a pill.
@@ -132,9 +134,9 @@ function normaliseChild(node: HastNode): HastNode[] {
 // React reconciles VDOM by component identity, so if we re-built the
 // component map (with fresh closures) on every render — as the old
 // code did — every scroll-induced re-render of MessageItem would
-// unmount + remount every ex-giphy / ex-mention / ex-emoji-shortcode
-// in view, destroying the <video> DOM nodes and forcing the browser
-// to re-fetch every Giphy .mp4. By moving the components to module
+// unmount + remount every ex-ohmagif / ex-mention / ex-emoji-shortcode
+// in view, destroying the GIFs' <img> nodes and forcing the browser
+// to decode every GIF again. By moving the components to module
 // scope and threading per-render data through context, the components
 // keep stable references and React reconciles cleanly.
 const RenderOptsContext = createContext<RenderOpts | undefined>(undefined);
@@ -419,20 +421,22 @@ const HAST_COMPONENTS_MAP: Record<string, AnyComponent> = {
     );
   }) as AnyComponent,
 
+  'ex-ohmagif': ((props: CustomTagProps) => {
+    const opts = useRenderOpts();
+    const width = props['data-width'] ? Number(props['data-width']) : undefined;
+    const height = props['data-height'] ? Number(props['data-height']) : undefined;
+    return <GifEmbed id={props['data-id'] ?? ''} width={width} height={height} onMediaLoad={opts?.onMediaLoad} />;
+  }) as AnyComponent,
+
+  // A GIF picked from GIPHY before ohmagif replaced it, played from
+  // GIPHY's files.
   'ex-giphy': ((props: CustomTagProps) => {
     const opts = useRenderOpts();
     const id = props['data-id'] ?? '';
+    if (!isGiphyId(id)) return <span>{props['data-value']}</span>;
     const width = props['data-width'] ? Number(props['data-width']) : undefined;
     const height = props['data-height'] ? Number(props['data-height']) : undefined;
-    return (
-      <GiphyEmbed
-        id={id}
-        width={width}
-        height={height}
-        apiKey={opts?.giphyAPIKey}
-        onMediaLoad={opts?.onMediaLoad}
-      />
-    );
+    return <GiphyGif id={id} width={width} height={height} onMediaLoad={opts?.onMediaLoad} />;
   }) as AnyComponent,
 
   'ex-media-literal': ((props: CustomTagProps) => (

@@ -6,18 +6,19 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MessageInput, type MessageInputHandle } from './MessageInput';
 import { setWSSender } from '@/lib/ws-sender';
 import { dispatchFocusComposer } from '@/lib/window-events';
+import { apiGif, apiList, json, stubOhmagif, TEST_OHMAGIF_KEY } from '@/test/ohmagif';
 
 // Companion coverage suite for MessageInput. The primary
 // MessageInput.browser.test.tsx covers the headline flows; this file drives the
 // remaining branch arms: the outside-pointer cancel, the visibility-restore
-// focus path, the GIF-without-dimensions insert, the upload alreadyExists jump,
+// focus path, the GIF insert, the upload alreadyExists jump,
 // the edit aria-label fallback, the empty-file-input early return, and the
 // toolbar active-state styling.
 
 const uploadAttachmentMock = vi.hoisted(() => vi.fn());
 const deleteDraftMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const settingsState = vi.hoisted(() => ({
-  current: { maxUploadBytes: 0, allowedExtensions: [] as string[], giphyEnabled: false, giphyAPIKey: '' },
+  current: { maxUploadBytes: 0, allowedExtensions: [] as string[] } as { maxUploadBytes: number; allowedExtensions: string[]; ohmagifAPIKey?: string },
 }));
 
 vi.mock('@/lib/api', () => ({
@@ -55,33 +56,6 @@ vi.mock('@/hooks/useAttachments', () => ({
   useAttachmentsBatch: () => ({ map: new Map(), isLoading: false }),
 }));
 
-// Same GIPHY doubles as GiphyPicker.browser.test: the fetch client resolves
-// empty pages and the Grid exposes a deterministic pick button, so the REAL
-// GiphyPicker → onSelect → insertGiphyGIF wiring runs without network.
-vi.mock('@giphy/js-fetch-api', () => ({
-  GiphyFetch: class GiphyFetch {
-    trending() {
-      return Promise.resolve({ data: [], pagination: { total_count: 0, count: 0, offset: 0 }, meta: { status: 200, msg: 'OK', response_id: '' } });
-    }
-
-    search() {
-      return Promise.resolve({ data: [], pagination: { total_count: 0, count: 0, offset: 0 }, meta: { status: 200, msg: 'OK', response_id: '' } });
-    }
-  },
-}));
-
-vi.mock('@giphy/react-components', () => ({
-  Grid: ({ onGifClick }: { onGifClick: (gif: unknown, event: Event) => void }) => (
-    <button
-      type="button"
-      data-testid="pick-gif"
-      onClick={() => onGifClick({ id: 'gif-77', title: 'Test GIF', images: { original: { width: '320', height: '180' } } }, new Event('click'))}
-    >
-      Pick GIF
-    </button>
-  ),
-}));
-
 async function renderWithProviders(ui: React.ReactElement) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const result = await render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
@@ -108,7 +82,7 @@ describe('MessageInput coverage flows (browser)', () => {
     uploadAttachmentMock.mockReset();
     deleteDraftMock.mockReset();
     deleteDraftMock.mockResolvedValue(undefined);
-    settingsState.current = { maxUploadBytes: 0, allowedExtensions: [], giphyEnabled: false, giphyAPIKey: '' };
+    settingsState.current = { maxUploadBytes: 0, allowedExtensions: [] };
   });
 
   afterEach(async () => {
@@ -332,23 +306,29 @@ describe('MessageInput coverage flows (browser)', () => {
     await settle();
   });
 
-  it('inserts a GIPHY reference into the composer when a GIF is picked', async () => {
-    settingsState.current = { maxUploadBytes: 0, allowedExtensions: [], giphyEnabled: true, giphyAPIKey: 'gk' };
-    const screen = await renderWithProviders(<MessageInput onSend={vi.fn()} />);
-    if (window.innerWidth <= 767) {
-      await screen.getByLabelText('Message input').click();
+  it("inserts the picked GIF into the composer as its ohmagif id and its file's size", async () => {
+    // The real picker and ohmagif Grid, over a stubbed ohmagif API.
+    const spy = stubOhmagif(() => json(apiList([apiGif('Gif0000077', { description: 'Test GIF', width: 320, height: 180 })])));
+    try {
+      settingsState.current = { maxUploadBytes: 0, allowedExtensions: [], ohmagifAPIKey: TEST_OHMAGIF_KEY };
+      const screen = await renderWithProviders(<MessageInput onSend={vi.fn()} />);
+      if (window.innerWidth <= 767) {
+        await screen.getByLabelText('Message input').click();
+      }
+      await expect.element(screen.getByLabelText('GIF')).toBeVisible();
+      // Pick a GIF: the composer writes its id and its file's size (never a
+      // file address) into the buffer and refocuses the editor.
+      await screen.getByLabelText('GIF').click();
+      await screen.getByRole('button', { name: 'Test GIF' }).click();
+      await vi.waitFor(() => {
+        const view = EditorView.findFromDOM(screen.getByLabelText('Message input').element() as HTMLElement)!;
+        // The 320x180 frame and its 24 px credit strip.
+        expect(view.state.doc.toString()).toContain('![GIF](ohmagif:Gif0000077 =320x204) ');
+      });
+      await settle();
+    } finally {
+      spy.mockRestore();
     }
-    await expect.element(screen.getByLabelText('GIF')).toBeVisible();
-    // Open the (real) GiphyPicker — its mocked Grid exposes a pick button —
-    // and pick a GIF: insertGiphyGIF writes the stable content-ID reference
-    // (with layout dimensions) into the buffer and refocuses the editor.
-    await screen.getByLabelText('GIF').click();
-    await screen.getByTestId('pick-gif').click();
-    await vi.waitFor(() => {
-      const view = EditorView.findFromDOM(screen.getByLabelText('Message input').element() as HTMLElement)!;
-      expect(view.state.doc.toString()).toContain('![GIPHY](giphy:gif-77 =320x180)');
-    });
-    await settle();
   });
 
   it('flushes the draft with keepalive when the page is torn down (pagehide)', async () => {

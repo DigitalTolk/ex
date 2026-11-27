@@ -97,7 +97,7 @@ check:
 	@echo "=== Go test (cmd — outside the coverage gate, but the migration CLIs stay tested) ==="
 	go test ./cmd/...
 	@echo "=== Go coverage gate (100%, see .testcoverage.yml + COVERAGE.md) ==="
-	go run github.com/vladopajic/go-test-coverage/v2@v2.18.8 --config=.testcoverage.yml
+	go run github.com/vladopajic/go-test-coverage/v2@v2.23.0 --config=.testcoverage.yml
 	@echo "=== Wire-type drift (tygo) ==="
 	$(MAKE) check-types-drift
 	@echo "=== Frontend type-check ==="

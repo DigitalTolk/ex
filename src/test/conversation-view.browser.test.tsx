@@ -178,7 +178,7 @@ function installFetchStub(plan: FetchPlan = {}): () => void {
     }
     if (url.includes('/api/v1/threads')) return apiJSON([]);
     if (url.includes('/api/v1/emojis')) return apiJSON([]);
-    if (url.includes('/api/v1/admin/settings')) return apiJSON({ maxUploadBytes: 0, allowedExtensions: [], giphyEnabled: false });
+    if (url.includes('/api/v1/admin/settings')) return apiJSON({ maxUploadBytes: 0, allowedExtensions: [] });
     if (url.includes('/api/v1/presence')) return apiJSON({ online: [ALICE_ID] });
 
     // Attachment upload pipeline (drop-to-attach). alreadyExists short-

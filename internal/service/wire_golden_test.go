@@ -96,6 +96,7 @@ func TestWireGolden_HastTree_AllCustomTags(t *testing.T) {
 		"> quote\n\n" +
 		"- one\n- two\n\n" +
 		"see @[u-1|Alice] and ~[ch-1|general] @all #BugFix :smile: at https://example.org\n\n" +
+		"![GIF](ohmagif:eTxuLnWv7C =322x240)\n\n" +
 		"![GIPHY](giphy:abc =200x150)\n\n" +
 		"![cat](https://example.com/cat.gif =320x240)\n\n" +
 		"```js\nconst x = 1;\n```\n"

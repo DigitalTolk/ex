@@ -130,7 +130,7 @@ function installFetchStub(plan: FetchPlan): () => void {
     }
     if (url.includes('/api/v1/threads')) return apiJSON([]);
     if (url.includes('/api/v1/emojis')) return apiJSON([]);
-    if (url.includes('/api/v1/admin/settings')) return apiJSON({ maxUploadBytes: 0, allowedExtensions: [], giphyEnabled: false });
+    if (url.includes('/api/v1/admin/settings')) return apiJSON({ maxUploadBytes: 0, allowedExtensions: [] });
 
     // Channel page bootstrap
     const channelWire = () => ({
@@ -866,7 +866,7 @@ describe('channel → header toggles → files + pinned panels (full route)', ()
       if (url === '/api/v1/channels' || url.endsWith('/api/v1/channels')) return apiJSON([]);
       if (url.includes('/api/v1/conversations') || url.includes('/api/v1/sidebar/categories') || url.includes('/api/v1/drafts') || url.includes('/api/v1/threads') || url.includes('/api/v1/emojis')) return apiJSON([]);
       if (url.includes('/api/v1/user-state')) return apiJSON({ channelNotifications: [], threadNotifications: [], hiddenConversations: [] });
-      if (url.includes('/api/v1/admin/settings')) return apiJSON({ maxUploadBytes: 0, allowedExtensions: [], giphyEnabled: false });
+      if (url.includes('/api/v1/admin/settings')) return apiJSON({ maxUploadBytes: 0, allowedExtensions: [] });
       // The channel lookup 404s → ChannelView renders the NotFound page.
       if (url.endsWith('/api/v1/channels/ghost')) return new Response(JSON.stringify({ error: 'not found' }), { status: 404, headers: { 'Content-Type': 'application/json' } });
       return apiJSON([]);
@@ -887,7 +887,7 @@ describe('channel → header toggles → files + pinned panels (full route)', ()
       if (url === '/api/v1/channels' || url.endsWith('/api/v1/channels')) return apiJSON([]);
       if (url.includes('/api/v1/conversations') || url.includes('/api/v1/sidebar/categories') || url.includes('/api/v1/drafts') || url.includes('/api/v1/threads') || url.includes('/api/v1/emojis')) return apiJSON([]);
       if (url.includes('/api/v1/user-state')) return apiJSON({ channelNotifications: [], threadNotifications: [], hiddenConversations: [] });
-      if (url.includes('/api/v1/admin/settings')) return apiJSON({ maxUploadBytes: 0, allowedExtensions: [], giphyEnabled: false });
+      if (url.includes('/api/v1/admin/settings')) return apiJSON({ maxUploadBytes: 0, allowedExtensions: [] });
       if (url.endsWith('/api/v1/channels/secret')) return new Response(JSON.stringify({ error: 'forbidden' }), { status: 403, headers: { 'Content-Type': 'application/json' } });
       return apiJSON([]);
     }) as typeof fetch;

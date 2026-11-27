@@ -33,6 +33,11 @@ interface UnfurlCardProps {
 }
 
 function hasContent(preview: UnfurlPreview): boolean {
+  // A linked image shows only at its measured size, so the message list
+  // can hold its box before it loads.
+  if (preview.kind === 'image') {
+    return !!(safeImg(preview.image) && preview.imageWidth && preview.imageHeight);
+  }
   if (preview.kind === 'message') {
     return !!(preview.authorName || preview.body || preview.image || preview.attachments?.length);
   }
@@ -68,11 +73,54 @@ export function UnfurlCard({
       disabled={dismiss.isPending}
       aria-label="Remove link preview"
       data-testid="unfurl-card-dismiss"
-      className="absolute right-1 top-1 z-10 flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+      // The backdrop keeps the X readable over a linked image.
+      className="absolute right-1 top-1 z-10 flex h-6 w-6 items-center justify-center rounded bg-background/80 text-muted-foreground hover:bg-muted hover:text-foreground"
     >
       <X className="h-3.5 w-3.5" />
     </button>
   ) : null;
+
+  // A link straight to an image (an animated AVIF or GIF too) → the image
+  // itself, in the same box an uploaded image gets. The server stored the
+  // file as sent, so an animation plays; a failed load keeps the box.
+  if (preview.kind === 'image') {
+    const box = scaleToThumbnail(preview.imageWidth, preview.imageHeight);
+    return (
+      <div className="relative mt-1.5 w-fit max-w-full" data-testid="unfurl-card">
+        <a
+          href={externalHref(preview.url)}
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="Open image"
+          data-testid="unfurl-image-link"
+          className="block max-w-full overflow-hidden rounded-md border"
+        >
+          {imageBroken ? (
+            <span
+              data-testid="unfurl-card-image-placeholder"
+              aria-hidden="true"
+              className="flex max-w-full items-center justify-center bg-muted text-muted-foreground"
+              style={{ width: box.width, aspectRatio: `${box.width} / ${box.height}` }}
+            >
+              <ImageOff className="h-6 w-6" />
+            </span>
+          ) : (
+            <img
+              src={safeImg(preview.image)}
+              alt=""
+              width={box.width}
+              height={box.height}
+              loading="lazy"
+              onError={() => setImageBroken(true)}
+              data-testid="unfurl-card-image"
+              className="block h-auto max-w-full"
+            />
+          )}
+        </a>
+        {dismissButton}
+      </div>
+    );
+  }
 
   // Internal message link → rich Slack/Mattermost-style preview card. Not
   // dismissible (it's a useful inline reference, not noise), no host label,
