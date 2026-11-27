@@ -128,19 +128,22 @@ func TestOIDCCallbackExistingUserDirectoryUnchangedStaysQuiet(t *testing.T) {
 	env.svc.SetPublisher(pub)
 	manager := &model.UserManager{DisplayName: "Boss", Email: "boss@example.com"}
 	existing := &model.User{
-		ID:         "existing-user",
-		Email:      "oidc@example.com",
-		SystemRole: model.SystemRoleMember,
-		Status:     "active",
-		Phone:      "+46 70 999 88 77",
-		Manager:    &model.UserManager{DisplayName: "Boss", Email: "boss@example.com"},
+		ID:          "existing-user",
+		Email:       "oidc@example.com",
+		DisplayName: "OIDC User",
+		SystemRole:  model.SystemRoleMember,
+		Status:      "active",
+		Phone:       "+46 70 999 88 77",
+		Manager:     &model.UserManager{DisplayName: "Boss", Email: "boss@example.com"},
+		Department:  "Engineering",
 	}
 	env.users.users[existing.ID] = existing
 	env.users.emailIndex[existing.Email] = existing
 
 	env.svc.SetDirectory(&stubDirectoryLookup{profile: &DirectoryProfile{
-		Phone:   "+46 70 999 88 77",
-		Manager: manager,
+		Phone:      "+46 70 999 88 77",
+		Manager:    manager,
+		Department: "Engineering",
 	}})
 
 	if _, _, _, err := env.svc.HandleOIDCCallback(context.Background(), "auth-code", "state", "nonce"); err != nil {
@@ -170,6 +173,9 @@ func TestOIDCCallbackDirectoryFailureFailsOpen(t *testing.T) {
 	}
 	if user.Phone != "+46 70 000 00 00" {
 		t.Errorf("Phone = %q, want previously synced value kept", user.Phone)
+	}
+	if user.DisplayName != "OIDC User" {
+		t.Errorf("DisplayName = %q, want the token's name when the directory can't be read", user.DisplayName)
 	}
 }
 
@@ -235,4 +241,72 @@ func TestOIDCCallbackStoresObjectIDWithoutDirectory(t *testing.T) {
 			t.Errorf("MSObjectID = %q, want previously stored oid kept", user.MSObjectID)
 		}
 	})
+}
+
+// The directory's name and department are stored with a new account, and
+// the directory's name wins over the token's.
+func TestOIDCCallbackNewUserTakesTheDirectorysNameAndDepartment(t *testing.T) {
+	env := setupAuthService()
+	env.users.hasUsersVal = true
+	env.svc.SetDirectory(&stubDirectoryLookup{profile: &DirectoryProfile{DisplayName: "Alice Andersson", Department: "Engineering"}})
+
+	_, _, user, err := env.svc.HandleOIDCCallback(context.Background(), "auth-code", "state", "nonce")
+	if err != nil {
+		t.Fatalf("HandleOIDCCallback: %v", err)
+	}
+	stored := env.users.users[user.ID]
+	if stored.DisplayName != "Alice Andersson" || stored.Department != "Engineering" {
+		t.Fatalf("stored name %q, department %q, want the directory's", stored.DisplayName, stored.Department)
+	}
+}
+
+// At login the directory's name wins over the token's, so a login and the
+// directory sweep never write different names; a department change is
+// broadcast with the new name.
+func TestOIDCCallbackExistingUserTakesTheDirectorysNameAndDepartment(t *testing.T) {
+	env := setupAuthService()
+	pub := newMockPublisher()
+	env.svc.SetPublisher(pub)
+	existing := &model.User{ID: "existing-user", Email: "oidc@example.com", DisplayName: "Alice Andersson", SystemRole: model.SystemRoleMember, Status: "active"}
+	env.users.users[existing.ID] = existing
+	env.users.emailIndex[existing.Email] = existing
+	env.svc.SetDirectory(&stubDirectoryLookup{profile: &DirectoryProfile{DisplayName: "Alice Andersson", Department: "Engineering"}})
+
+	_, _, user, err := env.svc.HandleOIDCCallback(context.Background(), "auth-code", "state", "nonce")
+	if err != nil {
+		t.Fatalf("HandleOIDCCallback: %v", err)
+	}
+	if user.DisplayName != "Alice Andersson" || env.users.users[user.ID].DisplayName != "Alice Andersson" {
+		t.Fatalf("name = %q, want the directory's, not the token's %q", user.DisplayName, env.oidc.userInfo.Name)
+	}
+	if env.users.users[user.ID].Department != "Engineering" {
+		t.Fatalf("department = %q, want it stored", env.users.users[user.ID].Department)
+	}
+	updates := userUpdatedEvents(t, pub)
+	if len(updates) != 1 || updates[0]["department"] != "Engineering" || updates[0]["displayName"] != "Alice Andersson" {
+		t.Fatalf("user.updated = %v, want one carrying the department and name", updates)
+	}
+}
+
+// A directory with no name for the person leaves the token's name, and a
+// rename by the token alone is broadcast too.
+func TestOIDCCallbackEmptyDirectoryNameKeepsTheTokensAndBroadcastsARename(t *testing.T) {
+	env := setupAuthService()
+	pub := newMockPublisher()
+	env.svc.SetPublisher(pub)
+	existing := &model.User{ID: "existing-user", Email: "oidc@example.com", DisplayName: "Old Name", SystemRole: model.SystemRoleMember, Status: "active"}
+	env.users.users[existing.ID] = existing
+	env.users.emailIndex[existing.Email] = existing
+	env.svc.SetDirectory(&stubDirectoryLookup{profile: &DirectoryProfile{}})
+
+	_, _, user, err := env.svc.HandleOIDCCallback(context.Background(), "auth-code", "state", "nonce")
+	if err != nil {
+		t.Fatalf("HandleOIDCCallback: %v", err)
+	}
+	if user.DisplayName != "OIDC User" {
+		t.Fatalf("name = %q, want the token's", user.DisplayName)
+	}
+	if updates := userUpdatedEvents(t, pub); len(updates) != 1 || updates[0]["displayName"] != "OIDC User" {
+		t.Fatalf("user.updated = %v, want the rename broadcast", updates)
+	}
 }

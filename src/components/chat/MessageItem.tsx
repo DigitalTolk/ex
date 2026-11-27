@@ -27,7 +27,7 @@ import { useMessageRowData, useProvidedMessageRowData, type MessageRowData } fro
 import { EmojiPicker } from '@/components/EmojiPicker';
 import { UserHoverCard } from '@/components/UserHoverCard';
 import { previewsAsLinkCard } from '@/lib/in-app-link';
-import { UserGroupMentionCard } from '@/components/UserGroupMentionCard';
+import { mentionRenderOpts } from '@/components/chat/mention-render-opts';
 import { UserAvatar } from '@/components/UserAvatar';
 import { useEditMessage, useToggleReaction } from '@/hooks/useMessages';
 import { renderMarkdown, type RenderOpts } from '@/lib/markdown';
@@ -1265,7 +1265,7 @@ function MessageItemImpl({
                       messageID={message.id}
                     />
                   )}
-                  <MessageRichAttachments attachments={current.messageAttachments} onContentHeightChange={onContentHeightChange} />
+                  <MessageRichAttachments attachments={current.messageAttachments} currentUserId={currentUserId} onContentHeightChange={onContentHeightChange} />
                 </>
               );
               if (!hasBlocks(message)) return content(message);
@@ -1621,33 +1621,11 @@ const MessageBody = memo(function MessageBody({
         pickTokens,
         emojiMap,
         largeEmoji: isEmojiOnlyMessage(message.body, emojiMap),
-        currentUserId,
         onMediaLoad: onContentHeightChange,
         onTagClick: openTag,
         trailing,
         renderLink,
-        renderUserMention: (userId, displayName, _isSelf, pill) => (
-          <UserHoverCard
-            key={`mention-${userId}-${message.id}`}
-            userId={userId}
-            displayName={displayName}
-            currentUserId={currentUserId}
-            showInlineStatus={false}
-            triggerClassName="inline cursor-pointer align-baseline"
-          >
-            {pill}
-          </UserHoverCard>
-        ),
-        renderUserGroupMention: (groupId, handle, pill) => (
-          <UserGroupMentionCard
-            key={`usergroup-${groupId}-${message.id}`}
-            groupId={groupId}
-            handle={handle}
-            currentUserId={currentUserId}
-          >
-            {pill}
-          </UserGroupMentionCard>
-        ),
+        ...mentionRenderOpts(currentUserId, message.id),
       })}
     </>
   );

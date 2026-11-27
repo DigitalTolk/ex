@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/msgraph"
@@ -16,11 +17,16 @@ import (
 type DirectoryProfile struct {
 	// ObjectID is the directory's canonical id for the user (AAD object id).
 	ObjectID string
-	Phone    string
-	Manager  *model.UserManager
+	// DisplayName is the directory's name for the user; empty when it has
+	// none, which never blanks the name ex holds.
+	DisplayName string
+	Phone       string
+	Manager     *model.UserManager
+	Department  string
 }
 
-// DirectoryLookup resolves directory attributes (phone, manager) for a user.
+// DirectoryLookup resolves directory attributes (name, phone, manager,
+// department) for a user.
 // Implementations must treat "user not in the directory" as (nil, nil) — only
 // transport/auth failures are errors. AuthService calls it fail-open: a
 // directory outage degrades to an un-enriched login, never a failed one.
@@ -73,7 +79,12 @@ func (s *MSDirectoryService) LookupProfile(ctx context.Context, email, objectID 
 		return nil, fmt.Errorf("directory: get user profile: %w", err)
 	}
 
-	dp := &DirectoryProfile{ObjectID: profile.ID, Phone: profile.Phone()}
+	dp := &DirectoryProfile{
+		ObjectID:    profile.ID,
+		DisplayName: strings.TrimSpace(profile.DisplayName),
+		Phone:       profile.Phone(),
+		Department:  strings.TrimSpace(profile.Department),
+	}
 
 	// Key the manager read by the profile's canonical object id — the input
 	// key may have been an email, which /users/{key}/manager would treat as

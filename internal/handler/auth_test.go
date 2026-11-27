@@ -125,6 +125,7 @@ func applyUserPatchForTest(u *model.User, p store.UserPatch) error {
 	if p.Directory != nil {
 		u.Phone = p.Directory.Phone
 		u.Manager = p.Directory.Manager
+		u.Department = p.Directory.Department
 	}
 	if !p.UpdatedAt.IsZero() {
 		u.UpdatedAt = p.UpdatedAt

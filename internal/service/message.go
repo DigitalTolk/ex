@@ -9,6 +9,7 @@ import (
 	"sort"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/DigitalTolk/ex/internal/apperr"
 	"github.com/DigitalTolk/ex/internal/events"
@@ -163,6 +164,7 @@ type MessageService struct {
 // (UserGroupService).
 type UserGroupMentions interface {
 	CanonicalizeMentions(ctx context.Context, authorID, body string) string
+	CanonicalizeMentionsMany(ctx context.Context, authorID string, texts []string) []string
 	MentionedMembers(ctx context.Context, authorID string, ids []string) (map[string][]string, error)
 }
 
@@ -176,6 +178,41 @@ func (s *MessageService) canonicalizeUserGroups(ctx context.Context, authorID, b
 		return body
 	}
 	return s.userGroups.CanonicalizeMentions(ctx, authorID, body)
+}
+
+// canonicalizeMachineContent stores typed group handles as group mentions
+// in everything of a machine post the webhook's @user rewrite reaches: the
+// body, its blocks' markdown and its cards' text, with one lookup. The
+// blocks and cards are rewritten in place and the body returned. Blocks and
+// cards the mentions would push past the stored cap stay as typed (a token
+// is several times longer than its handle, and card text has no cap of its
+// own), and so does a body pushed past its own; notifications still read the
+// body alone.
+func (s *MessageService) canonicalizeMachineContent(ctx context.Context, authorID, body string, blocks model.Blocks, cards []model.MessageAttachment) string {
+	if s.userGroups == nil {
+		return body
+	}
+	fields := markdownTexts(blocks, cards)
+	texts := make([]string, 0, len(fields)+1)
+	texts = append(texts, body)
+	for _, f := range fields {
+		texts = append(texts, *f)
+	}
+	out := s.userGroups.CanonicalizeMentionsMany(ctx, authorID, texts)
+	changed := false
+	for i, f := range fields {
+		changed = changed || out[i+1] != *f
+		*f = out[i+1]
+	}
+	if changed && storedContentBytes(blocks, cards) > maxStoredBlocksBytes {
+		for i, f := range fields {
+			*f = texts[i+1]
+		}
+	}
+	if utf8.RuneCountInString(out[0]) > MaxMessageBodyChars {
+		return body
+	}
+	return out[0]
 }
 
 // PeopleContactRecorder adds one send's contacts to its author's people
@@ -1057,7 +1094,7 @@ func (s *MessageService) sendMachine(ctx context.Context, in WebhookMessageInput
 	if err := ValidateMessageBody(in.Body); err != nil {
 		return nil, err
 	}
-	in.Body = s.canonicalizeUserGroups(ctx, authorID, in.Body)
+	in.Body = s.canonicalizeMachineContent(ctx, authorID, in.Body, in.Blocks, in.Attachments)
 	if err := ValidateAttachmentCount(len(in.Attachments)); err != nil {
 		return nil, err
 	}

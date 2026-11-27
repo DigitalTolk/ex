@@ -145,8 +145,18 @@ describe('MessageRichAttachments', () => {
       <MessageRichAttachments attachments={[{ ...attachment, text: '**Edited**' }]} onContentHeightChange={onContentHeightChange} />,
     );
     expect(parse).toHaveBeenCalledTimes(1);
-    expect(parse).toHaveBeenCalledWith('**Edited**');
+    expect(parse).toHaveBeenCalledWith('**Edited**', undefined);
     expect(screen.getByText('Edited').tagName).toBe('STRONG');
+  });
+
+  it("does not re-parse a reader's card text either: its mention options stay the same", () => {
+    const attachment = { text: '**Body**' };
+    const parse = vi.mocked(renderMarkdown);
+    const { rerender } = render(<MessageRichAttachments attachments={[attachment]} currentUserId="u-1" />);
+    expect(parse).toHaveBeenCalledWith('**Body**', expect.objectContaining({ currentUserId: 'u-1' }));
+    parse.mockClear();
+    rerender(<MessageRichAttachments attachments={[{ ...attachment }]} currentUserId="u-1" />);
+    expect(parse).not.toHaveBeenCalled();
   });
 });
 

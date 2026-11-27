@@ -3390,12 +3390,14 @@ export interface User {
    */
   botDescription?: string;
   /**
-   * Phone and Manager are directory attributes synced from Microsoft 365
-   * at SSO login when the Graph integration is enabled. They are owned by
-   * the directory (read-only in the app) and shown on profile surfaces.
+   * Phone, Manager and Department are directory attributes synced from
+   * Microsoft 365 at SSO login and by the directory sweep when the Graph
+   * integration is enabled. They are owned by the directory (read-only in
+   * the app) and shown on profile surfaces.
    */
   phone?: string;
   manager?: UserManager;
+  department?: string;
   /**
    * Kind discriminates humans ("") from agent instances ("agent"). Agents
    * are the same kind of thing as a human user — member lists, mentions,

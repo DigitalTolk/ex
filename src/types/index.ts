@@ -14,9 +14,11 @@ export interface User {
   online?: boolean;
   lastSeenAt?: string;
   notificationSettings?: NotificationSettings;
-  // Directory attributes synced from Microsoft 365 at SSO login (read-only).
+  // Directory attributes synced from Microsoft 365 at SSO login and by the
+  // directory sweep (read-only).
   phone?: string;
   manager?: UserManager;
+  department?: string;
   // A machine account (a webhook's, the reminder bot's or an API bot), its
   // handle, and an agent ("agent"): neither bots nor agents are someone to
   // tag in a reminder.

@@ -299,8 +299,9 @@ type UserPatch struct {
 
 // UserDirectoryFields are the directory-synced profile attributes.
 type UserDirectoryFields struct {
-	Phone   string
-	Manager *model.UserManager
+	Phone      string
+	Manager    *model.UserManager
+	Department string
 }
 
 // PatchUser applies p to the existing user id (ErrNotFound when there is
@@ -355,6 +356,7 @@ func (s *UserStoreImpl) PatchUser(ctx context.Context, id string, p UserPatch) e
 	}
 	if p.Directory != nil {
 		setOrRemove("phone", p.Directory.Phone)
+		setOrRemove("department", p.Directory.Department)
 		if p.Directory.Manager == nil {
 			upd = upd.Remove(expression.Name("manager"))
 		} else {

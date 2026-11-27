@@ -655,6 +655,7 @@ func (s *IncomingWebhookService) PreviewMessage(ctx context.Context, actor Webho
 	if err != nil {
 		return nil, err
 	}
+	body = s.messages.canonicalizeMachineContent(ctx, WebhookAuthorID, body, blocks, attachments)
 	username := strings.TrimSpace(payload.Username)
 	if username == "" {
 		username = "webhook"

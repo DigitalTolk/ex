@@ -242,8 +242,8 @@ func TestGetUserProfile(t *testing.T) {
 		if want := "/users/alice@example.com"; r.URL.Path != want {
 			t.Errorf("path = %q, want %q", r.URL.Path, want)
 		}
-		if got := r.URL.Query().Get("$select"); !strings.Contains(got, "mobilePhone") {
-			t.Errorf("$select = %q, want mobilePhone included", got)
+		if got := r.URL.Query().Get("$select"); !strings.Contains(got, "mobilePhone") || !strings.Contains(got, "department") {
+			t.Errorf("$select = %q, want mobilePhone and department included", got)
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"id":                "u1",
@@ -252,6 +252,7 @@ func TestGetUserProfile(t *testing.T) {
 			"userPrincipalName": "alice@corp.example.com",
 			"mobilePhone":       "+46 70 123 45 67",
 			"businessPhones":    []string{"+46 8 123 456"},
+			"department":        "Engineering",
 		})
 	}))
 	defer graphSrv.Close()
@@ -261,7 +262,7 @@ func TestGetUserProfile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetUserProfile: %v", err)
 	}
-	if p.ID != "u1" || p.DisplayName != "Alice" || p.Phone() != "+46 70 123 45 67" {
+	if p.ID != "u1" || p.DisplayName != "Alice" || p.Phone() != "+46 70 123 45 67" || p.Department != "Engineering" {
 		t.Errorf("unexpected profile: %+v", p)
 	}
 }

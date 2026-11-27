@@ -14,7 +14,7 @@ import type { ChannelMembership, User, UserConversation, UserStatus } from '@/ty
 // conversation's title, a DM's avatar) is refetched, and only when one of
 // those changed for a user it shows.
 
-type UserPatch = Partial<Pick<User, 'displayName' | 'avatarURL' | 'userStatus' | 'timeZone' | 'lastSeenAt' | 'status' | 'phone' | 'manager'>>;
+type UserPatch = Partial<Pick<User, 'displayName' | 'avatarURL' | 'userStatus' | 'timeZone' | 'lastSeenAt' | 'status' | 'phone' | 'manager' | 'department'>>;
 
 function userPatch(evt: UserUpdatedPayload): UserPatch {
   const patch: UserPatch = {};
@@ -30,6 +30,7 @@ function userPatch(evt: UserUpdatedPayload): UserPatch {
   if (evt.status !== undefined) patch.status = evt.status;
   if (evt.phone !== undefined) patch.phone = evt.phone;
   if (evt.manager !== undefined) patch.manager = evt.manager ?? undefined;
+  if (evt.department !== undefined) patch.department = evt.department;
   return patch;
 }
 
