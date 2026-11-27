@@ -16,10 +16,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/disintegration/imaging"
 	"github.com/gen2brain/webp"
 
 	"github.com/DigitalTolk/ex/internal/model"
+	"github.com/DigitalTolk/ex/internal/picture"
 	"github.com/DigitalTolk/ex/internal/store"
 )
 
@@ -108,12 +108,12 @@ func keepEmojiImage(data []byte) ([]byte, string, error) {
 	if format == "gif" || isAnimatedWebP(data) {
 		return data, "image/" + format, nil
 	}
-	pic, err := imaging.Decode(bytes.NewReader(data), imaging.AutoOrientation(true))
+	pic, _, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
 		return nil, "", invalid("invalid image: %v", err)
 	}
 	var out bytes.Buffer
-	if err := webpEncode(&out, imaging.Fit(pic, maxEmojiSide, maxEmojiSide, imaging.Lanczos), webp.Options{Lossless: true}); err != nil {
+	if err := webpEncode(&out, picture.Shrink(pic, picture.JPEGOrientation(data), maxEmojiSide, maxEmojiSide), webp.Options{Lossless: true}); err != nil {
 		return nil, "", fmt.Errorf("encode image: %w", err)
 	}
 	return out.Bytes(), "image/webp", nil

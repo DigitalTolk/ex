@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/disintegration/imaging"
 	"github.com/gabriel-vasile/mimetype"
 	// Registers the "heic" image format, so image.DecodeConfig and
 	// image.Decode read HEIC/HEIF photos (what iPhones take) like the other
@@ -18,6 +17,7 @@ import (
 	_ "github.com/gen2brain/h265/heic"
 
 	"github.com/DigitalTolk/ex/internal/model"
+	"github.com/DigitalTolk/ex/internal/picture"
 )
 
 // A HEIC photo is kept as it was uploaded, and downloading it gives that
@@ -56,16 +56,20 @@ func shownOrientation(format string, header []byte) int {
 	if format == "heic" {
 		return heifOrientation(header)
 	}
-	return exifOrientation(header)
+	return picture.JPEGOrientation(header)
 }
 
 // decodeCost is the decode budget an image needs (see decodeBytesPerPixel).
 // A HEIF image above 8 bits decodes to 16-bit RGBA through 16-bit planes:
-// half as much again.
+// half as much again. A 16-bit colour PNG's decoded pixels fill the estimate
+// on their own, and the resizer's RGBA copy of them comes on top.
 func decodeCost(format string, cfg image.Config) int64 {
 	cost := imageDecodeCost(cfg.Width, cfg.Height)
-	if format == "heic" && cfg.ColorModel == color.NRGBA64Model {
+	switch {
+	case format == "heic" && cfg.ColorModel == color.NRGBA64Model:
 		cost += cost / 2
+	case format == "png" && (cfg.ColorModel == color.NRGBA64Model || cfg.ColorModel == color.RGBA64Model):
+		cost += int64(cfg.Width) * int64(cfg.Height) * 4
 	}
 	return cost
 }
@@ -204,13 +208,13 @@ func viewingCopy(img image.Image) *image.NRGBA {
 	if n, ok := img.(*image.NRGBA); ok && b.Dx() <= displayMaxSide && b.Dy() <= displayMaxSide {
 		return n
 	}
-	return imaging.Fit(img, displayMaxSide, displayMaxSide, imaging.Lanczos)
+	return picture.Fit(img, displayMaxSide, displayMaxSide)
 }
 
 // encodeWebPDisplay encodes a viewing copy upright as a lossy WebP.
 func encodeWebPDisplay(view *image.NRGBA, orientation int) []byte {
 	var out bytes.Buffer
-	mustEncode(webpEncode(&out, upright(view, orientation), lossyWebP))
+	mustEncode(webpEncode(&out, picture.Upright(view, orientation), lossyWebP))
 	return out.Bytes()
 }
 

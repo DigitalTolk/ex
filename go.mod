@@ -10,6 +10,7 @@ require (
 	github.com/DataDog/dd-trace-go/contrib/redis/go-redis.v9/v2 v2.12.0
 	github.com/DataDog/dd-trace-go/v2 v2.12.0
 	github.com/DataDog/orchestrion v1.15.0
+	github.com/anthonynsimon/bild v0.17.1
 	github.com/aws/aws-sdk-go-v2 v1.48.1
 	github.com/aws/aws-sdk-go-v2/config v1.33.22
 	github.com/aws/aws-sdk-go-v2/credentials v1.21.4
@@ -25,7 +26,6 @@ require (
 	github.com/cenkalti/backoff/v6 v6.0.1
 	github.com/coder/websocket v1.8.15
 	github.com/coreos/go-oidc/v3 v3.21.0
-	github.com/disintegration/imaging v1.6.2
 	github.com/gabriel-vasile/mimetype v1.4.16
 	github.com/gen2brain/h265 v0.2.7
 	github.com/gen2brain/webp v0.6.4
@@ -204,7 +204,6 @@ require (
 	go.uber.org/zap v1.28.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.6 // indirect
 	golang.org/x/exp v0.0.0-20261124000051-d6646c509b6d // indirect
-	golang.org/x/image v0.48.0 // indirect
 	golang.org/x/mod v0.43.0 // indirect
 	golang.org/x/sys v0.50.0 // indirect
 	golang.org/x/term v0.48.0 // indirect

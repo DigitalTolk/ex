@@ -508,7 +508,7 @@ func TestShrinkAvatar(t *testing.T) {
 		}
 		// A limit is a limit: below the photo's cost it is refused again.
 		objects.objects["avatars/u1/old"] = encodePNG(t, halves(2400, 1600, 255))
-		svc.SetAvatarDecodeLimit(avatarDecodeCost(image.Config{Width: 2400, Height: 1600}) - 1)
+		svc.SetAvatarDecodeLimit(shrinkDecodeCost(image.Config{Width: 2400, Height: 1600}) - 1)
 		if _, err := svc.ShrinkAvatar(ctx, "u1", false); !errors.Is(err, errAvatarPixels) {
 			t.Fatalf("lowered limit: err = %v, want %v", err, errAvatarPixels)
 		}

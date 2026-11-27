@@ -58,7 +58,7 @@ func (s *AttachmentService) SetVideoPoster(ctx context.Context, userID, attachme
 	if err != nil || (format != "jpeg" && format != "png" && format != "webp") {
 		return nil, errPosterNotImage
 	}
-	cost := imageDecodeCost(cfg.Width, cfg.Height)
+	cost := decodeCost(format, cfg)
 	if cost > maxImageDecodeBytes {
 		return nil, errPosterPixels
 	}

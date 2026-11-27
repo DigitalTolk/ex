@@ -16,12 +16,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/disintegration/imaging"
 	"github.com/gen2brain/webp"
 
 	"github.com/DigitalTolk/ex/internal/apperr"
 	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/model"
+	"github.com/DigitalTolk/ex/internal/picture"
 	"github.com/DigitalTolk/ex/internal/pubsub"
 	"github.com/DigitalTolk/ex/internal/store"
 )
@@ -303,7 +303,7 @@ func (s *EmojiService) keepImage(ctx context.Context, uploadKey string) (string,
 	}
 	kept, contentType := data, "image/"+format
 	if format != "gif" && !isAnimatedWebP(data) {
-		if kept, err = reencodeEmoji(ctx, data, format, cfg); err != nil {
+		if kept, err = reencodeEmoji(ctx, data, cfg); err != nil {
 			return "", err
 		}
 		contentType = "image/webp"
@@ -350,18 +350,18 @@ func (s *EmojiService) readUpload(ctx context.Context, key string) ([]byte, erro
 // reencodeEmoji decodes a still emoji upright, shrinks it to fit
 // MaxEmojiSide and encodes it as lossless WebP, under the shared decode
 // budget.
-func reencodeEmoji(ctx context.Context, data []byte, format string, cfg image.Config) ([]byte, error) {
-	cost := imageDecodeCostFor(format, cfg.Width, cfg.Height)
+func reencodeEmoji(ctx context.Context, data []byte, cfg image.Config) ([]byte, error) {
+	cost := shrinkDecodeCost(cfg)
 	if err := imageDecodeBudget.Acquire(ctx, cost); err != nil {
 		return nil, fmt.Errorf("emoji: wait for image decode: %w", err)
 	}
 	defer imageDecodeBudget.Release(cost)
-	img, err := imaging.Decode(bytes.NewReader(data), imaging.AutoOrientation(true))
+	img, _, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
 		return nil, apperr.Invalid("emoji: invalid image")
 	}
 	var out bytes.Buffer
-	mustEncode(webpEncode(&out, imaging.Fit(img, MaxEmojiSide, MaxEmojiSide, imaging.Lanczos), emojiWebP))
+	mustEncode(webpEncode(&out, picture.Shrink(img, picture.JPEGOrientation(data), MaxEmojiSide, MaxEmojiSide), emojiWebP))
 	return out.Bytes(), nil
 }
 

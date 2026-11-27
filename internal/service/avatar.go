@@ -14,9 +14,9 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/disintegration/imaging"
 	"golang.org/x/sync/semaphore"
 
+	"github.com/DigitalTolk/ex/internal/picture"
 	"github.com/DigitalTolk/ex/internal/store"
 )
 
@@ -53,10 +53,10 @@ const (
 
 var errAvatarStorage = errors.New("user: avatar storage is not configured")
 
-// avatarDecodeCost is the decode budget an avatar holds: the decoded frame
-// (see decodeBytesPerPixel) plus the upright NRGBA copy auto-orientation
-// makes of it.
-func avatarDecodeCost(cfg image.Config) int64 {
+// shrinkDecodeCost is the decode budget a picture shrunk on its own (an
+// avatar, an emoji) holds: the decoded frame (see decodeBytesPerPixel) plus
+// the RGBA copy of it the resizer reads.
+func shrinkDecodeCost(cfg image.Config) int64 {
 	return imageDecodeCost(cfg.Width, cfg.Height) + int64(cfg.Width)*int64(cfg.Height)*4
 }
 
@@ -109,7 +109,7 @@ func avatarConfig(data []byte, limit int64) (image.Config, error) {
 	default:
 		return cfg, errAvatarFormat
 	}
-	if avatarDecodeCost(cfg) > limit {
+	if shrinkDecodeCost(cfg) > limit {
 		return cfg, errAvatarPixels
 	}
 	return cfg, nil
@@ -124,17 +124,17 @@ func shrinkAvatar(ctx context.Context, data []byte, decoding avatarDecoding) ([]
 	if err != nil {
 		return nil, err
 	}
-	cost := avatarDecodeCost(cfg)
+	cost := shrinkDecodeCost(cfg)
 	if err := decoding.budget.Acquire(ctx, cost); err != nil {
 		return nil, fmt.Errorf("user: wait for avatar decode: %w", err)
 	}
 	defer decoding.budget.Release(cost)
-	img, err := imaging.Decode(bytes.NewReader(data), imaging.AutoOrientation(true))
+	img, _, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
 		return nil, errAvatarFormat
 	}
 	var out bytes.Buffer
-	mustEncode(webpEncode(&out, imaging.Fit(img, MaxAvatarSide, MaxAvatarSide, imaging.Lanczos), lossyWebP))
+	mustEncode(webpEncode(&out, picture.Shrink(img, picture.JPEGOrientation(data), MaxAvatarSide, MaxAvatarSide), lossyWebP))
 	return out.Bytes(), nil
 }
 
