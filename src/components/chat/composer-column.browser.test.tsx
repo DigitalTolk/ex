@@ -15,7 +15,7 @@ vi.mock('@/lib/api', () => ({
 }));
 
 vi.mock('@/hooks/useSettings', () => ({
-  useWorkspaceSettings: () => ({ data: { maxUploadBytes: 0, allowedExtensions: [], giphyEnabled: false, giphyAPIKey: '' } }),
+  useWorkspaceSettings: () => ({ data: { maxUploadBytes: 0, allowedExtensions: [] } }),
 }));
 
 // The bars above or in place of the composer belong to the chat's centred

@@ -4,11 +4,12 @@ import { page, server } from 'vitest/browser';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { EmojiPicker } from '@/components/EmojiPicker';
-import { GiphyPicker } from '@/components/GiphyPicker';
+import { GifPicker } from '@/components/GifPicker';
 import { UserHoverCard } from '@/components/UserHoverCard';
 import { MessageItem } from '@/components/chat/MessageItem';
 import { SearchBar } from '@/components/SearchBar';
 import { findTextOverlaps } from '@/test/text-overlap';
+import { apiGif, apiList, json, stubOhmagif, TEST_OHMAGIF_KEY } from '@/test/ohmagif';
 import type { Message } from '@/types';
 
 // Geometry sweep of the popover surfaces: no two pieces of text may render
@@ -143,18 +144,50 @@ describe('popover text-overlap sweep', () => {
     expect(findTextOverlaps(portal)).toEqual([]);
   });
 
-  it('giphy picker renders with zero overlapping text', async () => {
-    const screen = await render(
-      <Wrap>
-        <GiphyPicker apiKey="test-key" onSelect={() => {}} trigger={<button type="button">GIF</button>} />
-      </Wrap>,
+  // GIFs, each with its creator's credit line under it.
+  it('GIF picker with GIFs renders with zero overlapping text', async () => {
+    const gifs = Array.from({ length: 6 }, (_, i) =>
+      apiGif(`Credit000${i}`, { handle: i % 2 ? 'a-rather-long-creator-handle' : 'maker' }),
     );
-    await screen.getByText('GIF').click();
-    await settle(700);
-    const portal = document.querySelector('[data-testid="popover-portal"]') as HTMLElement;
-    expect(portal).not.toBeNull();
-    await snap('giphy-picker');
-    expect(findTextOverlaps(portal)).toEqual([]);
+    const spy = stubOhmagif(() => json(apiList(gifs)));
+    try {
+      const screen = await render(
+        <Wrap>
+          <GifPicker apiKey={TEST_OHMAGIF_KEY} onSelect={() => {}} trigger={<button type="button">GIF</button>} />
+        </Wrap>,
+      );
+      await screen.getByText('GIF').click();
+      await expect.element(screen.getByText('by @maker').first()).toBeVisible();
+      await settle(700);
+      const portal = document.querySelector('[data-testid="popover-portal"]') as HTMLElement;
+      expect(portal).not.toBeNull();
+      await snap('gif-picker-credits');
+      expect(findTextOverlaps(portal)).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  // A search that finds nothing: the search box, "No GIFs found", the
+  // upload link.
+  it('GIF picker renders with zero overlapping text', async () => {
+    const spy = stubOhmagif(() => json(apiList([])));
+    try {
+      const screen = await render(
+        <Wrap>
+          <GifPicker apiKey={TEST_OHMAGIF_KEY} onSelect={() => {}} trigger={<button type="button">GIF</button>} />
+        </Wrap>,
+      );
+      await screen.getByText('GIF').click();
+      await expect.element(screen.getByText('No GIFs found')).toBeVisible();
+      await settle(700);
+      const portal = document.querySelector('[data-testid="popover-portal"]') as HTMLElement;
+      expect(portal).not.toBeNull();
+      await snap('gif-picker');
+      expect(findTextOverlaps(portal)).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('message long-press action sheet renders with zero overlapping text', async () => {

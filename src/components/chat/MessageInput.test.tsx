@@ -38,7 +38,7 @@ vi.mock('@/hooks/useEmoji', async (orig) => ({
 // real React Query against the mocked apiFetch — the late resolve
 // would land outside act() and warn during focus-event tests.
 vi.mock('@/hooks/useSettings', () => ({
-  useWorkspaceSettings: () => ({ data: { maxUploadBytes: 0, allowedExtensions: [], giphyEnabled: false } }),
+  useWorkspaceSettings: () => ({ data: { maxUploadBytes: 0, allowedExtensions: [] } }),
   useUpdateWorkspaceSettings: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 

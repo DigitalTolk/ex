@@ -272,7 +272,11 @@ describe('EmojiPicker', () => {
     const dialog = screen.getByRole('dialog');
     expect(dialog).toHaveAttribute('data-mobile-sheet', 'true');
     expect(dialog.className).toContain('touch:h-[50dvh]');
-    expect(dialog).toHaveStyle({ maxHeight: '50dvh', overscrollBehaviorY: 'contain' });
+    // Declared in dvh (the visible viewport on a phone, not the one behind its
+    // browser bars); computed, that is half the window's height.
+    expect(dialog.style.maxHeight).toBe('50dvh');
+    expect(getComputedStyle(dialog).maxHeight).toBe(`${window.innerHeight / 2}px`);
+    expect(dialog).toHaveStyle({ overscrollBehaviorY: 'contain' });
     Object.defineProperty(window, 'matchMedia', { configurable: true, value: originalMatchMedia });
   });
 

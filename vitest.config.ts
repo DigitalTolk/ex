@@ -27,8 +27,8 @@ export default defineConfig({
       // ScheduleSendMenu's phone popover; pre-bundled so Vite doesn't
       // discover it mid-run and reload under in-flight browser tests.
       '@base-ui/react/popover',
-      '@giphy/js-fetch-api',
-      '@giphy/react-components',
+      '@ohmagif/js',
+      '@ohmagif/js/react',
       '@codemirror/state',
       '@codemirror/view',
       '@codemirror/commands',

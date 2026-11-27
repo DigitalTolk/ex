@@ -52,7 +52,7 @@ function stubFetch() {
       return json([{ conversationID: 'dm-1', type: 'dm', displayName: 'Bob', participantIDs: ['u-me', 'u-bob'] }]);
     }
     if (url.includes('/api/v1/threads')) return json({ threads: [] });
-    if (url.includes('/api/v1/admin/settings')) return json({ maxUploadBytes: 0, allowedExtensions: [], giphyEnabled: false });
+    if (url.includes('/api/v1/admin/settings')) return json({ maxUploadBytes: 0, allowedExtensions: [] });
     if (url.includes('/api/v1/presence')) return json({ online: [] });
     return json([]);
   }) as typeof fetch;

@@ -1571,8 +1571,8 @@ export const MessageItem = memo(function MessageItem(props: MessageItemProps) {
 // the hast hydrator (or rebuild the rendered React tree) unless one
 // of the meaningful inputs actually changed. Without this memo the
 // renderer ran on every parent re-render and — combined with the
-// previously-fresh hast components map — caused every Giphy <video>
-// in view to re-fetch its mp4 on every pixel of scroll.
+// previously-fresh hast components map — caused every GIF in view to
+// reload its media on every pixel of scroll.
 interface MessageBodyProps {
   message: Message;
   emojiMap: Record<string, string> | undefined;

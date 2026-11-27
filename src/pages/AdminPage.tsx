@@ -27,7 +27,7 @@ export default function AdminPage() {
   const [extensions, setExtensions] = useState(() =>
     data ? data.allowedExtensions.join(', ') : '',
   );
-  const [giphyKey, setGiphyKey] = useState(() => data?.giphyAPIKey ?? '');
+  const [gifKey, setGifKey] = useState(() => data?.ohmagifAPIKey ?? '');
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const lastDataRef = useRef<typeof data>(undefined);
 
@@ -36,7 +36,7 @@ export default function AdminPage() {
     lastDataRef.current = data;
     setMaxMB(String(bytesToMib(data.maxUploadBytes)));
     setExtensions(data.allowedExtensions.join(', '));
-    setGiphyKey(data.giphyAPIKey ?? '');
+    setGifKey(data.ohmagifAPIKey ?? '');
   }, [data]);
 
   if (!isAdmin(user?.systemRole)) {
@@ -60,7 +60,7 @@ export default function AdminPage() {
       {
         maxUploadBytes: bytes,
         allowedExtensions: exts,
-        giphyAPIKey: giphyKey.trim(),
+        ohmagifAPIKey: gifKey.trim(),
       },
       {
         onSuccess: () => setSavedAt(Date.now()),
@@ -133,40 +133,27 @@ export default function AdminPage() {
         </section>
 
         <section className="space-y-4 rounded-lg border bg-card p-5">
-          <div>
-            <h2 className="text-base font-semibold">Giphy</h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Paste your Giphy API key to enable the GIF picker in the
-              message composer. Get a key at{' '}
-              <a
-                href="https://developers.giphy.com/dashboard"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-link transition-colors hover:text-link/80"
-              >
-                developers.giphy.com
-              </a>
-              . Leave blank to disable.
-            </p>
-          </div>
+          <h2 className="text-base font-semibold">GIFs</h2>
 
           <div className="space-y-2">
-            <Label htmlFor="giphy-key">Giphy API key</Label>
+            <Label htmlFor="ohmagif-key">ohmagif API key</Label>
             <Input
-              id="giphy-key"
+              id="ohmagif-key"
               type="text"
-              value={giphyKey}
-              onChange={(e) => setGiphyKey(e.target.value)}
-              placeholder="dc6zaTOxFJmzC"
+              value={gifKey}
+              onChange={(e) => setGifKey(e.target.value)}
               disabled={isLoading}
               autoComplete="off"
               spellCheck={false}
             />
-            <p className="text-xs text-muted-foreground">
-              {data?.giphyEnabled
-                ? 'Giphy is enabled — members will see a GIF button next to the emoji picker.'
-                : 'Giphy is disabled. The GIF button is hidden from the composer.'}
-            </p>
+            <a
+              href="https://ohmagif.com/account/keys"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-block text-xs text-link transition-colors hover:text-link/80"
+            >
+              Get a key
+            </a>
           </div>
         </section>
 

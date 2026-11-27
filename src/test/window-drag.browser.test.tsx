@@ -55,7 +55,7 @@ function installFetch() {
     if (url.includes('/api/v1/user-state')) return json({ channelNotifications: [], threadNotifications: [], hiddenConversations: [] });
     if (url.includes('/api/v1/threads')) return json([]);
     if (url.includes('/api/v1/emojis')) return json([]);
-    if (url.includes('/api/v1/admin/settings')) return json({ maxUploadBytes: 0, allowedExtensions: [], giphyEnabled: false });
+    if (url.includes('/api/v1/admin/settings')) return json({ maxUploadBytes: 0, allowedExtensions: [] });
     if (url.includes('/api/v1/presence')) return json({ online: [ALICE.id] });
     if (/\/conversations\/[^/?]+\/messages/.test(url)) return json({ items: [...msgs].reverse().map((m) => ({ ...m, parentID: DM_ID, parentType: 'conversation' })), hasMoreOlder: false, hasMoreNewer: false, oldestID: 'm-0', newestID: 'm-79' });
     if (url.endsWith(`/api/v1/conversations/${DM_ID}`)) return json({ id: DM_ID, type: 'dm', participantIDs: [ME.id, ALICE.id], createdAt: '2026-01-01T00:00:00Z' });

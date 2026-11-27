@@ -3,10 +3,12 @@ import { render } from '@testing-library/react';
 import { reactNodeText, renderHastTree } from './markdown-hast';
 import type { HastNode } from '@/types';
 
-// Stub GiphyEmbed so the test can read the resolved id prop without pulling in
-// the real embed's network/iframe behaviour.
-vi.mock('@/components/GiphyEmbed', () => ({
-  GiphyEmbed: ({ id }: { id: string }) => <div data-testid="giphy" data-id={id} />,
+// Stub GifEmbed so the test can read the props the tag resolves to without
+// loading the real embed's library (GifEmbed.test covers that).
+vi.mock('@/components/GifEmbed', () => ({
+  GifEmbed: ({ id, width, height }: { id: string; width?: number; height?: number }) => (
+    <div data-testid="gif" data-id={id} data-width={String(width)} data-height={String(height)} />
+  ),
 }));
 
 describe('renderHastTree', () => {
@@ -39,13 +41,71 @@ describe('renderHastTree', () => {
     expect(container.querySelector('p')).toBeInTheDocument();
   });
 
-  it('falls back to an empty id when an ex-giphy element omits data-id', () => {
+  it('hands an ex-ohmagif element to GifEmbed with its id and size as numbers', () => {
     const tree: HastNode = {
       type: 'root',
-      children: [{ type: 'element', tagName: 'ex-giphy', properties: {} }],
+      children: [
+        { type: 'element', tagName: 'ex-ohmagif', properties: { 'data-id': 'eTxuLnWv7C', 'data-width': '480', 'data-height': 270 } },
+      ],
     };
     const { getByTestId } = render(<>{renderHastTree(tree)}</>);
-    expect(getByTestId('giphy')).toHaveAttribute('data-id', '');
+    const gif = getByTestId('gif');
+    expect(gif).toHaveAttribute('data-id', 'eTxuLnWv7C');
+    expect(gif).toHaveAttribute('data-width', '480');
+    expect(gif).toHaveAttribute('data-height', '270');
+  });
+
+  it('falls back to an empty id and no size when an ex-ohmagif element omits them', () => {
+    const tree: HastNode = {
+      type: 'root',
+      children: [{ type: 'element', tagName: 'ex-ohmagif', properties: {} }],
+    };
+    const { getByTestId } = render(<>{renderHastTree(tree)}</>);
+    expect(getByTestId('gif')).toHaveAttribute('data-id', '');
+    expect(getByTestId('gif')).toHaveAttribute('data-width', 'undefined');
+    expect(getByTestId('gif')).toHaveAttribute('data-height', 'undefined');
+  });
+
+  // GIFs picked from GIPHY before ohmagif replaced it kept only GIPHY's id
+  // (and mostly its size): they show from GIPHY's files.
+  it('shows an ex-giphy element from GIPHY, at the size it kept', () => {
+    const tree: HastNode = {
+      type: 'root',
+      children: [
+        {
+          type: 'element',
+          tagName: 'ex-giphy',
+          properties: { 'data-id': 'xT9IgG50Fb7Mi0prBC', 'data-width': '200', 'data-height': 150 },
+        },
+      ],
+    };
+    const { getByRole } = render(<>{renderHastTree(tree)}</>);
+    const img = getByRole('img', { name: 'GIF' });
+    expect(img).toHaveAttribute('src', 'https://i.giphy.com/xT9IgG50Fb7Mi0prBC.gif');
+    expect(img.parentElement).toHaveStyle({ width: '200px', aspectRatio: '200 / 150' });
+    expect(getByRole('link', { name: 'Powered by GIPHY' })).toHaveAttribute('href', 'https://giphy.com/gifs/xT9IgG50Fb7Mi0prBC');
+  });
+
+  it('shows an ex-giphy element that kept no size in the 4:3 room', () => {
+    const tree: HastNode = {
+      type: 'root',
+      children: [{ type: 'element', tagName: 'ex-giphy', properties: { 'data-id': 'xT9IgG50Fb7Mi0prBC' } }],
+    };
+    const { getByRole } = render(<>{renderHastTree(tree)}</>);
+    expect(getByRole('img', { name: 'GIF' }).parentElement).toHaveStyle({ width: '320px', aspectRatio: '320 / 240' });
+  });
+
+  it('keeps an ex-giphy element whose id could reshape the address as its text', () => {
+    const tree: HastNode = {
+      type: 'root',
+      children: [
+        { type: 'element', tagName: 'ex-giphy', properties: { 'data-id': '../../evil', 'data-value': '![GIPHY](giphy:../../evil)' } },
+        { type: 'element', tagName: 'ex-giphy', properties: {} },
+      ],
+    };
+    const { container } = render(<>{renderHastTree(tree)}</>);
+    expect(container.querySelector('a, img')).toBeNull();
+    expect(container.textContent).toBe('![GIPHY](giphy:../../evil)');
   });
 
   const linkTree = (href: string): HastNode => ({

@@ -23,7 +23,7 @@ import { formatShortcuts, type FormatShortcut } from '@/lib/format-shortcuts';
 import { isApplePlatform } from '@/lib/platform';
 import { Button } from '@/components/ui/button';
 import { EmojiPicker } from '@/components/EmojiPicker';
-import { GiphyPicker, type PickedGIF } from '@/components/GiphyPicker';
+import { GifPicker, type PickedGIF } from '@/components/GifPicker';
 import type { ActiveFormat, WysiwygEditorHandle } from '@/components/chat/markdown/MarkdownComposer';
 
 interface ComposerToolbarProps {
@@ -32,8 +32,8 @@ interface ComposerToolbarProps {
   isMobile: boolean;
   isEditingMode: boolean;
   hideCodeButton?: boolean;
-  giphyEnabled: boolean;
-  giphyAPIKey: string;
+  // The workspace's ohmagif key; null hides the GIF button.
+  gifKey: string | null;
   isUploading: boolean;
   // Send (and schedule) live at the toolbar's end.
   showSend: boolean;
@@ -61,8 +61,7 @@ export const ComposerToolbar = memo(function ComposerToolbar({
   isMobile,
   isEditingMode,
   hideCodeButton,
-  giphyEnabled,
-  giphyAPIKey,
+  gifKey,
   isUploading,
   showSend,
   scheduledCount,
@@ -84,13 +83,10 @@ export const ComposerToolbar = memo(function ComposerToolbar({
     editorRef.current?.focus();
   }
 
-  function insertGiphyGIF(gif: PickedGIF) {
-    // Store only GIPHY's stable content ID plus dimensions for layout.
-    // Media URLs are resolved directly from GIPHY at render time so
-    // saved messages don't cache returned media URLs.
-    /* istanbul ignore next -- insertGiphyGIF is only invoked by the GiphyPicker's onSelect; exercising the width/height ternary arms requires the full GIPHY-fetch picker integration (covered in GiphyPicker.browser.test), not reachable from MessageInput's own tests. */
-    const dims = gif.width && gif.height ? ` =${gif.width}x${gif.height}` : '';
-    editorRef.current?.insertText(`![GIPHY](giphy:${gif.id}${dims}) `);
+  function insertGIF(gif: PickedGIF) {
+    // Only the GIF's id and its file's size: the message shows the GIF
+    // from its files' lasting addresses, which come from the id.
+    editorRef.current?.insertText(`![GIF](ohmagif:${gif.id} =${gif.width}x${gif.height}) `);
     // Synchronous refocus (inside the pick gesture) reopens the iOS keyboard.
     editorRef.current?.focus();
   }
@@ -142,10 +138,10 @@ export const ComposerToolbar = memo(function ComposerToolbar({
           <ToolbarBtn label="Emoji"><Smile className="h-3.5 w-3.5" /></ToolbarBtn>
         }
       />
-      {giphyEnabled && (
-        <GiphyPicker
-          apiKey={giphyAPIKey}
-          onSelect={insertGiphyGIF}
+      {gifKey && (
+        <GifPicker
+          apiKey={gifKey}
+          onSelect={insertGIF}
           onOpenChange={onPickerOpenChange}
           trigger={
             // The word, not a picture: no icon reads as "GIF" at this size.

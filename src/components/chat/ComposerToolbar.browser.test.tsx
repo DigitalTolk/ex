@@ -26,8 +26,7 @@ async function renderToolbar() {
           activeFormats={new Set()}
           isMobile={false}
           isEditingMode={false}
-          giphyEnabled={false}
-          giphyAPIKey=""
+          gifKey={null}
           isUploading={false}
           showSend
           scheduledCount={0}

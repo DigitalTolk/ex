@@ -160,16 +160,14 @@ func (h *AdminHandler) SendTestEmail(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// settingsResponse is the wire shape returned from GetSettings. It
-// extends model.WorkspaceSettings with a derived `giphyEnabled` flag.
-// GIPHY requires API and media requests to be made directly by the
-// client, so authenticated members receive the configured browser key
-// when the picker is enabled.
+// settingsResponse is the wire shape returned from GetSettings. The
+// composer's GIF picker asks ohmagif.com directly, so every signed-in member
+// receives the configured key (ohmagif refuses it on any site the key does
+// not list); without one the composer has no GIF button.
 type settingsResponse struct {
 	MaxUploadBytes    int64    `json:"maxUploadBytes"`
 	AllowedExtensions []string `json:"allowedExtensions"`
-	GiphyAPIKey       string   `json:"giphyAPIKey,omitempty"`
-	GiphyEnabled      bool     `json:"giphyEnabled"`
+	OhmagifAPIKey     string   `json:"ohmagifAPIKey,omitempty"`
 	RunnersInApp      bool     `json:"runnersInApp"`
 	// SharePointHosts are the hosts whose links are shared SharePoint
 	// files; "*.example.com" matches every subdomain.
@@ -184,8 +182,7 @@ func (h *AdminHandler) newSettingsResponse(ws *model.WorkspaceSettings) settings
 	return settingsResponse{
 		MaxUploadBytes:    ws.MaxUploadBytes,
 		AllowedExtensions: ws.AllowedExtensions,
-		GiphyAPIKey:       ws.GiphyAPIKey,
-		GiphyEnabled:      ws.GiphyAPIKey != "",
+		OhmagifAPIKey:     ws.OhmagifAPIKey,
 		RunnersInApp:      ws.RunnersInApp,
 		SharePointHosts:   h.sharePointHosts,
 		WorkbenchEnabled:  h.workbench,
@@ -322,10 +319,12 @@ func (h *AdminHandler) StartSearchMappingRebuild(w http.ResponseWriter, r *http.
 func nowUnix() int64 { return time.Now().Unix() }
 
 // updateSettingsBody is the PUT body: the settings, with the on/off
-// switches optional so an older client's save never flips one.
+// switches and the ohmagif key optional so an older client's save never
+// flips a switch or clears the key.
 type updateSettingsBody struct {
 	model.WorkspaceSettings
-	RunnersInApp *bool `json:"runnersInApp"`
+	RunnersInApp  *bool   `json:"runnersInApp"`
+	OhmagifAPIKey *string `json:"ohmagifAPIKey"`
 }
 
 // SetAgentModels replaces the models agents may run on. Admin-only.
@@ -360,11 +359,16 @@ func (h *AdminHandler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ws := body.WorkspaceSettings
-	// A client that predates a switch leaves it out: keep its current value
+	// A client that predates a field leaves it out: keep its current value
 	// rather than silently turning it off.
-	ws.RunnersInApp = h.settings.Effective(r.Context()).RunnersInApp
+	current := h.settings.Effective(r.Context())
+	ws.RunnersInApp = current.RunnersInApp
 	if body.RunnersInApp != nil {
 		ws.RunnersInApp = *body.RunnersInApp
+	}
+	ws.OhmagifAPIKey = current.OhmagifAPIKey
+	if body.OhmagifAPIKey != nil {
+		ws.OhmagifAPIKey = *body.OhmagifAPIKey
 	}
 	out, err := h.settings.Update(r.Context(), &ws)
 	if err != nil {

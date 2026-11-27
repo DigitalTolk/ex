@@ -261,6 +261,53 @@ func TestMarkdownRenderer_GiphyEmbedWithDimensions(t *testing.T) {
 	}
 }
 
+func TestMarkdownRenderer_OhmagifEmbedWithDimensions(t *testing.T) {
+	r := NewMarkdownRenderer()
+	out := r.RenderToHast("![GIF](ohmagif:eTxuLnWv7C =322x240)")
+	g := findFirstByTag(out, "ex-ohmagif")
+	if g == nil {
+		t.Fatal("expected ex-ohmagif")
+	}
+	if g.Properties["data-id"] != "eTxuLnWv7C" || g.Properties["data-width"] != 322 || g.Properties["data-height"] != 240 ||
+		g.Properties["data-value"] != "![GIF](ohmagif:eTxuLnWv7C =322x240)" {
+		t.Errorf("ohmagif props = %+v", g.Properties)
+	}
+}
+
+func TestMarkdownRenderer_OhmagifEmbedWithoutDimensions(t *testing.T) {
+	r := NewMarkdownRenderer()
+	// No size suffix: goldmark parses it as an image itself.
+	out := r.RenderToHast("![GIF](ohmagif:eTxuLnWv7C)")
+	g := findFirstByTag(out, "ex-ohmagif")
+	if g == nil || g.Properties["data-id"] != "eTxuLnWv7C" {
+		t.Fatalf("ohmagif = %+v", g)
+	}
+	if _, ok := g.Properties["data-width"]; ok {
+		t.Errorf("ohmagif props = %+v, want no size", g.Properties)
+	}
+}
+
+// An `ohmagif:` ref whose id is not 10 letters or digits is no GIF: it stays
+// the text that was typed, by either parser path, so it can never reach the
+// request the client would make for it.
+func TestMarkdownRenderer_OhmagifRefWithABadIDStaysText(t *testing.T) {
+	r := NewMarkdownRenderer()
+	for _, body := range []string{
+		"![GIF](ohmagif:../../x =10x10)",
+		"![GIF](ohmagif:short)",
+		"![GIF](ohmagif:eTxuLnWv7C1)",
+		"![GIF](ohmagif:eTxuLnWv7%)",
+	} {
+		out := r.RenderToHast(body)
+		if g := findFirstByTag(out, "ex-ohmagif"); g != nil {
+			t.Errorf("%q made an ex-ohmagif: %+v", body, g.Properties)
+		}
+		if lit := findFirstByTag(out, "ex-media-literal"); lit == nil || lit.Properties["data-value"] != body {
+			t.Errorf("%q: literal = %+v, want the typed text", body, lit)
+		}
+	}
+}
+
 func TestMarkdownRenderer_MediaLiteralPreservesURL(t *testing.T) {
 	r := NewMarkdownRenderer()
 	out := r.RenderToHast("![cat](https://media.example/cat.gif =320x240)")

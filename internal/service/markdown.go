@@ -71,7 +71,7 @@ func NewMarkdownRenderer() *MarkdownRenderer {
 // always a `root` node; children are block-level elements.
 //
 // The transform also walks every text leaf to extract our custom
-// inline syntax (mentions, hashtags, emoji shortcodes, giphy refs,
+// inline syntax (mentions, hashtags, emoji shortcodes, GIF refs,
 // raw image syntax left as literal text, bare URLs) into `ex-*`
 // element nodes. Doing this on the backend keeps the per-message
 // parsing cost a single, server-side pass — no matter how many
@@ -274,7 +274,7 @@ func emitNode(node ast.Node, src []byte, parent *HastNode) {
 		if !isSafeURL(dest) || isAppAuthLink(dest) {
 			// Disallowed scheme (javascript:, data:, vbscript: …) or a link
 			// onto the app's own /auth/ routes — drop the anchor and keep its
-			// visible text, mirroring how raw HTML and non-giphy images are
+			// visible text, mirroring how raw HTML and non-GIF images are
 			// handled. The frontend renders this HAST href verbatim, so
 			// neutralising it here is the authoritative guard for every
 			// client (and incoming webhooks).
@@ -296,18 +296,25 @@ func emitNode(node ast.Node, src []byte, parent *HastNode) {
 		appendTextChild(parent, string(n.URL(src)))
 	case *ast.Image:
 		// Image markdown — the frontend renders a literal text span
-		// for non-giphy URLs (security: no arbitrary remote media in
-		// chat) or a GiphyEmbed for `giphy:<id>`. Dimension suffix
-		// (`=WxH`) is preserved in the source-text fallback path.
+		// for other URLs (security: no arbitrary remote media in chat),
+		// a GIF for `ohmagif:<id>`, and GIPHY's own file for a
+		// `giphy:<id>` picked before ohmagif replaced GIPHY. A ref with
+		// a dimension suffix (`=WxH`) is no goldmark image: it reaches
+		// the custom-syntax walker as text, which keeps the size.
 		dest := string(n.Destination)
 		alt := altText(n, src)
-		if strings.HasPrefix(dest, "giphy:") {
-			id := strings.TrimPrefix(dest, "giphy:")
-			props := map[string]interface{}{"data-id": id}
+		tag := ""
+		var id string
+		if rest, ok := strings.CutPrefix(dest, "ohmagif:"); ok && ohmagifIDRE.MatchString(rest) {
+			tag, id = "ex-ohmagif", rest
+		} else if rest, ok := strings.CutPrefix(dest, "giphy:"); ok {
+			tag, id = "ex-giphy", rest
+		}
+		if tag != "" {
 			parent.Children = append(parent.Children, &HastNode{
 				Type:       "element",
-				TagName:    "ex-giphy",
-				Properties: props,
+				TagName:    tag,
+				Properties: map[string]interface{}{"data-id": id},
 				Children:   []*HastNode{},
 			})
 			return

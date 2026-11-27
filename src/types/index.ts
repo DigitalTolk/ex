@@ -371,7 +371,7 @@ export interface ActionTally {
 // HastNode mirrors the server-side hast tree shape. Three node
 // variants share one type — root, element, text. Custom domain
 // elements use sentinel `tagName: 'ex-mention-user' | 'ex-hashtag'
-// | 'ex-giphy' | …` that the renderer's components map maps onto
+// | 'ex-ohmagif' | …` that the renderer's components map maps onto
 // the corresponding React component.
 export interface HastNode {
   type: 'root' | 'element' | 'text';
@@ -487,11 +487,10 @@ export interface AgentModelOption {
 export interface WorkspaceSettings {
   maxUploadBytes: number;
   allowedExtensions: string[];
-  // Browser key used by the Giphy SDK. Present for authenticated users
-  // when the picker is enabled because GIPHY API calls must be made
-  // directly from the client, not proxied through this app.
-  giphyAPIKey?: string;
-  giphyEnabled?: boolean;
+  // The workspace's ohmagif key, for the GIF picker and the GIFs in
+  // messages: the browser asks ohmagif.com directly. Absent, there are no
+  // GIFs.
+  ohmagifAPIKey?: string;
   // The Runners tab in the AI hub (set up, start and disconnect ex-runner
   // from the app). Off until an admin turns it on.
   runnersInApp?: boolean;

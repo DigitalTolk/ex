@@ -89,7 +89,7 @@ func TestUnfurl_FetchAndScrape_NonHTMLAndStatusAndBodyErrors(t *testing.T) {
 func TestUnfurl_ProxyImage_PutObjectError(t *testing.T) {
 	imgSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "image/png")
-		_, _ = w.Write([]byte("\x89PNG\r\n\x1a\nfake-png-bytes"))
+		_, _ = w.Write(realPNG1x1)
 	}))
 	defer imgSrv.Close()
 
@@ -104,6 +104,9 @@ func TestUnfurl_ProxyImage_PutObjectError(t *testing.T) {
 	svc.proxyImage(context.Background(), preview)
 	if preview.Image != "" {
 		t.Fatalf("expected image cleared on PutObject error, got %q", preview.Image)
+	}
+	if store.putCalls != 1 {
+		t.Fatalf("putCalls = %d, want the upload tried", store.putCalls)
 	}
 }
 

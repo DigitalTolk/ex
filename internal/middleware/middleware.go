@@ -350,8 +350,9 @@ func RequestID(next http.Handler) http.Handler {
 }
 
 // securityHeaderCSP is intentionally permissive on the resource directives
-// (img/style/font/connect) so the SPA's Google Fonts, S3 images, Giphy media,
-// and the wss WebSocket keep working, while the high-value directives are
+// (img/style/font/connect) so the SPA's Google Fonts, S3 images, GIFs (the
+// ohmagif.com API and its files on i.ohmagif.com) and the wss WebSocket
+// keep working, while the high-value directives are
 // locked down: being framed is forbidden (clickjacking), and object/base are
 // neutered.
 //

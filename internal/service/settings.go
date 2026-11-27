@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 
@@ -13,6 +14,10 @@ import (
 	"github.com/DigitalTolk/ex/internal/pubsub"
 	"github.com/DigitalTolk/ex/internal/store"
 )
+
+// ohmagifAPIKeyRE is the shape of an ohmagif API key, as @ohmagif/js checks
+// it (isApiKey) before it sends a request.
+var ohmagifAPIKeyRE = regexp.MustCompile(`^omg_[0-9A-Za-z]{32}$`)
 
 // SettingsStore is the persistence interface SettingsService depends on.
 type SettingsStore interface {
@@ -91,7 +96,12 @@ func (s *SettingsService) Update(ctx context.Context, ws *model.WorkspaceSetting
 	if ws.MaxUploadBytes < 0 {
 		ws.MaxUploadBytes = 0
 	}
-	ws.GiphyAPIKey = strings.TrimSpace(ws.GiphyAPIKey)
+	ws.OhmagifAPIKey = strings.TrimSpace(ws.OhmagifAPIKey)
+	if ws.OhmagifAPIKey != "" && !ohmagifAPIKeyRE.MatchString(ws.OhmagifAPIKey) {
+		// The browser client refuses anything else before asking, so a
+		// malformed key would leave a GIF button that never shows a GIF.
+		return nil, apperr.Invalid("An ohmagif API key is omg_ and 32 letters or digits")
+	}
 	// The model list has its own route (SetAgentModels): a save of the other
 	// settings keeps it as stored, whatever the client sent.
 	current, err := s.saved(ctx)

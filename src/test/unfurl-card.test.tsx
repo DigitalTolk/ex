@@ -54,6 +54,24 @@ describe('UnfurlCard', () => {
     expect(screen.getByText('Example')).toBeInTheDocument();
   });
 
+  it('shows a linked image as the image itself, from the stored copy', async () => {
+    apiFetchMock.mockResolvedValue({
+      url: 'https://i.example/g/full.avif',
+      kind: 'image',
+      image: '/api/v1/media/tok/abc.avif',
+      imageWidth: 498,
+      imageHeight: 522,
+    });
+    renderCard({ url: 'https://i.example/g/full.avif' });
+    const img = (await screen.findByTestId('unfurl-card-image')) as HTMLImageElement;
+    expect(apiFetchMock).toHaveBeenCalledWith(
+      `/api/v1/unfurl?url=${encodeURIComponent('https://i.example/g/full.avif')}`,
+    );
+    expect(img.getAttribute('src')).toBe('/api/v1/media/tok/abc.avif');
+    expect(img.getAttribute('width')).toBe('275');
+    expect(screen.getByRole('link', { name: 'Open image' }).getAttribute('href')).toBe('https://i.example/g/full.avif');
+  });
+
   it('hides the dismiss X for non-authors', async () => {
     apiFetchMock.mockResolvedValue({
       url: 'https://example.com/post',

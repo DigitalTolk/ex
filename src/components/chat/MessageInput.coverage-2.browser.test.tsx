@@ -9,14 +9,14 @@ import { setWSSender } from '@/lib/ws-sender';
 // Companion coverage suite for MessageInput. The primary
 // MessageInput.browser.test.tsx covers the headline flows; this file drives the
 // remaining branch arms: the outside-pointer cancel, the visibility-restore
-// focus path, the GIF-without-dimensions insert, the upload alreadyExists jump,
+// focus path, the hidden GIF button, the upload alreadyExists jump,
 // the edit aria-label fallback, the empty-file-input early return, and the
 // toolbar active-state styling.
 
 const uploadAttachmentMock = vi.hoisted(() => vi.fn());
 const deleteDraftMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const settingsState = vi.hoisted(() => ({
-  current: { maxUploadBytes: 0, allowedExtensions: [] as string[], giphyEnabled: false, giphyAPIKey: '' },
+  current: { maxUploadBytes: 0, allowedExtensions: [] as string[] } as { maxUploadBytes: number; allowedExtensions: string[]; ohmagifAPIKey?: string },
 }));
 
 vi.mock('@/lib/api', () => ({
@@ -54,33 +54,6 @@ vi.mock('@/hooks/useAttachments', () => ({
   useAttachmentsBatch: () => ({ map: new Map(), isLoading: false }),
 }));
 
-// Same GIPHY doubles as GiphyPicker.browser.test: the fetch client resolves
-// empty pages and the Grid exposes a deterministic pick button, so the REAL
-// GiphyPicker → onSelect → insertGiphyGIF wiring runs without network.
-vi.mock('@giphy/js-fetch-api', () => ({
-  GiphyFetch: class GiphyFetch {
-    trending() {
-      return Promise.resolve({ data: [], pagination: { total_count: 0, count: 0, offset: 0 }, meta: { status: 200, msg: 'OK', response_id: '' } });
-    }
-
-    search() {
-      return Promise.resolve({ data: [], pagination: { total_count: 0, count: 0, offset: 0 }, meta: { status: 200, msg: 'OK', response_id: '' } });
-    }
-  },
-}));
-
-vi.mock('@giphy/react-components', () => ({
-  Grid: ({ onGifClick }: { onGifClick: (gif: unknown, event: Event) => void }) => (
-    <button
-      type="button"
-      data-testid="pick-gif"
-      onClick={() => onGifClick({ id: 'gif-77', title: 'Test GIF', images: { original: { width: '320', height: '180' } } }, new Event('click'))}
-    >
-      Pick GIF
-    </button>
-  ),
-}));
-
 async function renderWithProviders(ui: React.ReactElement) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const result = await render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
@@ -106,7 +79,7 @@ describe('MessageInput coverage flows, part 2 (browser)', () => {
     uploadAttachmentMock.mockReset();
     deleteDraftMock.mockReset();
     deleteDraftMock.mockResolvedValue(undefined);
-    settingsState.current = { maxUploadBytes: 0, allowedExtensions: [], giphyEnabled: false, giphyAPIKey: '' };
+    settingsState.current = { maxUploadBytes: 0, allowedExtensions: [] };
   });
 
   afterEach(async () => {
@@ -288,10 +261,10 @@ describe('MessageInput coverage flows, part 2 (browser)', () => {
     expect(pd.defaultPrevented).toBe(true);
   });
 
-  it('hides the GIF trigger when GIPHY is enabled but the API key is empty', async () => {
-    // giphyEnabled = (giphyEnabled ?? false) && giphyAPIKey !== '' → the
-    // `&& apiKey !== ''` false arm: flag on but no key → no GIF button.
-    settingsState.current = { maxUploadBytes: 0, allowedExtensions: [], giphyEnabled: true, giphyAPIKey: '' };
+  // A GIPHY key from before ohmagif replaced GIPHY is no ohmagif key: the
+  // client would refuse it, so there is no GIF button.
+  it('hides the GIF trigger when the workspace key is not an ohmagif key', async () => {
+    settingsState.current = { maxUploadBytes: 0, allowedExtensions: [], ohmagifAPIKey: 'dc6zaTOxFJmzC' };
     const screen = await renderWithProviders(<MessageInput onSend={vi.fn()} initialBody="x" />);
     if (window.innerWidth <= 767) {
       await screen.getByLabelText('Message input').click();

@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cenkalti/backoff/v5"
+	"github.com/cenkalti/backoff/v6"
 )
 
 // ErrPushUndeliverable marks a push failure that retrying cannot fix — a 4xx

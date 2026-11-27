@@ -92,7 +92,7 @@ describe('AdminPage', () => {
     expect(header).toContainElement(saveButtons[0]);
   });
 
-  it('seeds and PUTs the Giphy API key, surfacing the enabled-state copy', async () => {
+  it('seeds and PUTs the ohmagif API key', async () => {
     mockApiFetch.mockImplementation((path: string, init?: { method?: string; body?: string }) => {
       if (path === '/api/v1/admin/search/status') {
         return Promise.resolve({ configured: false });
@@ -101,19 +101,18 @@ describe('AdminPage', () => {
         return Promise.resolve({
           maxUploadBytes: 50 * 1024 * 1024,
           allowedExtensions: ['png'],
-          giphyAPIKey: 'existing-key',
-          giphyEnabled: true,
+          ohmagifAPIKey: 'omg_0123456789abcdefABCDEF0123456789',
         });
       }
       return Promise.resolve(JSON.parse(init?.body ?? '{}'));
     });
     renderPage();
 
-    const giphyInput = (await screen.findByLabelText(/Giphy API key/i)) as HTMLInputElement;
-    await waitFor(() => expect(giphyInput.value).toBe('existing-key'));
-    expect(screen.getByText(/Giphy is enabled/i)).toBeInTheDocument();
+    const keyInput = (await screen.findByLabelText('ohmagif API key')) as HTMLInputElement;
+    await waitFor(() => expect(keyInput.value).toBe('omg_0123456789abcdefABCDEF0123456789'));
+    expect(screen.getByRole('link', { name: 'Get a key' })).toHaveAttribute('href', 'https://ohmagif.com/account/keys');
 
-    fireEvent.change(giphyInput, { target: { value: '  rotated-key  ' } });
+    fireEvent.change(keyInput, { target: { value: '  omg_ZYXWVUTSRQPONMLKJIHGFEDCBA987654  ' } });
     fireEvent.click(screen.getByRole('button', { name: /Save settings/i }));
 
     await waitFor(() => {
@@ -123,7 +122,7 @@ describe('AdminPage', () => {
       expect(putCall).toBeDefined();
       const body = JSON.parse(putCall![1].body) as Record<string, unknown>;
       // Composer trims whitespace before sending.
-      expect(body.giphyAPIKey).toBe('rotated-key');
+      expect(body.ohmagifAPIKey).toBe('omg_ZYXWVUTSRQPONMLKJIHGFEDCBA987654');
     });
   });
 
@@ -141,15 +140,14 @@ describe('AdminPage', () => {
     qc.setQueryData(queryKeys.workspaceSettings(), {
       maxUploadBytes: 25 * 1024 * 1024,
       allowedExtensions: ['gif', 'webp'],
-      giphyAPIKey: 'cached-key',
-      giphyEnabled: true,
+      ohmagifAPIKey: 'omg_0123456789abcdefABCDEF0123456789',
     });
     renderPage(qc);
 
     // No waitFor: the values must be present on first paint.
     expect((screen.getByLabelText(/Max file size/i) as HTMLInputElement).value).toBe('25');
     expect((screen.getByLabelText(/Allowed file extensions/i) as HTMLInputElement).value).toBe('gif, webp');
-    expect((screen.getByLabelText(/Giphy API key/i) as HTMLInputElement).value).toBe('cached-key');
+    expect((screen.getByLabelText('ohmagif API key') as HTMLInputElement).value).toBe('omg_0123456789abcdefABCDEF0123456789');
   });
 
   it('sends maxUploadBytes=0 when the size field is cleared (server-side default)', async () => {

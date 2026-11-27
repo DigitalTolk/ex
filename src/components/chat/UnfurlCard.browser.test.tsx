@@ -212,6 +212,51 @@ describe('UnfurlCard browser behaviour', () => {
     await expect.element(screen.getByTestId('unfurl-card-image-placeholder')).toBeInTheDocument();
   });
 
+  // A linked image's box is the server's measurement, so the message list
+  // never shifts: it is the same before the image loads, after it fails, and
+  // on a phone it shrinks to fit without changing shape.
+  describe('linked image', () => {
+    const preview = {
+      url: 'https://i.example/g/full.avif',
+      kind: 'image',
+      // Never loads: the box must not depend on it.
+      image: 'https://example.invalid/full.avif',
+      imageWidth: 498,
+      imageHeight: 522,
+    };
+
+    function linkBox() {
+      const r = (document.querySelector('[data-testid="unfurl-image-link"]') as HTMLElement).getBoundingClientRect();
+      return { width: Math.round(r.width), height: Math.round(r.height) };
+    }
+
+    it('holds the measured box before the image loads and after it fails', async () => {
+      useUnfurlMock.mockReturnValue({ data: preview, isLoading: false });
+      const screen = await render(<UnfurlCard url={preview.url} messageId="m-1" isAuthor={false} />);
+      // 275×288 plus the 1px border on each side.
+      expect(linkBox()).toEqual({ width: 277, height: 290 });
+      await expect.element(screen.getByTestId('unfurl-card-image-placeholder')).toBeInTheDocument();
+      expect(linkBox()).toEqual({ width: 277, height: 290 });
+    });
+
+    it('shrinks to a narrow column without changing shape', async () => {
+      useUnfurlMock.mockReturnValue({ data: preview, isLoading: false });
+      const screen = await render(
+        <div style={{ width: 140 }}>
+          <UnfurlCard url={preview.url} messageId="m-1" isAuthor={false} />
+        </div>,
+      );
+      const ratio = () => {
+        const { width, height } = linkBox();
+        expect(width).toBeLessThanOrEqual(140);
+        return (height - 2) / (width - 2);
+      };
+      expect(ratio()).toBeCloseTo(288 / 275, 1);
+      await expect.element(screen.getByTestId('unfurl-card-image-placeholder')).toBeInTheDocument();
+      expect(ratio()).toBeCloseTo(288 / 275, 1);
+    });
+  });
+
   // A link preview and a quoted message are the plain card: the page's own
   // surface inside the ordinary 2px border, with no corner mark, no side
   // bar, no tinted fill and no status icon.

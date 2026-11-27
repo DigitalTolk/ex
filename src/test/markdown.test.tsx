@@ -1,6 +1,12 @@
-import { describe, it, expect, vi } from 'vitest';
-import { fireEvent, render, waitFor } from '@testing-library/react';
+import { beforeAll, describe, it, expect, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { renderMarkdown } from '@/lib/markdown';
+
+// A GIF's GifFile arrives via React.lazy. Pre-load its module so a test
+// that shows a GIF waits on a microtask, not on chunk I/O.
+beforeAll(async () => {
+  await import('@/components/GifFile');
+});
 
 describe('renderMarkdown', () => {
   it('renders h1-h6 headers', () => {
@@ -206,14 +212,14 @@ describe('renderMarkdown', () => {
 
   it('leaves raw markdown image URLs as literal text instead of rendering media', () => {
     const { container } = render(
-      <>{renderMarkdown('![cat](https://media.giphy.com/cat.gif =300x200)')}</>,
+      <>{renderMarkdown('![cat](https://media.example.com/cat.gif =300x200)')}</>,
     );
     expect(container.querySelector('img, video')).toBeNull();
-    expect(container.textContent).toContain('![cat](https://media.giphy.com/cat.gif =300x200)');
+    expect(container.textContent).toContain('![cat](https://media.example.com/cat.gif =300x200)');
   });
 
   it('leaves raw markdown video URLs as literal text instead of rendering media', () => {
-    const url = 'https://media.giphy.com/cat.mp4?cid=keep';
+    const url = 'https://media.example.com/cat.mp4?cid=keep';
     const { container } = render(
       <>{renderMarkdown(`![cat](${url} =300x200)`)}</>,
     );
@@ -221,10 +227,24 @@ describe('renderMarkdown', () => {
     expect(container.textContent).toContain(`![cat](${url} =300x200)`);
   });
 
-  it('renders persisted Giphy references without storing a media URL in the message body', () => {
-    const { container } = render(<>{renderMarkdown('![GIPHY](giphy:g-1)', { giphyAPIKey: '' })}</>);
-    expect(container.textContent).toContain('GIPHY unavailable');
-    expect(container.textContent).not.toContain('media.giphy.com');
+  it('renders a picked GIF from its ohmagif id, at the size it kept, with no key', async () => {
+    render(<>{renderMarkdown('![GIF](ohmagif:eTxuLnWv7C =480x270)')}</>);
+    const gif = await screen.findByRole('link', { name: 'GIF' });
+    expect(gif).toHaveAttribute('href', 'https://ohmagif.com/g/eTxuLnWv7C');
+    expect(gif).toHaveStyle({ width: '420px', aspectRatio: '480 / 270' });
+    expect(screen.queryByText(/ohmagif:/)).toBeNull();
+  });
+
+  it('keeps an ohmagif reference with a malformed id as the text typed', () => {
+    const { container } = render(<>{renderMarkdown('![GIF](ohmagif:../../x =10x10)')}</>);
+    expect(container.textContent).toBe('![GIF](ohmagif:../../x =10x10)');
+  });
+
+  it("shows a GIF picked from GIPHY before ohmagif from GIPHY's files, at the size it kept", () => {
+    render(<>{renderMarkdown('![GIPHY](giphy:g-1 =200x150)')}</>);
+    const img = screen.getByRole('img', { name: 'GIF' });
+    expect(img).toHaveAttribute('src', 'https://i.giphy.com/g-1.gif');
+    expect(img.parentElement).toHaveStyle({ width: '200px', aspectRatio: '200 / 150' });
   });
 
   it('renders split skin-tone emoji shortcodes as one toned emoji', () => {

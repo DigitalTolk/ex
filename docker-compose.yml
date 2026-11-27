@@ -34,7 +34,7 @@ services:
     # MinIO no longer publishes pullable images (minio/minio answers
     # "repository does not exist"); Chainguard's build of the same server is
     # public. Pinned by digest; Dependabot doesn't watch compose files.
-    image: cgr.dev/chainguard/minio@sha256:d88920d6a50bd0b088223b688be3b76c63e6205dbe494437f67ba1240ea12880
+    image: cgr.dev/chainguard/minio@sha256:b9b1cce81a4a6cc9bf250e68d621cc0b9fb8ed15aefe18fcd1840525eab6a81a
     # Remapped off the default 9000/9001 so this stack can run beside
     # other local MinIO stacks. The browser hits MinIO directly via
     # presigned URLs, so S3_PUBLIC_ENDPOINT below must match the host
@@ -96,7 +96,7 @@ services:
   #     docker-compose.dev.yml) keep resolving;
   #   - extra_hosts for the app must live here too.
   dex:
-    image: ghcr.io/dexidp/dex:v2.41.1
+    image: ghcr.io/dexidp/dex:v2.46.1
     command: ["dex", "serve", "/etc/dex/config.yaml"]
     volumes:
       - ./dev/dex.yaml:/etc/dex/config.yaml:ro
@@ -134,7 +134,7 @@ services:
     # Optional: a fresh checkout has no .env, and compose treats a missing
     # env_file as a hard error — which blocked `make dev` / `make dev-watch`
     # before any container started. Everything the local stack needs is set
-    # below; .env is only for the optional integrations (SSO, SMTP, Giphy).
+    # below; .env is only for the optional integrations (SSO, SMTP).
     env_file:
       - path: .env
         required: false

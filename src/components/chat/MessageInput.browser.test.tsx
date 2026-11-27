@@ -11,7 +11,7 @@ import { EditorView } from '@codemirror/view';
 const uploadAttachmentMock = vi.hoisted(() => vi.fn());
 const deleteDraftMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const settingsState = vi.hoisted(() => ({
-  current: { maxUploadBytes: 0, allowedExtensions: [] as string[], giphyEnabled: false, giphyAPIKey: '' },
+  current: { maxUploadBytes: 0, allowedExtensions: [] as string[] } as { maxUploadBytes: number; allowedExtensions: string[]; ohmagifAPIKey?: string },
 }));
 
 vi.mock('@/lib/api', () => ({
@@ -839,10 +839,8 @@ describe('MessageInput desktop flows (browser)', () => {
     uploadAttachmentMock.mockReset();
   });
 
-  it('renders the GIF picker trigger, labelled GIF, when GIPHY is enabled', async () => {
-    // The GiphyPicker (and thus the `giphyEnabled &&` branch) only renders
-    // when both the flag and an API key are present.
-    settingsState.current = { maxUploadBytes: 0, allowedExtensions: [], giphyEnabled: true, giphyAPIKey: 'gk-test' };
+  it('renders the GIF picker trigger, labelled GIF, when the workspace has an ohmagif key', async () => {
+    settingsState.current = { maxUploadBytes: 0, allowedExtensions: [], ohmagifAPIKey: 'omg_0123456789abcdefABCDEF0123456789' };
     try {
       const screen = await renderWithProviders(<MessageInput onSend={vi.fn()} />);
       if (window.innerWidth <= 767) {
@@ -866,7 +864,7 @@ describe('MessageInput desktop flows (browser)', () => {
       const icon = screen.getByLabelText('Emoji').element().querySelector('svg')!.getBoundingClientRect();
       expect(Math.round(inner.height)).toBeLessThanOrEqual(Math.round(icon.height));
     } finally {
-      settingsState.current = { maxUploadBytes: 0, allowedExtensions: [], giphyEnabled: false, giphyAPIKey: '' };
+      settingsState.current = { maxUploadBytes: 0, allowedExtensions: [] };
     }
   });
 });
