@@ -17,6 +17,7 @@ import { useIsOnline } from '@/stores/presence';
 import { formatStatusUntil } from '@/lib/user-status';
 import { formatLastSeen, formatLocalTime, formatTimeZoneDelta, formatTimeZoneName, isValidTimeZone } from '@/lib/user-time';
 import type { User, UserStatus } from '@/types';
+import { SquadsLine } from '@/components/SquadsLine';
 
 interface UserHoverCardProps {
   userId: string;
@@ -87,12 +88,12 @@ function UserHoverCardImpl({
         triggerRef={triggerRef}
         onDismiss={() => setOpen(false)}
         estimatedHeight={180}
-        estimatedWidth={288}
+        estimatedWidth={320}
         preferredSide="bottom"
         preferredAlign="start"
         role="tooltip"
         mobileSheet
-        className="w-72 rounded-md border bg-popover p-3 shadow-lg touch:w-screen touch:max-w-none touch:rounded-b-none touch:rounded-t-xl touch:border-b-0 touch:pb-[calc(var(--sheet-safe-bottom,env(safe-area-inset-bottom))+0.75rem)] touch:pl-[max(0.75rem,env(safe-area-inset-left))] touch:pr-[max(0.75rem,env(safe-area-inset-right))]"
+        className="w-80 rounded-md border bg-popover p-3 shadow-lg touch:w-screen touch:max-w-none touch:rounded-b-none touch:rounded-t-xl touch:border-b-0 touch:pb-[calc(var(--sheet-safe-bottom,env(safe-area-inset-bottom))+0.75rem)] touch:pl-[max(0.75rem,env(safe-area-inset-left))] touch:pr-[max(0.75rem,env(safe-area-inset-right))]"
       >
         {open ? (
           integration ? (
@@ -265,6 +266,14 @@ function UserHoverCardContent({
                 </dd>
               </div>
             )}
+            {userDetails?.department && (
+              <div className="flex justify-between gap-3">
+                <dt className="text-muted-foreground">Department</dt>
+                <dd className="min-w-0 text-right" data-testid="hover-card-department">
+                  <span className="break-words">{userDetails.department}</span>
+                </dd>
+              </div>
+            )}
             {userDetails?.manager && (
               <div className="flex justify-between gap-3">
                 <dt className="text-muted-foreground">Manager</dt>
@@ -298,9 +307,9 @@ function UserHoverCardContent({
             )}
             {userGroups.length > 0 && (
               <div className="flex justify-between gap-3">
-                <dt className="text-muted-foreground">User groups</dt>
-                <dd className="min-w-0 text-right" data-testid="hover-card-usergroups">
-                  <span className="break-words">{userGroups.map((g) => `@${g.handle}`).join(', ')}</span>
+                <dt className="shrink-0 whitespace-nowrap text-muted-foreground">Squads</dt>
+                <dd className="flex min-w-0 flex-1">
+                  <SquadsLine handles={userGroups.map((g) => g.handle)} />
                 </dd>
               </div>
             )}

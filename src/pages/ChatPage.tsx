@@ -495,6 +495,9 @@ export default function ChatPage() {
           ...(updated.lastSeenAt !== undefined ? { lastSeenAt: updated.lastSeenAt } : {}),
           ...(updated.phone !== undefined ? { phone: updated.phone } : {}),
           ...(updated.manager !== undefined ? { manager: updated.manager ?? undefined } : {}),
+          ...(updated.department !== undefined ? { department: updated.department } : {}),
+          // A rename (the directory sync's, or a guest's profile save).
+          ...(updated.displayName !== undefined ? { displayName: updated.displayName } : {}),
         });
       }
       // Every cached copy of the user (profile, batches, roster, searches,

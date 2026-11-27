@@ -68,6 +68,9 @@ func (a *App) buildSearch(ctx context.Context) error {
 		c.channels.SetIndexer(idx)
 		c.users.SetIndexer(idx)
 		c.auth.SetIndexer(idx)
+		if c.directorySync != nil {
+			c.directorySync.SetIndexer(idx)
+		}
 		// Shared agent users are created through the agent store, which never
 		// went through UserService — so without this they never reached the
 		// index and could not be found in the DM composer.

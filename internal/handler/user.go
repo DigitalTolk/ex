@@ -316,8 +316,9 @@ func publicUserFields(r *http.Request, u *model.User) JSON {
 		"lastSeenAt":  u.LastSeenAt,
 		// Directory attributes synced from Microsoft 365 — profile-card
 		// facts, visible to any member (like email above).
-		"phone":   u.Phone,
-		"manager": u.Manager,
+		"phone":      u.Phone,
+		"manager":    u.Manager,
+		"department": u.Department,
 	}
 }
 

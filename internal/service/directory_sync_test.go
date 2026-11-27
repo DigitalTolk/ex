@@ -264,3 +264,52 @@ func TestDirectorySyncSweepSkipsBots(t *testing.T) {
 		t.Errorf("bot status = %q, want it left active", got)
 	}
 }
+
+// A rename or department change in Entra reaches someone who doesn't sign
+// in: the sweep stores it, reindexes a renamed user so search finds the new
+// name, and broadcasts both.
+func TestDirectorySyncSweepSyncsNameAndDepartment(t *testing.T) {
+	dir := &stubDirectoryLookup{profile: &DirectoryProfile{DisplayName: "Alice Andersson", Department: "Engineering"}}
+	u := oidcUser("u1", "a@x.se", "")
+	u.DisplayName = "Alice Old"
+	env := setupDirectorySync(dir, []*model.User{u})
+	idx := &stubUserIndexer{}
+	env.svc.SetIndexer(idx)
+
+	env.svc.Sweep(context.Background(), time.Hour)
+
+	if got := env.users.users["u1"]; got.DisplayName != "Alice Andersson" || got.Department != "Engineering" {
+		t.Fatalf("stored name %q, department %q, want the directory's", got.DisplayName, got.Department)
+	}
+	if len(idx.indexed) != 1 || idx.indexed[0] != "u1" {
+		t.Fatalf("indexed %v, want the renamed user reindexed", idx.indexed)
+	}
+	updates := userUpdatedEvents(t, env.pub)
+	if len(updates) != 1 || updates[0]["displayName"] != "Alice Andersson" || updates[0]["department"] != "Engineering" {
+		t.Fatalf("user.updated = %v, want the new name and department", updates)
+	}
+}
+
+// A department change alone is stored without reindexing (search doesn't
+// read it), and an empty directory name never blanks the name ex holds.
+func TestDirectorySyncSweepDepartmentOnlyAndEmptyName(t *testing.T) {
+	dir := &stubDirectoryLookup{profile: &DirectoryProfile{Department: "Sales"}}
+	u := oidcUser("u1", "a@x.se", "")
+	u.DisplayName = "Alice Andersson"
+	u.Department = "Engineering"
+	env := setupDirectorySync(dir, []*model.User{u})
+	idx := &stubUserIndexer{}
+	env.svc.SetIndexer(idx)
+
+	env.svc.Sweep(context.Background(), time.Hour)
+
+	if got := env.users.users["u1"]; got.DisplayName != "Alice Andersson" || got.Department != "Sales" {
+		t.Fatalf("stored name %q, department %q", got.DisplayName, got.Department)
+	}
+	if len(idx.indexed) != 0 {
+		t.Fatalf("indexed %v, want no reindex without a rename", idx.indexed)
+	}
+	if updates := userUpdatedEvents(t, env.pub); len(updates) != 1 {
+		t.Fatalf("user.updated events = %d, want 1", len(updates))
+	}
+}

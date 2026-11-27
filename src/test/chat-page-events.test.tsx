@@ -1219,6 +1219,12 @@ describe('ChatPage WebSocket handlers', () => {
     });
   });
 
+  it('onUserUpdated patches a synced department and name on the authenticated user', () => {
+    renderAt('/');
+    (capturedOptions.onUserUpdated as (d: unknown) => void)({ id: 'u-me', department: 'Engineering', displayName: 'Alice Andersson' });
+    expect(patchUserMock).toHaveBeenCalledWith({ department: 'Engineering', displayName: 'Alice Andersson' });
+  });
+
   it('onUserUpdated maps a cleared (null) manager to undefined', () => {
     renderAt('/');
     (capturedOptions.onUserUpdated as (d: unknown) => void)({

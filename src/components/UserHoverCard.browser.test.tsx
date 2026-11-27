@@ -150,12 +150,13 @@ describe('UserHoverCard browser', () => {
     expect(document.body.textContent).toContain('Boss Person');
   });
 
-  it('orders rows as contact info (Email, Phone, Manager) then the time group — matching the Directory page', async () => {
+  it('orders rows as contact info (Email, Phone, Department, Manager) then the time group — matching the Directory page', async () => {
     apiFetchMock.mockResolvedValue({
       id: 'u-1',
       displayName: 'Alice',
       email: 'alice@example.com',
       phone: '+46 70 123 45 67',
+      department: 'Engineering',
       manager: { displayName: 'Boss Person' },
       timeZone: 'Asia/Tokyo',
       lastSeenAt: '2026-07-13T10:00:00Z',
@@ -172,7 +173,8 @@ describe('UserHoverCard browser', () => {
     (document.querySelector('[data-testid="order-trigger"]') as HTMLElement).click();
     await expect.element(page.getByText('Boss Person')).toBeVisible();
     const labels = Array.from(document.querySelectorAll('dl dt')).map((d) => d.textContent);
-    expect(labels).toEqual(['Email', 'Phone', 'Manager', 'Local time', 'Timezone', 'Last seen']);
+    expect(labels).toEqual(['Email', 'Phone', 'Department', 'Manager', 'Local time', 'Timezone', 'Last seen']);
+    expect(document.querySelector('[data-testid="hover-card-department"]')!.textContent).toBe('Engineering');
   });
 
   it('omits the phone and manager rows when the directory attributes are absent', async () => {
@@ -286,4 +288,63 @@ describe('UserHoverCard browser', () => {
       .poll(() => showToastMock.mock.calls.some(([msg]) => msg === 'Could not open the conversation — please try again.'))
       .toBe(true);
   });
+
+  // The Squads row is one line for everyone: whole handles, then "+N". The
+  // card is 320px on desktop (the phone sheet is full width), and its height
+  // doesn't depend on how many squads someone has.
+  describe('Squads row', () => {
+    const openCard = async (squads: string[], trigger: string) => {
+      apiFetchMock.mockImplementation((path: string) =>
+        Promise.resolve(
+          path.endsWith('/usergroups')
+            ? squads.map((handle) => ({ id: `group-${handle}`, handle }))
+            : { id: 'u-1', displayName: 'Alice', email: 'alice@example.com', lastSeenAt: '2026-07-13T10:00:00Z', status: 'active' },
+        ),
+      );
+      const screen = await render(
+        <Wrap>
+          <UserHoverCard userId="u-1" displayName="Alice">
+            <span data-testid={trigger}>Alice</span>
+          </UserHoverCard>
+        </Wrap>,
+      );
+      (document.querySelector(`[data-testid="${trigger}"]`) as HTMLElement).click();
+      await expect.element(page.getByTestId('hover-card-usergroups')).toBeVisible();
+      return screen;
+    };
+    const card = () => document.querySelector('[data-testid="popover-portal"]') as HTMLElement;
+    const row = () => document.querySelector('[data-testid="hover-card-usergroups"]')!.closest('div') as HTMLElement;
+    const lastSeenRow = () => Array.from(document.querySelectorAll('dl dt')).find((d) => d.textContent === 'Last seen')!.parentElement as HTMLElement;
+
+    it('labels the row Squads, on one line, and fits short squads whole', async () => {
+      await openCard(['eng', 'eng-dope'], 'squads-short');
+      expect(row().querySelector('dt')!.textContent).toBe('Squads');
+      expect(document.querySelector('[data-testid="hover-card-usergroups"]')!.textContent).toBe('@eng, @eng-dope');
+      expect(document.querySelector('[data-testid="hover-card-usergroups-more"]')).toBeNull();
+      expect(row().getBoundingClientRect().height).toBe(lastSeenRow().getBoundingClientRect().height);
+      if (card().dataset.mobileSheet !== 'true') {
+        expect(card().getBoundingClientRect().width).toBe(320);
+      }
+    });
+
+    it('shows as many whole squads as fit, then +N, at the same card height', async () => {
+      const short = await openCard(['eng'], 'squads-one');
+      const oneSquadHeight = card().getBoundingClientRect().height;
+      await short.unmount();
+
+      const many = ['leadership', 'product-management', 'product-translation-bar', 'platform-engineering-and-reliability'];
+      await openCard(many, 'squads-many');
+      const more = document.querySelector('[data-testid="hover-card-usergroups-more"]');
+      expect(more).not.toBeNull();
+      const shown = document.querySelector('[data-testid="hover-card-usergroups"]')!.textContent!;
+      // Whole handles only, and together with +N they account for every squad.
+      expect(shown).toMatch(/^@[a-z-]+(, @[a-z-]+)*$/);
+      const shownCount = shown.split(', ').length;
+      expect(shown.split(', ').every((h, i) => h === `@${many[i]}`)).toBe(true);
+      expect(more!.textContent).toBe(`+${many.length - shownCount}and ${many.length - shownCount} more squads`);
+      expect(row().getBoundingClientRect().height).toBe(lastSeenRow().getBoundingClientRect().height);
+      expect(card().getBoundingClientRect().height).toBe(oneSquadHeight);
+    });
+  });
 });
+

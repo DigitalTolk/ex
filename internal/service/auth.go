@@ -318,7 +318,7 @@ func (s *AuthService) saveDelegatedToken(ctx context.Context, userID string, tok
 }
 
 // lookupDirectory enriches an SSO login with employee-directory attributes
-// (phone + manager). Fail-open: a directory outage must degrade to an
+// (name, phone, manager, department). Fail-open: a directory outage must degrade to an
 // un-enriched login, never block it.
 func (s *AuthService) lookupDirectory(ctx context.Context, email, objectID string) *DirectoryProfile {
 	if s.directory == nil {
@@ -400,7 +400,6 @@ func (s *AuthService) refreshOIDCUser(ctx context.Context, user *model.User, inf
 
 	now := time.Now()
 	patch := store.UserPatch{
-		DisplayName:       &info.Name,
 		LastSeenAt:        &now,
 		UpdatedAt:         now,
 		OIDCIssuer:        &info.Issuer,
@@ -411,10 +410,18 @@ func (s *AuthService) refreshOIDCUser(ctx context.Context, user *model.User, inf
 		patch.MSObjectID = &info.ObjectID
 	}
 	dirProfile := s.lookupDirectory(ctx, user.Email, info.ObjectID)
-	directoryChanged := dirProfile != nil &&
-		(user.Phone != dirProfile.Phone || !user.Manager.Equal(dirProfile.Manager))
+	// The directory's name wins over the token's, so a login and the
+	// directory sweep never write different names; the token's is the
+	// fallback when the directory can't be read.
+	name := info.Name
+	if dirProfile != nil && dirProfile.DisplayName != "" {
+		name = dirProfile.DisplayName
+	}
+	patch.DisplayName = &name
+	profileChanged := name != user.DisplayName || dirProfile != nil &&
+		(user.Phone != dirProfile.Phone || !user.Manager.Equal(dirProfile.Manager) || user.Department != dirProfile.Department)
 	if dirProfile != nil {
-		patch.Directory = &store.UserDirectoryFields{Phone: dirProfile.Phone, Manager: dirProfile.Manager}
+		patch.Directory = &store.UserDirectoryFields{Phone: dirProfile.Phone, Manager: dirProfile.Manager, Department: dirProfile.Department}
 		if user.MSObjectID == "" && patch.MSObjectID == nil && dirProfile.ObjectID != "" {
 			patch.MSObjectID = &dirProfile.ObjectID
 		}
@@ -434,7 +441,7 @@ func (s *AuthService) refreshOIDCUser(ctx context.Context, user *model.User, inf
 		}
 		return fmt.Errorf("auth: update user: %w", err)
 	}
-	user.DisplayName = info.Name
+	user.DisplayName = name
 	user.AvatarURL = info.Picture
 	user.LastSeenAt = &now
 	user.UpdatedAt = now
@@ -443,14 +450,14 @@ func (s *AuthService) refreshOIDCUser(ctx context.Context, user *model.User, inf
 		user.MSObjectID = *patch.MSObjectID
 	}
 	if dirProfile != nil {
-		user.Phone, user.Manager = dirProfile.Phone, dirProfile.Manager
+		user.Phone, user.Manager, user.Department = dirProfile.Phone, dirProfile.Manager, dirProfile.Department
 	}
 	user.AuthProvider = model.AuthProviderOIDC
 	// Drop the cached profile and roster so the refreshed fields are visible
 	// immediately (UserService reads cache-first).
 	forgetCachedUser(ctx, s.cache, user.ID)
 	s.indexUser(ctx, user)
-	if directoryChanged {
+	if profileChanged {
 		// Broadcast the change so peers with this profile open (hover
 		// card, directory) refresh without a reload.
 		publishUserDirectoryUpdated(ctx, s.publisher, user)
@@ -926,15 +933,20 @@ func (s *AuthService) authorizedInviteChannelIDs(ctx context.Context, inviterID 
 	return cleaned, nil
 }
 
-// applyDirectoryProfile stamps synced directory attributes onto a new user.
-// A nil profile (directory disabled, user not in the directory, or the lookup
-// failed) leaves the attributes untouched.
+// applyDirectoryProfile stamps synced directory attributes onto a user. A nil
+// profile (directory disabled, user not in the directory, or the lookup
+// failed) leaves the attributes untouched, and so does an empty directory
+// name.
 func applyDirectoryProfile(user *model.User, dp *DirectoryProfile) {
 	if dp == nil {
 		return
 	}
+	if dp.DisplayName != "" {
+		user.DisplayName = dp.DisplayName
+	}
 	user.Phone = dp.Phone
 	user.Manager = dp.Manager
+	user.Department = dp.Department
 	if dp.ObjectID != "" {
 		user.MSObjectID = dp.ObjectID
 	}

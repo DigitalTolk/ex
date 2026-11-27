@@ -152,6 +152,7 @@ type UserProfile struct {
 	UserPrincipalName string   `json:"userPrincipalName"`
 	MobilePhone       string   `json:"mobilePhone"`
 	BusinessPhones    []string `json:"businessPhones"`
+	Department        string   `json:"department"`
 }
 
 // Phone returns the best single display number: mobile first, then the first
@@ -175,7 +176,7 @@ func (p *UserProfile) EmailAddress() string {
 	return p.UserPrincipalName
 }
 
-const profileSelect = "?$select=id,displayName,mail,userPrincipalName,mobilePhone,businessPhones"
+const profileSelect = "?$select=id,displayName,mail,userPrincipalName,mobilePhone,businessPhones,department"
 
 // GetUserProfile fetches a user's directory profile. key is an AAD object ID
 // or a userPrincipalName. ErrNotFound when the user isn't in the directory.

@@ -67,11 +67,13 @@ type User struct {
 	// deactivated, tokenless, and its username free for another bot.
 	BotDeletedAt *time.Time `json:"-" dynamodbav:"botDeletedAt,omitempty"`
 
-	// Phone and Manager are directory attributes synced from Microsoft 365
-	// at SSO login when the Graph integration is enabled. They are owned by
-	// the directory (read-only in the app) and shown on profile surfaces.
-	Phone   string       `json:"phone,omitempty" dynamodbav:"phone,omitempty"`
-	Manager *UserManager `json:"manager,omitempty" dynamodbav:"manager,omitempty"`
+	// Phone, Manager and Department are directory attributes synced from
+	// Microsoft 365 at SSO login and by the directory sweep when the Graph
+	// integration is enabled. They are owned by the directory (read-only in
+	// the app) and shown on profile surfaces.
+	Phone      string       `json:"phone,omitempty" dynamodbav:"phone,omitempty"`
+	Manager    *UserManager `json:"manager,omitempty" dynamodbav:"manager,omitempty"`
+	Department string       `json:"department,omitempty" dynamodbav:"department,omitempty"`
 
 	// MSObjectID is the user's Azure AD directory object id (the verified
 	// `oid` ID-token claim), captured at login so Graph lookups don't depend
